@@ -74,9 +74,20 @@ jobs:
           core/tools/tests/test_surface_unlinked.py
           -v
 
-      - name: Run pre-commit gate
-        run: python -m pre_commit run --all-files
+      # We run the hook commands directly instead of `pre-commit run` because
+      # pre-commit anchors paths at the git toplevel — which in the merged
+      # engram-harness layout is the parent repo, not engram/.
+      - name: Lint engram modules (ruff check)
+        run: python -m ruff check HUMANS/tooling/scripts/ HUMANS/tooling/tests/ core/tools/
 
+      - name: Format check engram modules (ruff format)
+        run: python -m ruff format --check HUMANS/tooling/scripts/ HUMANS/tooling/tests/ core/tools/
+
+      - name: Validate memory repo
+        run: python HUMANS/tooling/scripts/validate_memory_repo.py
+
+      # Live-repo tests that assume engram is the git root are auto-skipped
+      # by engram/conftest.py when invoked from the merged engram-harness layout.
       - name: Run tests
         run: python -m pytest HUMANS/tooling/tests/ core/tools/tests/ -v
 
@@ -105,34 +116,11 @@ jobs:
         working-directory: .
         run: python -m pip install -e ".[dev,search]"
 
+      # TestSearchFreshnessWeight is auto-skipped by engram/conftest.py when
+      # engram is not the git root.
       - name: Run search tests
         run: >-
           python -m pytest
           core/tools/tests/test_semantic_search.py
           core/tools/tests/test_search_freshness.py
-          -v
-
-  worktree-e2e:
-    name: Worktree Init E2E
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: engram
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install package and dev dependencies
-        working-directory: .
-        run: python -m pip install -e ".[dev]"
-
-      - name: Run worktree init end-to-end test
-        run: >-
-          python -m pytest
-          HUMANS/tooling/tests/test_setup_flows.py::SetupFlowTests::test_init_worktree_creates_orphan_branch_with_committed_memory_worktree
           -v

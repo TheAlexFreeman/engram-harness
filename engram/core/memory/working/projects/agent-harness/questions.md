@@ -2,6 +2,8 @@
 type: questions
 source: agent-generated
 created: '2026-04-19'
+trust: medium
+origin_session: memory/activity/2026/04/19/chat-001
 ---
 
 # Open Questions — Agent Harness
