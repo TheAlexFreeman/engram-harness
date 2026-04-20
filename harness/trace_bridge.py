@@ -75,6 +75,10 @@ class _SessionStats:
     total_cost_usd: float = 0.0
     by_tool: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     error_tools: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    # ISO date string derived from the first trace event we see (session_start
+    # if available, else the earliest event). Used for ACCESS rows so reruns
+    # on a later day don't collide with the (file, session_id, date) dedupe.
+    session_date: str = ""
 
 
 @dataclass
@@ -177,6 +181,11 @@ def _aggregate_stats(events: list[dict[str, Any]]) -> _SessionStats:
     s = _SessionStats()
     for ev in events:
         kind = ev.get("kind")
+        if not s.session_date:
+            ts = str(ev.get("ts", ""))
+            iso_date = _iso_date_from_ts(ts)
+            if iso_date:
+                s.session_date = iso_date
         if kind == "session_start":
             s.task = str(ev.get("task", ""))
         elif kind == "tool_call":
@@ -194,6 +203,16 @@ def _aggregate_stats(events: list[dict[str, Any]]) -> _SessionStats:
             s.total_output_tokens = int(ev.get("output_tokens", 0) or 0)
             s.total_cost_usd = float(ev.get("total_cost_usd", 0.0) or 0.0)
     return s
+
+
+def _iso_date_from_ts(ts: str) -> str:
+    """Return YYYY-MM-DD from an ISO-8601 timestamp string, or '' if unparseable."""
+    if not ts:
+        return ""
+    try:
+        return datetime.fromisoformat(ts).date().isoformat()
+    except ValueError:
+        return ""
 
 
 def _extract_tool_calls(events: list[dict[str, Any]]) -> list[_ToolCall]:
@@ -278,7 +297,7 @@ def _render_summary(memory: EngramMemory, stats: _SessionStats, calls: list[_Too
     fm = dict(_AGENT_FM)
     fm["session"] = f"memory/activity/{memory._session_path_fragment()}/{memory.session_id}"
     fm["session_id"] = memory.session_id
-    fm["created"] = datetime.now().date().isoformat()
+    fm["created"] = stats.session_date or datetime.now().date().isoformat()
     fm["tool_calls"] = stats.tool_call_count
     fm["errors"] = stats.error_count
     fm["total_cost_usd"] = round(stats.total_cost_usd, 4)
@@ -315,6 +334,16 @@ def _render_summary(memory: EngramMemory, stats: _SessionStats, calls: list[_Too
             body_lines.append(f"- {line}")
         body_lines.append("")
 
+    # Mirror EngramMemory.end_session() so that error/note records the agent
+    # buffered during the run survive when the bridge rewrites this same file.
+    if memory.buffered_records:
+        body_lines.append("## Notable events")
+        body_lines.append("")
+        for rec in memory.buffered_records:
+            ts = rec.timestamp.isoformat(timespec="seconds")
+            body_lines.append(f"- `{ts}` [{rec.kind}] {rec.content}")
+        body_lines.append("")
+
     if memory.recall_events:
         body_lines.append("## Memory recall")
         body_lines.append("")
@@ -337,7 +366,7 @@ def _render_reflection(
 ) -> str:
     fm = dict(_AGENT_FM)
     fm["origin_session"] = f"memory/activity/{memory._session_path_fragment()}/{memory.session_id}"
-    fm["created"] = datetime.now().date().isoformat()
+    fm["created"] = stats.session_date or datetime.now().date().isoformat()
 
     influence = "low"
     if memory.recall_events:
@@ -433,7 +462,9 @@ def _emit_access_entries(
 ) -> int:
     """Append ACCESS entries for every read of a file under an access-tracked root."""
     entries_by_file: dict[Path, list[dict[str, Any]]] = defaultdict(list)
-    today = datetime.now().date().isoformat()
+    # Date stamp comes from the trace itself so reruns on a later day still
+    # match the existing (file, session_id, date) dedupe key.
+    access_date = stats.session_date or datetime.now().date().isoformat()
     task_slug = _task_slug(stats.task) or memory.session_id
 
     for idx, tc in enumerate(tool_calls):
@@ -448,7 +479,7 @@ def _emit_access_entries(
         helpfulness, note = _derive_read_helpfulness(str(arg_path), idx, tool_calls)
         entry = {
             "file": _normalize_for_access(str(arg_path)),
-            "date": today,
+            "date": access_date,
             "task": task_slug,
             "helpfulness": round(helpfulness, 3),
             "note": note,
@@ -464,7 +495,7 @@ def _emit_access_entries(
         helpfulness, note = _derive_recall_helpfulness(ev.file_path, ev.timestamp, tool_calls)
         entry = {
             "file": _normalize_for_access(ev.file_path),
-            "date": today,
+            "date": access_date,
             "task": task_slug,
             "helpfulness": round(helpfulness, 3),
             "note": f"recall: {note}",

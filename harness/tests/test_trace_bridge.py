@@ -234,3 +234,67 @@ def test_run_trace_bridge_missing_trace_file_is_safe(memory: EngramMemory, tmp_p
     # Even with no events we still produce summary/reflection skeletons.
     assert result.summary_path.is_file()
     assert result.access_entries == 0
+
+
+def test_run_trace_bridge_summary_preserves_buffered_records(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """Codex P1: records buffered via memory.record() must survive a bridge rewrite.
+
+    `EngramMemory.end_session()` writes the same `summary.md` path the bridge
+    later overwrites, so the bridge must include those records itself or the
+    error/note context the agent recorded mid-run is silently lost.
+    """
+    memory.record("read_file failed: no such path", kind="error")
+    memory.record("user prefers terse output", kind="note")
+
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    _write_trace(
+        trace,
+        [
+            {"ts": ts, "kind": "session_start", "task": "x"},
+            {"ts": ts, "kind": "session_end", "turns": 1},
+        ],
+    )
+    result = run_trace_bridge(trace, memory, commit=False)
+    summary = result.summary_path.read_text(encoding="utf-8")
+    assert "## Notable events" in summary
+    assert "[error] read_file failed: no such path" in summary
+    assert "[note] user prefers terse output" in summary
+
+
+def test_run_trace_bridge_uses_session_date_from_trace(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """Codex P2: ACCESS rows stamp the trace's date, not the bridge run date.
+
+    Otherwise the (file, session_id, date) dedupe key drifts when the bridge
+    is replayed on a later day, double-counting ACCESS metrics.
+    """
+    trace = tmp_path / "trace.jsonl"
+    historical_ts = "2024-01-15T10:30:00.000"
+    _write_trace(
+        trace,
+        [
+            {"ts": historical_ts, "kind": "session_start", "task": "historical"},
+            {
+                "ts": historical_ts,
+                "kind": "tool_call",
+                "name": "read_file",
+                "args": {"path": "memory/knowledge/celery.md"},
+            },
+            {
+                "ts": historical_ts,
+                "kind": "tool_result",
+                "name": "read_file",
+                "is_error": False,
+                "content_preview": "",
+            },
+            {"ts": historical_ts, "kind": "session_end", "turns": 1},
+        ],
+    )
+    run_trace_bridge(trace, memory, commit=False)
+    access_path = repo / "core" / "memory" / "knowledge" / "ACCESS.jsonl"
+    rec = json.loads(access_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert rec["date"] == "2024-01-15"
