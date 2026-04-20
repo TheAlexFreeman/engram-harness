@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Engram &#8212; Knowledge Base</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="engram-shared.css">
+<link rel="stylesheet" href="graph.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css" integrity="sha384-zh0CIslj3dQfr5GQttW75N5yzjaqaXzaosFOBb3a6qYWDMPFimSGKIgSLwBPYPgw" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js" integrity="sha384-Rma6DA2IPUxQ1OahHGGVKMB9YnAiMEfjNTmECIK1JuzLCAb7DQPAfGMilDJ74Nfm" crossorigin="anonymous"></script>
+<style>
+/* ── Viewport shell ──────────────────────────────────── */
+html { height: 100%; }
+body { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ── Layout ──────────────────────────────────────────── */
+.knowledge-header {
+  background: var(--dark-bg); color: var(--dark-text);
+  padding: var(--space-sm) var(--space-lg);
+  flex-shrink: 0;
+}
+.knowledge-header h1 { color: #fff; font-size: var(--text-lg); margin-bottom: 0; }
+.knowledge-header .subtitle { color: var(--dark-text-muted); margin-bottom: var(--space-xs); }
+.knowledge-header .nav-link { color: var(--dark-text-muted); }
+.knowledge-header .nav-link:hover { color: #fff; }
+
+.knowledge-body {
+  max-width: 1020px; margin: 0 auto;
+  padding: var(--space-lg);
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column;
+  width: 100%;
+}
+#detail-view {
+  display: flex; flex-direction: column;
+  flex: 1; min-height: 0;
+}
+
+/* ── Domain cards override ────────────────────────────── */
+.domain-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  box-shadow: var(--shadow-card);
+}
+
+/* ── Breadcrumb ──────────────────────────────────────── */
+.detail-breadcrumb {
+  display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;
+  font-size: var(--text-sm); margin-bottom: var(--space-md);
+}
+.detail-breadcrumb a {
+  color: var(--color-primary); text-decoration: none; cursor: pointer;
+  font-weight: 500;
+}
+.detail-breadcrumb a:hover { color: var(--color-primary-hover); }
+.detail-breadcrumb .sep { color: var(--color-text-faint); }
+.detail-breadcrumb .current { font-weight: 600; color: var(--color-text); }
+
+/* ── Detail grid ─────────────────────────────────────── */
+.detail-grid {
+  display: grid; grid-template-columns: 280px 1fr; gap: 1.5rem;
+  flex: 1; min-height: 0;
+}
+@media (max-width: 700px) { .detail-grid { grid-template-columns: 1fr; } }
+
+/* ── Sidebar ─────────────────────────────────────────── */
+.detail-sidebar {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-card);
+  overflow: hidden; box-shadow: var(--shadow-card);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.detail-sidebar .sidebar-header {
+  padding: 0.65rem 0.9rem;
+  border-bottom: 1px solid var(--color-border-light);
+  font-size: var(--text-sm); font-weight: 600;
+  flex-shrink: 0;
+}
+.detail-sidebar .sidebar-body {
+  padding: 0; flex: 1; min-height: 0; overflow-y: auto;
+}
+.detail-sidebar .sidebar-body ul {
+  list-style: none; padding: 0; margin: 0;
+}
+.detail-sidebar .sidebar-body li {
+  font-size: var(--text-sm); cursor: pointer;
+  padding: 0.45rem 0.9rem;
+  border-bottom: 1px solid var(--color-border-fine);
+  transition: background var(--duration) var(--ease);
+  display: flex; align-items: center; gap: 0.4rem;
+}
+.detail-sidebar .sidebar-body li:hover { background: var(--color-bg); }
+.detail-sidebar .sidebar-body li.active {
+  background: var(--color-active-bg);
+  border-left: 3px solid var(--color-primary);
+  font-weight: 600;
+}
+.detail-sidebar .sidebar-body li .icon { font-size: 0.85rem; flex-shrink: 0; }
+.detail-sidebar .sidebar-body li .file-trust {
+  margin-left: auto; flex-shrink: 0;
+}
+
+/* ── Content panel ───────────────────────────────────── */
+.detail-content {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-card);
+  overflow: hidden; box-shadow: var(--shadow-card);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.detail-content .content-header {
+  padding: 0.65rem 0.9rem;
+  border-bottom: 1px solid var(--color-border-light);
+  font-size: var(--text-sm); font-weight: 600;
+  display: flex; align-items: center; gap: 0.5rem;
+  flex-shrink: 0;
+}
+.detail-content .content-meta {
+  padding: 0.55rem 0.9rem;
+  border-bottom: 1px solid var(--color-border-fine);
+  display: flex; gap: 0.75rem; flex-wrap: wrap;
+  font-size: var(--text-xs); color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+.detail-content .content-meta .meta-item {
+  display: flex; align-items: center; gap: 0.25rem;
+}
+.detail-content .content-meta .meta-label {
+  font-weight: 600; color: var(--color-text-muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.detail-content .content-body {
+  padding: 1.15rem 1.25rem;
+  flex: 1; min-height: 0; overflow-y: auto;
+  font-size: var(--text-base); line-height: 1.75;
+}
+
+/* ── Content typography ──────────────────────────────── */
+.detail-content .content-body h1,
+.detail-content .content-body h2,
+.detail-content .content-body h3,
+.detail-content .content-body h4 {
+  margin: 1.2em 0 0.4em; line-height: 1.3;
+}
+.detail-content .content-body h1 { font-size: 1.25rem; border-bottom: 1px solid var(--color-border-light); padding-bottom: 0.3rem; }
+.detail-content .content-body h2 { font-size: 1.1rem; border-bottom: 1px solid var(--color-border-fine); padding-bottom: 0.2rem; }
+.detail-content .content-body h3 { font-size: 0.98rem; }
+.detail-content .content-body h4 { font-size: 0.9rem; color: var(--color-text-secondary); }
+.detail-content .content-body p  { margin: 0.6em 0; }
+.detail-content .content-body ul,
+.detail-content .content-body ol {
+  margin: 0.5em 0; padding-left: 1.6em;
+}
+
+/* Cross-reference links */
+.knowledge-xref {
+  color: var(--color-primary); cursor: pointer; text-decoration: none;
+  border-bottom: 1px dashed var(--color-hover-border);
+  transition: border-color var(--duration) var(--ease);
+}
+.knowledge-xref:hover { border-bottom-style: solid; border-color: var(--color-primary); }
+.content-meta .knowledge-xref { font-size: var(--text-xs); }
+
+.detail-content .content-body li { margin: 0.25em 0; }
+.detail-content .content-body li > ul,
+.detail-content .content-body li > ol { margin: 0.15em 0; }
+.detail-content .content-body hr {
+  border: none; border-top: 1px solid var(--color-border-light);
+  margin: 1.25rem 0;
+}
+.detail-content .content-body blockquote {
+  margin: 0.6em 0; padding: 0.5em 0.85em;
+  border-left: 3px solid var(--color-primary);
+  background: var(--color-hover-bg); color: var(--color-text-secondary);
+  border-radius: 0 var(--radius-small) var(--radius-small) 0;
+}
+.detail-content .content-body code {
+  font-family: var(--font-mono);
+  font-size: 0.82em; padding: 0.15em 0.35em;
+  background: var(--color-code-bg); border-radius: 3px;
+}
+.detail-content .content-body pre {
+  margin: 0.6em 0; padding: 0.85em; overflow-x: auto;
+  background: #0d1117; color: #e2e8f0;
+  border-radius: var(--radius-button);
+  font-family: var(--font-mono);
+  font-size: 0.8rem; line-height: 1.55;
+}
+.detail-content .content-body pre code {
+  background: none; padding: 0; color: inherit; font-size: inherit;
+}
+.detail-content .content-body table {
+  width: 100%; border-collapse: collapse; margin: 0.6em 0;
+  font-size: var(--text-sm);
+}
+.detail-content .content-body th,
+.detail-content .content-body td {
+  text-align: left; padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--color-border-light);
+}
+.detail-content .content-body th {
+  font-weight: 600; font-size: var(--text-xs); color: var(--color-text-muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  border-bottom: 2px solid var(--color-border);
+}
+.detail-content .content-body tr:hover td { background: var(--color-bg); }
+.detail-content .content-body strong { font-weight: 600; }
+.detail-content .content-body em { font-style: italic; }
+.detail-content .content-body a {
+  color: var(--color-primary); text-decoration: none;
+}
+.detail-content .content-body a:hover { text-decoration: underline; }
+.detail-content .content-placeholder {
+  padding: 3rem 1rem; text-align: center; color: var(--color-text-faint);
+}
+
+/* ── Inline related editor ───────────────────────────── */
+.related-editor { width: 100%; margin-top: 0.25rem; }
+.related-label-row {
+  display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.25rem;
+}
+.related-edit-toggle {
+  font-size: 0.62rem; padding: 0.1rem 0.4rem; cursor: pointer;
+  background: none; border: 1px solid var(--color-border); border-radius: 3px;
+  color: var(--color-text-secondary);
+}
+.related-edit-toggle:hover { background: var(--color-hover-bg); }
+.related-chips {
+  display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center;
+}
+.related-chip {
+  display: inline-flex; align-items: center; gap: 0.2rem;
+  padding: 0.15rem 0.45rem; font-size: 0.72rem;
+  background: rgba(130,130,130,0.12); border-radius: 4px;
+  color: var(--color-text);
+}
+.related-chip-label {
+  color: var(--color-primary); text-decoration: none; cursor: pointer;
+}
+.related-chip-label:hover { text-decoration: underline; }
+.related-chip-remove {
+  padding: 0; width: 16px; height: 16px; line-height: 1;
+  font-size: 0.8rem; text-align: center;
+  background: none; border: none; border-radius: 3px;
+  color: var(--color-text-secondary); cursor: pointer;
+}
+.related-chip-remove:hover { background: rgba(244,67,54,0.15); color: #ef5350; }
+.related-chip-add { position: relative; background: none; }
+.related-add-input {
+  width: 120px; padding: 0.12rem 0.35rem; font-size: 0.7rem;
+  border: 1px solid var(--color-border); border-radius: 3px;
+  background: var(--color-bg); color: var(--color-text);
+}
+.related-add-input:focus { outline: none; border-color: var(--color-primary); }
+.related-autocomplete {
+  position: absolute; left: 0; top: 100%; z-index: 20;
+  width: 260px; max-height: 200px; overflow-y: auto;
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: var(--radius-small); box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+.related-autocomplete-item {
+  display: flex; align-items: center; gap: 0.35rem;
+  padding: 0.3rem 0.5rem; cursor: pointer; font-size: 0.72rem;
+}
+.related-autocomplete-item:hover { background: var(--color-hover-bg); }
+.related-ac-domain {
+  font-size: 0.58rem; padding: 0.05rem 0.3rem;
+  background: rgba(130,130,130,0.12); border-radius: 2px;
+  color: var(--color-text-secondary);
+}
+.related-empty { color: var(--color-text-faint); font-size: 0.72rem; font-style: italic; }
+</style>
+</head>
+<body>
+
+<header class="knowledge-header">
+  <div style="max-width:1020px;margin:0 auto;">
+    <h1>Knowledge Base</h1>
+    <nav class="subtitle" aria-label="Knowledge navigation">
+      <a href="dashboard.html" class="nav-link">&#8592; Dashboard</a>
+      <a href="users.html" class="nav-link" style="margin-left:0.5rem">Users</a>
+      <a href="projects.html" class="nav-link" style="margin-left:0.5rem">Projects</a>
+      <a href="skills.html" class="nav-link" style="margin-left:0.5rem">Skills</a>
+      <button class="graph-toggle" id="graph-open-btn" title="View cross-reference graph">&#128476; Graph</button>
+    </nav>
+  </div>
+</header>
+
+<main class="knowledge-body" id="main-content">
+
+<div class="error-banner" id="error-banner"></div>
+
+<!-- Domain picker (shown when no domain is selected) -->
+<div id="domain-picker">
+  <div class="placeholder" id="placeholder">
+    <div class="icon">&#128218;</div>
+    <p>Loading knowledge domains&#8230;</p>
+  </div>
+</div>
+
+<!-- Detail view (shown when a domain is selected) -->
+<div id="detail-view" style="display:none">
+  <div class="detail-breadcrumb" id="detail-breadcrumb"></div>
+  <div class="detail-grid">
+    <div class="detail-sidebar">
+      <div class="sidebar-header" id="sidebar-header">Files</div>
+      <div class="sidebar-body" id="sidebar-list"></div>
+    </div>
+    <div class="detail-content">
+      <div class="content-header" id="content-header">Select a file</div>
+      <div class="content-meta" id="content-meta" style="display:none"></div>
+      <div class="content-body" id="content-body">
+        <div class="content-placeholder">&#128196; Click a file in the sidebar to view it.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</main><!-- /knowledge-body -->
+
+<!-- Graph overlay -->
+<div class="graph-overlay" id="graph-overlay" role="dialog" aria-modal="true" aria-labelledby="graph-overlay-title" aria-describedby="graph-accessible-summary" tabindex="-1">
+  <div class="graph-toolbar">
+    <h2 id="graph-overlay-title">&#128476; Knowledge Graph</h2>
+    <span class="graph-stats" id="graph-stats"></span>
+    <span class="graph-scope" id="graph-scope" style="display:none"></span>
+    <span class="spacer"></span>
+    <button id="graph-3d-btn" title="Toggle 3D perspective">&#9674; 3D</button>
+    <button id="graph-analyze-btn" title="Network analysis">&#128202; Analyze</button>
+    <button id="graph-reset-btn" title="Reset zoom / re-layout">Reset</button>
+    <button id="graph-close-btn">&#10005; Close</button>
+  </div>
+  <div class="graph-canvas-wrap" id="graph-canvas-wrap" style="position:relative;flex:1;overflow:hidden;">
+    <canvas id="graph-canvas" aria-describedby="graph-accessible-summary">Interactive knowledge graph</canvas>
+    <div class="graph-progress" id="graph-progress" style="display:none;">
+      <div class="spinner"></div>
+      <div id="graph-progress-text">Scanning knowledge files&#8230;</div>
+    </div>
+    <section class="graph-accessible-summary" id="graph-accessible-summary" aria-live="polite"></section>
+    <div class="graph-legend" id="graph-legend"></div>
+    <div class="graph-tooltip" id="graph-tooltip"></div>
+    <div class="graph-rotation-hint" id="graph-rotation-hint">
+      <kbd>Right-drag</kbd> or <kbd>Middle-drag</kbd> to rotate<br>
+      <kbd>Ctrl</kbd>+<kbd>←↑→↓</kbd> rotate &ensp; <kbd>←↑→↓</kbd> pan
+      <div class="graph-rotation-values" id="graph-rotation-values"></div>
+    </div>
+    <div class="graph-preview" id="graph-preview">
+      <div class="graph-preview-resize" id="graph-preview-resize"></div>
+      <div class="graph-preview-header">
+        <h3 id="graph-preview-title"></h3>
+        <button id="graph-preview-open">Open &#8594;</button>
+        <button id="graph-preview-close">&#10005;</button>
+      </div>
+      <div class="graph-preview-tabs">
+        <button class="preview-tab active" data-tab="content">Content</button>
+        <button class="preview-tab" data-tab="connections">Connections</button>
+      </div>
+      <div class="graph-preview-meta" id="graph-preview-meta" style="display:none"></div>
+      <div class="graph-preview-body" id="graph-preview-body"></div>
+      <div class="graph-preview-connections" id="graph-preview-connections" style="display:none">
+        <div class="connections-add">
+          <input type="text" id="connections-search" placeholder="Search files to link&#8230;" autocomplete="off">
+          <div class="connection-dropdown" id="connection-dropdown"></div>
+        </div>
+        <div class="connections-list" id="connections-outbound"></div>
+        <div class="connections-inbound-section" id="connections-inbound-wrap" style="display:none">
+          <div class="connections-section-label">Referenced by</div>
+          <div class="connections-list" id="connections-inbound"></div>
+        </div>
+      </div>
+    </div>
+    <div class="analysis-backdrop" id="analysis-backdrop">
+      <div class="analysis-modal">
+        <div class="analysis-modal-header">
+          <h3>&#128202; Network Analysis</h3>
+          <button id="analysis-close-btn">&#10005;</button>
+        </div>
+        <div class="analysis-modal-body" id="analysis-modal-body"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<noscript><p style="text-align:center;margin-top:3rem;color:#f87171;">JavaScript is required for the knowledge viewer.</p></noscript>
+
+<script src="engram-utils.js"></script>
+<script src="graph.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var E = window.Engram;
+  var el = E.el;
+  var showError = E.showError;
+  var readFile = E.readFile;
+  var listDir = E.listDir;
+  var parseFrontmatter = E.parseFrontmatter;
+  var parseFlatYaml = E.parseFlatYaml;
+  var parseMarkdownTable = E.parseMarkdownTable;
+  var restoreSavedHandle = E.restoreSavedHandle;
+  var makeActivatable = E.makeActivatable;
+  var splitMarkdownLinkTarget = E.splitMarkdownLinkTarget;
+  var scrollToMarkdownSection = E.scrollToMarkdownSection;
+
+  /* ── knowledge state ───────────────────────────────── */
+
+  var rootHandle = null;
+  var knowledgeBase = 'core/memory/knowledge';
+  var detailPath = [];
+  var activeFile = null;
+
+  function sameDirPath(a, b) {
+    return a.join('/') === b.join('/');
+  }
+
+  /* ── domain picker ─────────────────────────────────── */
+
+  async function loadDomainPicker() {
+    var picker = document.getElementById('domain-picker');
+    picker.textContent = '';
+
+    var summary = await readFile(rootHandle, 'core/memory/knowledge/SUMMARY.md');
+
+    if (summary) {
+      var parsed = parseFrontmatter(summary);
+      var rows = parseMarkdownTable(parsed.body);
+
+      if (rows.length > 0) {
+        var headerLine = parsed.body.match(/^#[^#].*?(\d+)\s*files/m);
+        if (headerLine) {
+          var totalP = el('p', headerLine[0].replace(/^#\s*/, ''));
+          totalP.style.marginBottom = '0.75rem';
+          totalP.style.fontWeight = '500';
+          picker.appendChild(totalP);
+        }
+
+        var grid = el('div', '', 'domain-cards');
+        for (var i = 0; i < rows.length; i++) {
+          var domain = (rows[i]['Domain'] || '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\//g, '');
+          var files = rows[i]['Files'] || '';
+          var scope = rows[i]['Scope'] || '';
+
+          var card = el('div', '', 'domain-card');
+          card.appendChild(el('div', domain, 'name'));
+          card.appendChild(el('div', files + ' files', 'count'));
+          if (scope) {
+            var scopeP = el('div', scope.substring(0, 100));
+            scopeP.style.fontSize = '0.7rem';
+            scopeP.style.color = '#777';
+            scopeP.style.marginTop = '0.2rem';
+            card.appendChild(scopeP);
+          }
+          (function (domainName) {
+            makeActivatable(card, function () { openDomain(domainName); }, {
+              role: 'button',
+              label: 'Open knowledge domain ' + domainName
+            });
+          })(domain);
+          grid.appendChild(card);
+        }
+        picker.appendChild(grid);
+        return;
+      }
+    }
+
+    // Fallback: list subdirectories
+    var listing = await listDir(rootHandle, 'core/memory/knowledge');
+    var grid = el('div', '', 'domain-cards');
+    for (var d = 0; d < listing.dirs.length; d++) {
+      if (listing.dirs[d].startsWith('_')) continue;
+      var card = el('div', '', 'domain-card');
+      card.appendChild(el('div', listing.dirs[d], 'name'));
+      (function (name) {
+        makeActivatable(card, function () { openDomain(name); }, {
+          role: 'button',
+          label: 'Open knowledge domain ' + name
+        });
+      })(listing.dirs[d]);
+      grid.appendChild(card);
+    }
+    picker.appendChild(grid);
+  }
+
+  /* ── detail view ───────────────────────────────────── */
+
+  function openDomain(domain) {
+    detailPath = [domain];
+    activeFile = null;
+    showDetailView();
+  }
+
+  function showDetailView() {
+    document.getElementById('domain-picker').style.display = 'none';
+    document.getElementById('detail-view').style.display = '';
+    renderBreadcrumb();
+    loadSidebar();
+    clearContentPane();
+  }
+
+  function hideDetailView() {
+    document.getElementById('detail-view').style.display = 'none';
+    document.getElementById('domain-picker').style.display = '';
+    detailPath = [];
+    activeFile = null;
+  }
+
+  function renderBreadcrumb() {
+    var bc = document.getElementById('detail-breadcrumb');
+    bc.textContent = '';
+
+    // Dashboard link
+    var dash = el('a', '\u2190 Dashboard');
+    dash.href = 'dashboard.html';
+    bc.appendChild(dash);
+
+    bc.appendChild(el('span', ' / ', 'sep'));
+
+    // Knowledge root (back to domain picker)
+    var root = el('a', 'Knowledge');
+    makeActivatable(root, hideDetailView, { role: 'link', label: 'Return to knowledge domain list' });
+    bc.appendChild(root);
+
+    // Path segments
+    for (var i = 0; i < detailPath.length; i++) {
+      bc.appendChild(el('span', ' / ', 'sep'));
+      if (i < detailPath.length - 1) {
+        var link = el('a', detailPath[i]);
+        (function (idx) {
+          makeActivatable(link, function () {
+            detailPath = detailPath.slice(0, idx + 1);
+            activeFile = null;
+            renderBreadcrumb();
+            loadSidebar();
+            clearContentPane();
+          }, { role: 'link', label: 'Open folder ' + detailPath[idx] });
+        })(i);
+        bc.appendChild(link);
+      } else {
+        bc.appendChild(el('span', detailPath[i], 'current'));
+      }
+    }
+
+    if (activeFile) {
+      bc.appendChild(el('span', ' / ', 'sep'));
+      bc.appendChild(el('span', activeFile, 'current'));
+    }
+  }
+
+  async function loadSidebar() {
+    var body = document.getElementById('sidebar-list');
+    body.textContent = '';
+    var header = document.getElementById('sidebar-header');
+    header.textContent = detailPath[detailPath.length - 1];
+
+    var dirPath = knowledgeBase + '/' + detailPath.join('/');
+    var listing = await listDir(rootHandle, dirPath);
+
+    var ul = document.createElement('ul');
+
+    // Subdirectories first
+    for (var d = 0; d < listing.dirs.length; d++) {
+      var dirName = listing.dirs[d];
+      if (dirName.startsWith('_') || dirName === '__pycache__') continue;
+      var li = document.createElement('li');
+      li.appendChild(el('span', '\uD83D\uDCC1', 'icon'));
+      li.appendChild(el('span', dirName + '/'));
+      (function (name) {
+        makeActivatable(li, function () {
+          detailPath.push(name);
+          activeFile = null;
+          renderBreadcrumb();
+          loadSidebar();
+          clearContentPane();
+        }, { role: 'button', label: 'Open folder ' + name });
+      })(dirName);
+      ul.appendChild(li);
+    }
+
+    // Then files
+    var mdFiles = listing.files.filter(function (f) { return f.endsWith('.md'); });
+    for (var f = 0; f < mdFiles.length; f++) {
+      var fileName = mdFiles[f];
+      var li = document.createElement('li');
+      li.appendChild(el('span', '\uD83D\uDCC4', 'icon'));
+      var label = el('span', fileName.replace(/\.md$/, ''));
+      li.appendChild(label);
+      (function (name, liEl) {
+        makeActivatable(liEl, function () {
+          var prev = ul.querySelector('li.active');
+          if (prev) prev.classList.remove('active');
+          liEl.classList.add('active');
+          viewFile(name);
+        }, { role: 'button', label: 'Open file ' + name });
+      })(fileName, li);
+      ul.appendChild(li);
+    }
+
+    // Also show non-md files
+    var otherFiles = listing.files.filter(function (f) { return !f.endsWith('.md'); });
+    for (var o = 0; o < otherFiles.length; o++) {
+      var ofName = otherFiles[o];
+      var li = document.createElement('li');
+      li.appendChild(el('span', '\uD83D\uDCCE', 'icon'));
+      li.appendChild(el('span', ofName));
+      li.style.color = '#999';
+      ul.appendChild(li);
+    }
+
+    if (ul.children.length === 0) {
+      body.appendChild(el('p', 'Empty folder.'));
+      body.lastChild.style.padding = '1rem';
+      body.lastChild.style.color = '#999';
+      body.lastChild.style.fontSize = '0.8rem';
+    } else {
+      body.appendChild(ul);
+    }
+  }
+
+  function clearContentPane() {
+    document.getElementById('content-header').textContent = 'Select a file';
+    document.getElementById('content-meta').style.display = 'none';
+    document.getElementById('content-meta').textContent = '';
+    var body = document.getElementById('content-body');
+    body.textContent = '';
+    var ph = el('div', '', 'content-placeholder');
+    ph.textContent = '\uD83D\uDCC4 Click a file in the sidebar to view it.';
+    body.appendChild(ph);
+  }
+
+  /**
+   * Resolve a cross-reference path to {dir: [...segments], file: 'name.md'}
+   * relative to the knowledge base root.
+   */
+  function resolveKnowledgePath(ref) {
+    var parsed = splitMarkdownLinkTarget(ref);
+    var path = parsed.path.replace(/^knowledge\//, '');
+    if (path.match(/^\.\.\//) || path.match(/^\.\//) ) {
+      var base = detailPath.slice();
+      var parts = path.split('/');
+      for (var k = 0; k < parts.length; k++) {
+        if (parts[k] === '..') base.pop();
+        else if (parts[k] !== '.') base.push(parts[k]);
+      }
+      path = base.join('/');
+    }
+    var segments = path.split('/');
+    var file = segments.pop();
+    return { dir: segments, file: file, section: parsed.section };
+  }
+
+  function navigateToFile(ref) {
+    var resolved = resolveKnowledgePath(ref);
+    if (!resolved.file) {
+      if (resolved.section) {
+        scrollToMarkdownSection(document.getElementById('content-body'), '#' + resolved.section);
+      }
+      return;
+    }
+    if (resolved.file === activeFile && sameDirPath(resolved.dir, detailPath)) {
+      if (resolved.section) {
+        scrollToMarkdownSection(document.getElementById('content-body'), '#' + resolved.section);
+      }
+      return;
+    }
+    detailPath = resolved.dir;
+    showDetailView();
+    viewFile(resolved.file, resolved.section);
+  }
+
+  /* ── Inline related editor ─────────────────────────── */
+
+  var relatedEditing = false;
+
+  function renderRelatedEditor(container, rawContent, filePath) {
+    var related = E.getRelatedList(rawContent);
+    var wrapper = el('div', '', 'related-editor');
+
+    // Label + edit toggle
+    var labelRow = el('div', '', 'related-label-row');
+    var label = el('span', 'related:', 'meta-label');
+    labelRow.appendChild(label);
+    var editBtn = el('button', relatedEditing ? 'done' : 'edit', 'related-edit-toggle');
+    editBtn.type = 'button';
+    labelRow.appendChild(editBtn);
+    wrapper.appendChild(labelRow);
+
+    // Chips container
+    var chips = el('div', '', 'related-chips');
+
+    function renderChips() {
+      while (chips.firstChild) chips.removeChild(chips.firstChild);
+      for (var i = 0; i < related.list.length; i++) {
+        (function (ref, idx) {
+          var chip = el('span', '', 'related-chip');
+          var refTarget = splitMarkdownLinkTarget(ref);
+          var chipLabel = refTarget.path.replace(/\.md$/i, '').split('/').pop();
+          if (refTarget.section) chipLabel += ' #' + refTarget.section;
+
+          var labelEl = document.createElement('a');
+          labelEl.className = 'related-chip-label';
+          labelEl.textContent = chipLabel;
+          labelEl.title = ref;
+          makeActivatable(labelEl, function () { navigateToFile(ref); }, {
+            role: 'link', label: 'Open related file ' + ref
+          });
+          chip.appendChild(labelEl);
+
+          if (relatedEditing) {
+            var removeBtn = el('button', '\u00d7', 'related-chip-remove');
+            removeBtn.type = 'button';
+            removeBtn.title = 'Remove ' + ref;
+            removeBtn.addEventListener('click', function (ev) {
+              ev.stopPropagation();
+              E.removeRelatedEntry(rootHandle, filePath, ref).then(function (result) {
+                if (result.success) {
+                  related.list.splice(idx, 1);
+                  renderChips();
+                }
+              });
+            });
+            chip.appendChild(removeBtn);
+          }
+          chips.appendChild(chip);
+        })(related.list[i], i);
+      }
+
+      // Add button (always last in edit mode)
+      if (relatedEditing) {
+        var addChip = el('span', '', 'related-chip related-chip-add');
+        var addInput = document.createElement('input');
+        addInput.type = 'text';
+        addInput.className = 'related-add-input';
+        addInput.placeholder = '+ add related...';
+        addChip.appendChild(addInput);
+        chips.appendChild(addChip);
+
+        var dropdown = el('div', '', 'related-autocomplete');
+        dropdown.style.display = 'none';
+        addChip.appendChild(dropdown);
+
+        var addDebounce = null;
+        addInput.addEventListener('input', function () {
+          clearTimeout(addDebounce);
+          var q = addInput.value.trim().toLowerCase();
+          if (q.length < 2) { dropdown.style.display = 'none'; return; }
+          addDebounce = setTimeout(function () {
+            E.buildFileIndex(rootHandle, knowledgeBase).then(function (files) {
+              while (dropdown.firstChild) dropdown.removeChild(dropdown.firstChild);
+              var existingSet = {};
+              for (var r = 0; r < related.list.length; r++) existingSet[related.list[r]] = true;
+              var matches = 0;
+              for (var f = 0; f < files.length; f++) {
+                var entry = files[f];
+                if (existingSet[entry.path]) continue;
+                if (entry.label.toLowerCase().indexOf(q) < 0 &&
+                    entry.path.toLowerCase().indexOf(q) < 0) continue;
+                var item = el('div', '', 'related-autocomplete-item');
+                var domainBadge = el('span', entry.domain || '', 'related-ac-domain');
+                item.appendChild(domainBadge);
+                item.appendChild(document.createTextNode(entry.label));
+                item.title = entry.path;
+                (function (path) {
+                  item.addEventListener('click', function () {
+                    dropdown.style.display = 'none';
+                    addInput.value = '';
+                    E.addRelatedEntry(rootHandle, filePath, path).then(function (result) {
+                      if (result.success) {
+                        related.list.push(path);
+                        renderChips();
+                      }
+                    });
+                  });
+                })(entry.path);
+                dropdown.appendChild(item);
+                matches++;
+                if (matches >= 8) break;
+              }
+              dropdown.style.display = matches > 0 ? '' : 'none';
+            });
+          }, 200);
+        });
+
+        addInput.addEventListener('blur', function () {
+          setTimeout(function () { dropdown.style.display = 'none'; }, 200);
+        });
+      }
+
+      if (related.list.length === 0 && !relatedEditing) {
+        chips.appendChild(el('span', 'none', 'related-empty'));
+      }
+    }
+
+    renderChips();
+    wrapper.appendChild(chips);
+    container.appendChild(wrapper);
+
+    editBtn.addEventListener('click', function () {
+      E.requestWritePermission(rootHandle).then(function (perm) {
+        if (perm !== 'granted') return;
+        relatedEditing = !relatedEditing;
+        editBtn.textContent = relatedEditing ? 'done' : 'edit';
+        renderChips();
+      });
+    });
+  }
+
+  async function viewFile(filename, section) {
+    activeFile = filename;
+    renderBreadcrumb();
+
+    var filePath = knowledgeBase + '/' + detailPath.join('/') + '/' + filename;
+    var content = await readFile(rootHandle, filePath);
+
+    var header = document.getElementById('content-header');
+    header.textContent = filename;
+
+    var meta = document.getElementById('content-meta');
+    meta.textContent = '';
+    meta.style.display = 'none';
+
+    var body = document.getElementById('content-body');
+    body.textContent = '';
+
+    if (!content) {
+      body.appendChild(el('p', 'Could not read file.'));
+      return;
+    }
+
+    var parsed = parseFrontmatter(content);
+
+    // Render frontmatter metadata
+    if (parsed.frontmatter) {
+      var fm = parseFlatYaml(parsed.frontmatter);
+      meta.style.display = '';
+
+      var fields = ['trust', 'source', 'created', 'last_verified', 'origin_session', 'topic', 'type', 'related'];
+      for (var i = 0; i < fields.length; i++) {
+        var key = fields[i];
+        if (!fm[key]) continue;
+        if (key === 'related') continue; // Handled separately below
+        var item = el('span', '', 'meta-item');
+        item.appendChild(el('span', key + ':', 'meta-label'));
+        if (key === 'trust') {
+          var trustVal = fm[key].toLowerCase();
+          var cls = 'badge badge-' + (trustVal === 'high' ? 'high' : trustVal === 'medium' ? 'medium' : 'low');
+          item.appendChild(el('span', fm[key], cls));
+        } else {
+          item.appendChild(document.createTextNode(' ' + fm[key]));
+        }
+        meta.appendChild(item);
+      }
+
+      // Inline related editor (chips)
+      renderRelatedEditor(meta, content, filePath);
+    }
+
+    // Render body as styled markdown
+    renderMarkdown(parsed.body.trim(), body);
+    if (section) scrollToMarkdownSection(body, '#' + section);
+  }
+
+  /* ── markdown renderer (delegates to shared Engram.renderMarkdown) ── */
+
+  var mdOpts = { onXrefClick: navigateToFile };
+
+  function renderMarkdown(text, container) {
+    Engram.renderMarkdown(text, container, mdOpts);
+  }
+
+  /* ── cross-reference graph (see graph.js) ────────────── */
+
+  EngramGraph.init({
+    el: el, showError: showError, readFile: readFile,
+    listDir: listDir, writeFile: E.writeFile,
+    parseFrontmatter: parseFrontmatter,
+    parseFlatYaml: parseFlatYaml, renderMarkdown: renderMarkdown,
+    getRootHandle: function () { return rootHandle; },
+    getKnowledgeBase: function () { return knowledgeBase; },
+    getDetailPath: function () { return detailPath; },
+    setDetailPath: function (p) { detailPath = p; },
+    showDetailView: showDetailView,
+    viewFile: viewFile,
+    requestWritePermission: E.requestWritePermission,
+    getRelatedList: E.getRelatedList,
+    addRelatedEntry: E.addRelatedEntry,
+    removeRelatedEntry: E.removeRelatedEntry,
+    buildFileIndex: E.buildFileIndex
+  });
+
+  /* ── initialization ────────────────────────────────── */
+
+  (async function init() {
+    var restored = await restoreSavedHandle({ prompt: true });
+    if (restored.status === 'missing') {
+      showError('No memory repo loaded. Open the dashboard to load your repo folder or connect to GitHub.');
+      return;
+    }
+
+    if (restored.status !== 'granted') {
+      showError('Permission denied. Open the dashboard to re-open your repo folder or connect to GitHub.');
+      return;
+    }
+
+    rootHandle = restored.handle;
+
+    // Check for ?domain= query parameter
+    var params = new URLSearchParams(window.location.search);
+    var domain = params.get('domain');
+
+    if (domain) {
+      openDomain(domain);
+    } else {
+      await loadDomainPicker();
+    }
+  })();
+
+})();
+</script>
+</body>
+</html>

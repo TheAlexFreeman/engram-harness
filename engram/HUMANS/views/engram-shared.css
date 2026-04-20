@@ -1,0 +1,245 @@
+/* engram-shared.css — Shared styles across Engram views */
+
+:root {
+  /* ── Dark earth palette (default) ──────────────────── */
+  --color-primary: #c2b49a;
+  --color-primary-hover: #d4c9b0;
+  --color-bg: #161412;
+  --color-surface: #1e1b18;
+  --color-header: #242019;
+  --color-hover-bg: #262118;
+  --color-hover-border: #4a3f33;
+  --color-active-bg: #2d2720;
+  --color-accent: #c2b49a;
+
+  /* ── Header bars (darkest layer) ───────────────────── */
+  --dark-bg: #2a2d31;
+  --dark-surface: #32363b;
+  --dark-text: #e8e2d9;
+  --dark-text-muted: #9a9082;
+  --dark-border: rgba(255,245,230,0.08);
+
+  /* ── Text ──────────────────────────────────────────── */
+  --color-text: #e8e2d9;
+  --color-text-secondary: #a89e91;
+  --color-text-muted: #7a7067;
+  --color-text-faint: #564e45;
+
+  /* ── Borders ───────────────────────────────────────── */
+  --color-border: rgba(255,245,230,0.12);
+  --color-border-light: rgba(255,245,230,0.08);
+  --color-border-fine: rgba(255,245,230,0.05);
+
+  /* ── Trust badges ──────────────────────────────────── */
+  --color-trust-high-bg: rgba(34,197,94,0.15);  --color-trust-high: #6bca8a;
+  --color-trust-med-bg: rgba(217,160,6,0.15);   --color-trust-med: #e0b94e;
+  --color-trust-low-bg: rgba(210,90,70,0.15);   --color-trust-low: #e07a6a;
+
+  /* ── Status ────────────────────────────────────────── */
+  --color-ok: #6bca8a;
+  --color-active: #c2b49a;
+  --color-warn: #e0b94e;
+  --color-danger: #d35f4a;
+
+  /* ── Buttons ────────────────────────────────────────── */
+  --color-btn-primary: #4a6b52;
+  --color-btn-primary-hover: #5a7d62;
+
+  /* ── Shape ─────────────────────────────────────────── */
+  --radius-card: 12px;
+  --radius-button: 8px;
+  --radius-small: 4px;
+  --radius-pill: 999px;
+
+  /* ── Depth ─────────────────────────────────────────── */
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
+  --shadow-hover: 0 8px 24px rgba(0,0,0,0.4);
+  --shadow-dark-card: 0 2px 8px rgba(0,0,0,0.5);
+
+  /* ── Spacing ───────────────────────────────────────── */
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 2rem;
+  --space-xl: 4rem;
+
+  /* ── Typography ────────────────────────────────────── */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  --text-xs: 0.7rem;
+  --text-sm: 0.8rem;
+  --text-base: 0.88rem;
+  --text-lg: 1.05rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.75rem;
+  --text-3xl: 2.25rem;
+  --color-code-bg: rgba(255,245,230,0.06);
+
+  /* ── Motion ────────────────────────────────────────── */
+  --duration: 0.2s;
+  --duration-slow: 0.4s;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-sans);
+  line-height: 1.65;
+  color: var(--color-text);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+[role="link"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--color-primary-hover);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px rgba(194, 180, 154, 0.18);
+}
+
+[role="button"],
+[role="link"] {
+  cursor: pointer;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Scrollbars ──────────────────────────────────────── */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,245,230,0.10); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,245,230,0.18); }
+* { scrollbar-width: thin; scrollbar-color: rgba(255,245,230,0.10) transparent; }
+
+/* ── Page title ──────────────────────────────────────── */
+h1 {
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  margin-bottom: var(--space-xs);
+}
+.subtitle {
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-lg);
+  font-size: var(--text-base);
+}
+
+/* ── Dark header bar ─────────────────────────────────── */
+.dark-header {
+  background: var(--dark-bg);
+  color: var(--dark-text);
+  padding: var(--space-lg) var(--space-lg) var(--space-md);
+}
+.dark-header h1 { color: #fff; }
+.dark-header .subtitle { color: var(--dark-text-muted); }
+.dark-header .nav-link {
+  color: var(--dark-text-muted);
+}
+.dark-header .nav-link:hover { color: #fff; }
+
+/* ── Content area ────────────────────────────────────── */
+.content-wrap {
+  padding: var(--space-lg);
+  max-width: 1020px;
+  margin: 0 auto;
+}
+
+/* ── Trust badges ────────────────────────────────────── */
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.badge-high { background: var(--color-trust-high-bg); color: var(--color-trust-high); }
+.badge-medium { background: var(--color-trust-med-bg); color: var(--color-trust-med); }
+.badge-low { background: var(--color-trust-low-bg); color: var(--color-trust-low); }
+
+/* ── Navigation links ────────────────────────────────── */
+.nav-link {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  color: var(--color-primary); text-decoration: none;
+  font-size: var(--text-sm); font-weight: 500;
+  transition: color var(--duration) var(--ease);
+}
+.nav-link:hover { color: var(--color-primary-hover); }
+.nav-link .arrow {
+  display: inline-block;
+  transition: transform var(--duration) var(--ease);
+}
+.nav-link:hover .arrow { transform: translateX(3px); }
+
+/* ── Shared inline code ──────────────────────────────── */
+code {
+  font-family: var(--font-mono);
+  font-size: 0.85em; padding: 0.15em 0.35em;
+  background: var(--color-code-bg); border-radius: 3px;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+
+/* ── Knowledge domain cards ──────────────────────────── */
+.domain-cards {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-md);
+}
+@media (max-width: 700px) { .domain-cards { grid-template-columns: repeat(2, 1fr); } }
+.domain-card {
+  background: var(--color-surface);
+  border-radius: var(--radius-card);
+  padding: var(--space-md) calc(var(--space-md) * 1.1);
+  cursor: pointer;
+  transition: box-shadow var(--duration) var(--ease), transform var(--duration) var(--ease);
+  border: 1px solid var(--color-border-light);
+}
+.domain-card:hover {
+  box-shadow: var(--shadow-hover);
+  transform: translateY(-2px);
+}
+.domain-card .name { font-weight: 600; font-size: var(--text-sm); }
+.domain-card .count { font-size: var(--text-xs); color: var(--color-text-muted); margin-top: 0.15rem; }
+
+/* ── Placeholder state ───────────────────────────────── */
+.placeholder {
+  text-align: center; padding: var(--space-xl) var(--space-md);
+  color: var(--color-text-faint);
+}
+.placeholder .icon { font-size: 2.5rem; margin-bottom: var(--space-sm); }
+
+/* ── Error banner ────────────────────────────────────── */
+.error-banner {
+  display: none;
+  background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.25);
+  border-radius: var(--radius-button); padding: 0.6rem 1rem;
+  font-size: var(--text-sm); color: var(--color-trust-low);
+  margin-bottom: var(--space-md);
+}
+.error-banner.visible { display: block; }
+
+/* ── KaTeX math ──────────────────────────────────────── */
+.math-display { margin: 1em 0; text-align: center; overflow-x: auto; }
+
+/* ── Reduced motion ──────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

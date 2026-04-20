@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Engram &#8212; Skills</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="engram-shared.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css" integrity="sha384-zh0CIslj3dQfr5GQttW75N5yzjaqaXzaosFOBb3a6qYWDMPFimSGKIgSLwBPYPgw" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js" integrity="sha384-Rma6DA2IPUxQ1OahHGGVKMB9YnAiMEfjNTmECIK1JuzLCAb7DQPAfGMilDJ74Nfm" crossorigin="anonymous"></script>
+<style>
+/* ── Layout ──────────────────────────────────────────── */
+.skills-header {
+  background: var(--dark-bg); color: var(--dark-text);
+  padding: var(--space-lg) var(--space-lg) var(--space-md);
+}
+.skills-header h1 { color: #fff; }
+.skills-header .subtitle { color: var(--dark-text-muted); }
+.skills-header .nav-link { color: var(--dark-text-muted); }
+.skills-header .nav-link:hover { color: #fff; }
+
+.skills-body {
+  max-width: 1020px; margin: 0 auto;
+  padding: var(--space-lg);
+}
+
+/* ── Toolbar ─────────────────────────────────────────── */
+.toolbar {
+  display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+}
+.toolbar .status {
+  font-size: var(--text-sm); color: var(--dark-text-muted); margin-left: auto;
+}
+.toolbar .status .dot {
+  display: inline-block; width: 8px; height: 8px;
+  border-radius: 50%; margin-right: 4px; vertical-align: middle;
+}
+.toolbar .status .dot.connected { background: var(--color-ok); }
+.toolbar .status .dot.disconnected { background: var(--color-warn); }
+
+/* ── Buttons ─────────────────────────────────────────── */
+button {
+  padding: 0.5rem 1.25rem; border: none; border-radius: var(--radius-button);
+  font-size: var(--text-base); font-family: inherit; cursor: pointer;
+  transition: background var(--duration) var(--ease), transform var(--duration) var(--ease);
+}
+button:active { transform: scale(0.97); }
+.btn-primary { background: var(--color-btn-primary); color: #fff; }
+.btn-primary:hover { background: var(--color-btn-primary-hover); }
+.btn-secondary { background: rgba(255,255,255,0.1); color: var(--dark-text); border: 1px solid var(--dark-border); }
+.btn-secondary:hover { background: rgba(255,255,255,0.15); }
+
+/* ── Skill list cards ────────────────────────────────── */
+.skill-cards {
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md);
+}
+@media (max-width: 700px) { .skill-cards { grid-template-columns: 1fr; } }
+
+.skill-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-card);
+  padding: var(--space-md) calc(var(--space-md) * 1.1);
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+  transition: box-shadow var(--duration) var(--ease), transform var(--duration) var(--ease);
+}
+.skill-card:hover {
+  box-shadow: var(--shadow-hover);
+  transform: translateY(-2px);
+}
+.skill-card .card-top {
+  display: flex; align-items: center; gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.skill-card .card-icon {
+  width: 32px; height: 32px; border-radius: var(--radius-button);
+  background: var(--color-hover-bg); border: 1px solid var(--color-border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1rem; flex-shrink: 0;
+}
+.skill-card .card-name {
+  font-weight: 600; font-size: var(--text-base); flex: 1;
+}
+.skill-card .card-desc {
+  font-size: var(--text-sm); color: var(--color-text-secondary); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.skill-card .card-footer {
+  display: flex; align-items: center; gap: 0.5rem;
+  margin-top: 0.6rem; font-size: var(--text-xs); color: var(--color-text-muted);
+  flex-wrap: wrap;
+}
+.skill-card .card-footer .tag {
+  display: inline-block; padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-pill); font-size: var(--text-xs);
+  background: rgba(255,245,230,0.06); border: 1px solid var(--color-border);
+}
+.skill-card.archived {
+  opacity: 0.6;
+  border-style: dashed;
+}
+
+/* ── Archive section ─────────────────────────────────── */
+.archive-section {
+  margin-top: var(--space-lg);
+}
+.archive-section h3 {
+  font-size: var(--text-sm); color: var(--color-text-muted);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  margin-bottom: var(--space-sm);
+}
+
+/* ── Breadcrumb ──────────────────────────────────────── */
+.detail-breadcrumb {
+  display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;
+  font-size: var(--text-sm); margin-bottom: var(--space-md);
+}
+.detail-breadcrumb a {
+  color: var(--color-primary); text-decoration: none; cursor: pointer;
+  font-weight: 500;
+}
+.detail-breadcrumb a:hover { color: var(--color-primary-hover); }
+.detail-breadcrumb .sep { color: var(--color-text-faint); }
+.detail-breadcrumb .current { font-weight: 600; color: var(--color-text); }
+
+/* ── Skill detail header ─────────────────────────────── */
+.skill-detail-header {
+  display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap;
+  margin-bottom: var(--space-sm);
+}
+.skill-detail-header .icon-lg {
+  width: 44px; height: 44px; border-radius: var(--radius-button);
+  background: var(--color-hover-bg); border: 1px solid var(--color-border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.3rem; flex-shrink: 0;
+}
+.skill-detail-header h2 {
+  font-size: var(--text-xl); margin: 0; font-weight: 700; letter-spacing: -0.01em;
+}
+
+/* ── Meta grid ───────────────────────────────────────── */
+.skill-meta {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--space-sm) var(--space-md);
+  font-size: var(--text-sm); color: var(--color-text-secondary);
+  margin-bottom: var(--space-md);
+  padding: var(--space-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+.skill-meta .meta-item {
+  display: flex; flex-direction: column; gap: 0.15rem;
+}
+.skill-meta .meta-label {
+  font-weight: 600; color: var(--color-text-muted);
+  font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.06em;
+}
+
+/* ── Trigger box ─────────────────────────────────────── */
+.skill-trigger {
+  font-size: var(--text-base); color: var(--color-text-secondary);
+  padding: 0.6rem 0.85rem;
+  background: var(--color-hover-bg);
+  border-left: 3px solid var(--color-primary);
+  border-radius: 0 var(--radius-button) var(--radius-button) 0;
+  margin-bottom: var(--space-lg);
+  line-height: 1.65;
+}
+
+/* ── Content panel ───────────────────────────────────── */
+.detail-content {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-card);
+  overflow: hidden; box-shadow: var(--shadow-card);
+}
+.detail-content .content-header {
+  padding: 0.65rem 0.9rem;
+  border-bottom: 1px solid var(--color-border-light);
+  font-size: var(--text-sm); font-weight: 600;
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.detail-content .content-body {
+  padding: 1.15rem 1.25rem;
+  max-height: 600px; overflow-y: auto;
+  font-size: var(--text-base); line-height: 1.75;
+}
+.detail-content .content-body h1,
+.detail-content .content-body h2,
+.detail-content .content-body h3 {
+  margin-top: 1.5rem; margin-bottom: 0.5rem;
+  font-weight: 700; letter-spacing: -0.01em;
+}
+.detail-content .content-body h1 { font-size: var(--text-xl); }
+.detail-content .content-body h2 { font-size: var(--text-lg); border-bottom: 1px solid var(--color-border-fine); padding-bottom: 0.25rem; }
+.detail-content .content-body h3 { font-size: var(--text-base); color: var(--color-text-secondary); }
+.detail-content .content-body p { margin-bottom: 0.85rem; }
+.detail-content .content-body ul,
+.detail-content .content-body ol {
+  margin-bottom: 0.85rem; padding-left: 1.25rem;
+}
+.detail-content .content-body li { margin-bottom: 0.3rem; }
+.detail-content .content-body blockquote {
+  margin: 0.75rem 0; padding: 0.5rem 0.85rem;
+  border-left: 3px solid var(--color-primary);
+  background: var(--color-hover-bg);
+  border-radius: 0 var(--radius-small) var(--radius-small) 0;
+  color: var(--color-text-secondary);
+}
+.detail-content .content-body code {
+  font-family: var(--font-mono); font-size: 0.88em;
+  background: var(--color-code-bg); padding: 0.1em 0.35em;
+  border-radius: var(--radius-small);
+}
+.detail-content .content-body pre {
+  background: #0d1117; color: #e6edf3;
+  padding: 0.85rem 1rem; border-radius: var(--radius-button);
+  overflow-x: auto; margin-bottom: 0.85rem;
+  font-size: var(--text-sm); line-height: 1.6;
+}
+.detail-content .content-body pre code {
+  background: none; padding: 0;
+}
+.detail-content .content-body hr {
+  border: none; border-top: 1px solid var(--color-border-fine);
+  margin: 1.25rem 0;
+}
+.detail-content .content-body a {
+  color: var(--color-primary); text-decoration: none;
+}
+.detail-content .content-body a:hover {
+  color: var(--color-primary-hover); text-decoration: underline;
+}
+.detail-content .content-body table {
+  width: 100%; border-collapse: collapse; margin-bottom: 0.85rem;
+}
+.detail-content .content-body th,
+.detail-content .content-body td {
+  text-align: left; padding: 0.45rem 0.6rem;
+  font-size: var(--text-sm); border-bottom: 1px solid var(--color-border-fine);
+}
+.detail-content .content-body th {
+  font-weight: 600; color: var(--color-text-muted);
+  font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.04em;
+}
+
+/* ── Placeholder ─────────────────────────────────────── */
+.placeholder {
+  text-align: center; padding: var(--space-xl) var(--space-lg);
+  color: var(--color-text-muted);
+}
+.placeholder .icon { font-size: 3rem; margin-bottom: var(--space-sm); }
+.placeholder p { max-width: 420px; margin: 0 auto; line-height: 1.6; }
+</style>
+</head>
+<body>
+
+<header class="skills-header">
+  <div style="max-width:1020px;margin:0 auto;">
+    <h1>&#128295; Skills</h1>
+    <p class="subtitle">Procedural knowledge &#8212; how the agent performs specific tasks.</p>
+    <nav class="toolbar" aria-label="Skills navigation and repository actions">
+      <a href="dashboard.html" class="nav-link">&#8592; Dashboard</a>
+      <a href="knowledge.html" class="nav-link" style="margin-left:0.5rem">Knowledge</a>
+      <a href="projects.html" class="nav-link" style="margin-left:0.5rem">Projects</a>
+      <a href="users.html" class="nav-link" style="margin-left:0.5rem">Users</a>
+      <button class="btn-primary" id="open-btn" onclick="openFolder()">Open Memory Repo</button>
+      <button class="btn-secondary" id="refresh-btn" onclick="refresh()" style="display:none">Refresh</button>
+      <span class="status" id="status-bar">
+        <span class="dot disconnected"></span> No folder loaded
+      </span>
+    </nav>
+  </div>
+</header>
+
+<main class="skills-body" id="main-content">
+
+<div class="error-banner" id="error-banner"></div>
+
+<!-- placeholder before folder is loaded -->
+<div class="placeholder" id="placeholder">
+  <div class="icon">&#128295;</div>
+  <p>Click <strong>Open Memory Repo</strong> to load your Engram folder.<br>
+  The viewer reads files locally using your browser &#8212; nothing leaves your machine.</p>
+  <p style="margin-top:0.5rem; font-size:0.8rem; color:var(--color-text-faint)">Requires a Chromium-based browser (Chrome, Edge, Brave, Arc).</p>
+</div>
+
+<!-- list view -->
+<div id="list-view" style="display:none">
+  <div class="skill-cards" id="skill-cards"></div>
+  <div class="archive-section" id="archive-section" style="display:none">
+    <h3>&#128451; Archived</h3>
+    <div class="skill-cards" id="archive-cards"></div>
+  </div>
+</div>
+
+<!-- detail view -->
+<div id="detail-view" style="display:none">
+  <div class="detail-breadcrumb" id="breadcrumb"></div>
+  <div class="skill-detail-header" id="detail-header"></div>
+  <div class="skill-meta" id="detail-meta" style="display:none"></div>
+  <div class="skill-trigger" id="detail-trigger" style="display:none"></div>
+  <div class="detail-content">
+    <div class="content-header" id="content-header">Skill Details</div>
+    <div class="content-body" id="content-body"></div>
+  </div>
+</div>
+
+</main><!-- /skills-body -->
+
+<noscript><p style="text-align:center;margin-top:3rem;color:#f87171;">JavaScript is required for this page.</p></noscript>
+
+<script src="engram-utils.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var E = window.Engram;
+  var el = E.el;
+  var showError = E.showError;
+  var hideError = E.hideError;
+  var readFile = E.readFile;
+  var listDir = E.listDir;
+  var parseFrontmatter = E.parseFrontmatter;
+  var parseFlatYaml = E.parseFlatYaml;
+  var restoreSavedHandle = E.restoreSavedHandle;
+  var saveHandle = E.saveHandle;
+  var clearNode = E.clearNode;
+  var makeActivatable = E.makeActivatable;
+
+  var rootHandle = null;
+
+  /* ── State ───────────────────────────────────────── */
+  var skillsData = [];      // [{name, fileName, desc, meta, archived}]
+  var currentSkill = null;  // selected skill object
+
+  /* ── Icon map by skill name ──────────────────────── */
+  var iconMap = {
+    'onboarding': '👋',
+    'session-start': '▶',
+    'session-sync': '🔄',
+    'session-wrapup': '🏁',
+    'codebase-survey': '🔍'
+  };
+
+  function getIcon(name) {
+    return iconMap[name] || '🔧';
+  }
+
+  /* ── Status bar ──────────────────────────────────── */
+  function setStatus(connected, text) {
+    E.setStatus(document.getElementById('status-bar'), connected, text);
+  }
+
+  /* ── Folder picker ───────────────────────────────── */
+  window.openFolder = async function () {
+    try {
+      rootHandle = await window.showDirectoryPicker({ mode: 'read' });
+      await saveHandle(rootHandle);
+      await loadData();
+    } catch (err) {
+      if (err.name !== 'AbortError') showError('Could not open folder: ' + err.message);
+    }
+  };
+
+  window.refresh = async function () {
+    if (rootHandle) await loadData();
+  };
+
+  /* ── Auto-connect ────────────────────────────────── */
+  async function tryAutoConnect() {
+    var restored = await restoreSavedHandle({ prompt: true });
+    if (restored.status !== 'granted') return;
+    rootHandle = restored.handle;
+    await loadData();
+  }
+
+  /* ── Main data loader ────────────────────────────── */
+  async function loadData() {
+    hideError();
+    var sourceLabel = E.isGitHubHandle(rootHandle)
+      ? 'GitHub: ' + rootHandle.name : rootHandle.name;
+    setStatus(true, sourceLabel);
+    document.getElementById('open-btn').textContent = 'Change Folder';
+    document.getElementById('refresh-btn').style.display = '';
+
+    try {
+      await discoverSkills();
+      if (currentSkill) {
+        showDetailView(currentSkill.fileName, currentSkill.archived);
+      } else {
+        showListView();
+      }
+    } catch (err) {
+      showError('Error loading skills: ' + err.message);
+    }
+  }
+
+  /* ── Discover skills from core/memory/skills/ ────── */
+  async function discoverSkills() {
+    var listing = await listDir(rootHandle, 'core/memory/skills');
+    var archiveListing = await listDir(rootHandle, 'core/memory/skills/_archive');
+
+    // Read SUMMARY.md for descriptions
+    var summaryText = await readFile(rootHandle, 'core/memory/skills/SUMMARY.md') || '';
+    var summaryDescs = parseSummaryDescriptions(summaryText);
+
+    skillsData = [];
+
+    // Active skills
+    var mdFiles = listing.files.filter(function (f) {
+      return f.endsWith('.md') && f !== 'SUMMARY.md';
+    });
+
+    for (var i = 0; i < mdFiles.length; i++) {
+      var fileName = mdFiles[i];
+      var text = await readFile(rootHandle, 'core/memory/skills/' + fileName);
+      var parsed = parseFrontmatter(text || '');
+      var meta = parsed.frontmatter ? parseFlatYaml(parsed.frontmatter) : {};
+      var baseName = fileName.replace(/\.md$/, '');
+
+      // Extract trigger / "When to use" section
+      var trigger = extractTrigger(parsed.body);
+      var desc = summaryDescs[baseName] || trigger || '';
+
+      skillsData.push({
+        name: baseName,
+        fileName: fileName,
+        desc: desc,
+        trigger: trigger,
+        meta: meta,
+        body: parsed.body,
+        archived: false
+      });
+    }
+
+    // Archived skills
+    var archiveFiles = archiveListing.files.filter(function (f) { return f.endsWith('.md'); });
+    for (var j = 0; j < archiveFiles.length; j++) {
+      var aFileName = archiveFiles[j];
+      var aText = await readFile(rootHandle, 'core/memory/skills/_archive/' + aFileName);
+      var aParsed = parseFrontmatter(aText || '');
+      var aMeta = aParsed.frontmatter ? parseFlatYaml(aParsed.frontmatter) : {};
+      var aBaseName = aFileName.replace(/\.md$/, '');
+
+      skillsData.push({
+        name: aBaseName,
+        fileName: aFileName,
+        desc: aMeta.superseded_by ? 'Superseded by ' + aMeta.superseded_by.split('/').pop() : '',
+        trigger: extractTrigger(aParsed.body),
+        meta: aMeta,
+        body: aParsed.body,
+        archived: true
+      });
+    }
+  }
+
+  /* ── Parse SUMMARY.md for skill descriptions ─────── */
+  function parseSummaryDescriptions(text) {
+    var descs = {};
+    var lines = text.split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) {
+      // Match: - **[name.md](name.md)** — description
+      var m = lines[i].match(/\*\*\[([^\]]+)\]\([^)]+\)\*\*\s*[—–-]\s*(.+)/);
+      if (m) {
+        var key = m[1].replace(/\.md$/, '');
+        descs[key] = m[2].trim();
+      }
+    }
+    return descs;
+  }
+
+  /* ── Extract "When to use" trigger from body ─────── */
+  function extractTrigger(body) {
+    if (!body) return '';
+    var m = body.match(/## When to use[^\n]*\n\n([\s\S]*?)(?=\n## |\n---|\n$)/);
+    if (m) {
+      // Get first meaningful paragraph
+      var lines = m[1].trim().split(/\n\n/);
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        if (line && !line.startsWith('#') && line.length > 15) {
+          return line.replace(/\n/g, ' ').substring(0, 200);
+        }
+      }
+    }
+    return '';
+  }
+
+  /* ── List view ───────────────────────────────────── */
+  function showListView() {
+    currentSkill = null;
+    document.getElementById('placeholder').style.display = 'none';
+    document.getElementById('list-view').style.display = '';
+    document.getElementById('detail-view').style.display = 'none';
+
+    var container = document.getElementById('skill-cards');
+    var archiveContainer = document.getElementById('archive-cards');
+    clearNode(container);
+    clearNode(archiveContainer);
+
+    var active = skillsData.filter(function (s) { return !s.archived; });
+    var archived = skillsData.filter(function (s) { return s.archived; });
+
+    if (active.length === 0 && archived.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'placeholder';
+      empty.appendChild(el('div', '\uD83D\uDD27', 'icon'));
+
+      var message = document.createElement('p');
+      message.appendChild(document.createTextNode('No skills found in '));
+      message.appendChild(el('code', 'core/memory/skills/'));
+      message.appendChild(document.createTextNode('.'));
+      empty.appendChild(message);
+
+      container.appendChild(empty);
+      return;
+    }
+
+    for (var i = 0; i < active.length; i++) {
+      container.appendChild(buildCard(active[i]));
+    }
+
+    if (archived.length > 0) {
+      document.getElementById('archive-section').style.display = '';
+      for (var j = 0; j < archived.length; j++) {
+        archiveContainer.appendChild(buildCard(archived[j]));
+      }
+    } else {
+      document.getElementById('archive-section').style.display = 'none';
+    }
+  }
+
+  function buildCard(skill) {
+    var card = document.createElement('div');
+    card.className = 'skill-card' + (skill.archived ? ' archived' : '');
+
+    var trust = skill.meta.trust || '';
+    var trustClass = trust === 'high' ? 'badge-high' : trust === 'medium' ? 'badge-medium' : trust === 'low' ? 'badge-low' : '';
+
+    var top = document.createElement('div');
+    top.className = 'card-top';
+    top.appendChild(el('div', getIcon(skill.name), 'card-icon'));
+    top.appendChild(el('span', formatName(skill.name), 'card-name'));
+    if (trustClass) {
+      top.appendChild(el('span', trust, 'badge ' + trustClass));
+    }
+    card.appendChild(top);
+
+    card.appendChild(el('div', skill.desc || 'No description available.', 'card-desc'));
+
+    var footer = document.createElement('div');
+    footer.className = 'card-footer';
+    if (skill.meta.source) {
+      footer.appendChild(el('span', skill.meta.source, 'tag'));
+    }
+    if (skill.meta.created) {
+      footer.appendChild(el('span', 'created ' + skill.meta.created, 'tag'));
+    }
+    if (skill.archived) {
+      footer.appendChild(el('span', 'archived', 'tag'));
+    }
+    card.appendChild(footer);
+
+    makeActivatable(card, (function (s) {
+      return function () { showDetailView(s.fileName, s.archived); };
+    })(skill), { role: 'button', label: 'View skill ' + formatName(skill.name) });
+
+    return card;
+  }
+
+  /* ── Detail view ─────────────────────────────────── */
+  function showDetailView(fileName, isArchived) {
+    var skill = null;
+    for (var i = 0; i < skillsData.length; i++) {
+      if (skillsData[i].fileName === fileName && skillsData[i].archived === isArchived) {
+        skill = skillsData[i]; break;
+      }
+    }
+    if (!skill) return;
+
+    currentSkill = skill;
+    document.getElementById('placeholder').style.display = 'none';
+    document.getElementById('list-view').style.display = 'none';
+    document.getElementById('detail-view').style.display = '';
+
+    // Breadcrumb
+    var bc = document.getElementById('breadcrumb');
+    clearNode(bc);
+    var skillsLink = document.createElement('a');
+    skillsLink.textContent = 'Skills';
+    skillsLink.addEventListener('click', function () { showListView(); });
+    bc.appendChild(skillsLink);
+    bc.appendChild(el('span', ' / ', 'sep'));
+    bc.appendChild(el('span', formatName(skill.name), 'current'));
+
+    // Header
+    var header = document.getElementById('detail-header');
+    clearNode(header);
+    header.appendChild(el('div', getIcon(skill.name), 'icon-lg'));
+    header.appendChild(el('h2', formatName(skill.name)));
+
+    // Meta grid
+    var metaEl = document.getElementById('detail-meta');
+    metaEl.innerHTML = '';
+    var metaKeys = [
+      ['source', 'Source'],
+      ['trust', 'Trust'],
+      ['created', 'Created'],
+      ['last_verified', 'Last Verified'],
+      ['status', 'Status'],
+      ['superseded_by', 'Superseded By']
+    ];
+    var hasMeta = false;
+    for (var k = 0; k < metaKeys.length; k++) {
+      var key = metaKeys[k][0];
+      var label = metaKeys[k][1];
+      var val = skill.meta[key];
+      if (!val) continue;
+      hasMeta = true;
+      var item = document.createElement('div');
+      item.className = 'meta-item';
+      var labelEl = document.createElement('div');
+      labelEl.className = 'meta-label';
+      labelEl.textContent = label;
+      var valEl = document.createElement('div');
+      if (key === 'trust') {
+        valEl.className = 'badge ' + (val === 'high' ? 'badge-high' : val === 'medium' ? 'badge-medium' : 'badge-low');
+      }
+      if (key === 'superseded_by') {
+        valEl.textContent = val.split('/').pop().replace(/\.md$/, '');
+      } else {
+        valEl.textContent = val;
+      }
+      item.appendChild(labelEl);
+      item.appendChild(valEl);
+      metaEl.appendChild(item);
+    }
+    metaEl.style.display = hasMeta ? '' : 'none';
+
+    // Trigger
+    var triggerEl = document.getElementById('detail-trigger');
+    if (skill.trigger) {
+      triggerEl.textContent = skill.trigger;
+      triggerEl.style.display = '';
+    } else {
+      triggerEl.style.display = 'none';
+    }
+
+    // Content
+    document.getElementById('content-header').textContent = skill.fileName;
+    var contentBody = document.getElementById('content-body');
+    contentBody.textContent = '';
+    Engram.renderMarkdown(skill.body || '', contentBody);
+  }
+
+  /* ── Helpers ─────────────────────────────────────── */
+  function formatName(name) {
+    return name.replace(/-/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+  }
+
+  /* ── Boot ────────────────────────────────────────── */
+  tryAutoConnect();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Engram &#8212; Traces</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="engram-shared.css">
+<style>
+/* ── Layout ──────────────────────────────────────────── */
+.traces-header {
+  background: var(--dark-bg); color: var(--dark-text);
+  padding: var(--space-md) var(--space-lg);
+}
+.traces-header h1 { color: #fff; margin-bottom: var(--space-xs); }
+.traces-header .subtitle { color: var(--dark-text-muted); }
+.traces-header .nav-link { color: var(--dark-text-muted); font-size: var(--text-sm); }
+.traces-header .nav-link:hover { color: #fff; }
+
+.traces-body {
+  max-width: 1100px; margin: 0 auto;
+  padding: var(--space-lg);
+}
+
+/* ── Session selector ────────────────────────────────── */
+.session-selector {
+  display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+  margin-bottom: var(--space-md);
+}
+.date-row {
+  display: flex; align-items: center; gap: 0.5rem;
+  font-size: var(--text-sm); color: var(--color-text-secondary);
+}
+.date-row input[type="date"] {
+  border: 1px solid var(--color-border); border-radius: var(--radius-small);
+  padding: 0.3rem 0.5rem; font-family: inherit; font-size: var(--text-sm);
+  background: var(--color-surface);
+}
+.session-list-wrap {
+  flex: 1; min-width: 220px;
+}
+select.session-select {
+  width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-small);
+  padding: 0.35rem 0.5rem; font-family: inherit; font-size: var(--text-sm);
+  background: var(--color-surface); cursor: pointer;
+}
+
+/* ── Filters ─────────────────────────────────────────── */
+.filters-row {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  margin-bottom: var(--space-md);
+}
+.filter-chip {
+  padding: 0.2rem 0.65rem; border-radius: 999px;
+  font-size: var(--text-xs); font-weight: 500; cursor: pointer;
+  border: 1px solid var(--color-border); background: var(--color-surface);
+  transition: background 0.12s;
+  user-select: none;
+}
+.filter-chip.active { background: var(--color-btn-primary); color: #fff; border-color: transparent; }
+.filter-chip:hover:not(.active) { background: var(--color-bg); }
+
+/* ── Stats bar ───────────────────────────────────────── */
+.stats-bar {
+  display: flex; gap: var(--space-md); flex-wrap: wrap;
+  margin-bottom: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-card);
+}
+.stat-item { text-align: center; }
+.stat-value { font-size: 1.25rem; font-weight: 700; color: var(--color-text-primary); }
+.stat-label { font-size: var(--text-xs); color: var(--color-text-secondary); margin-top: 2px; }
+
+/* ── Span type colors ────────────────────────────────── */
+:root {
+  --span-plan-action:   #6366f1;
+  --span-tool-call:     #0ea5e9;
+  --span-retrieval:     #10b981;
+  --span-verification:  #f59e0b;
+  --span-guardrail:     #ef4444;
+  --span-unknown:       #94a3b8;
+}
+
+/* ── Timeline / waterfall ────────────────────────────── */
+.timeline { display: flex; flex-direction: column; gap: 4px; }
+
+.span-row {
+  display: grid;
+  grid-template-columns: 10px 140px 1fr 70px 60px;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius-small);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+  font-size: var(--text-sm);
+}
+.span-row:hover { background: var(--color-bg); border-color: var(--color-border-light); }
+.span-row.expanded { background: var(--color-bg); border-color: var(--color-border); }
+
+.span-dot {
+  width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+}
+.span-dot.plan_action   { background: var(--span-plan-action); }
+.span-dot.tool_call     { background: var(--span-tool-call); }
+.span-dot.retrieval     { background: var(--span-retrieval); }
+.span-dot.verification  { background: var(--span-verification); }
+.span-dot.guardrail_check { background: var(--span-guardrail); }
+
+.span-name {
+  font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.span-bar-wrap { position: relative; height: 6px; background: var(--color-border-light); border-radius: 3px; }
+.span-bar {
+  position: absolute; left: 0; top: 0; height: 100%;
+  border-radius: 3px; min-width: 3px;
+}
+.span-duration {
+  text-align: right; font-size: var(--text-xs); color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.span-status { text-align: center; }
+.badge {
+  display: inline-block; padding: 1px 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+}
+.badge.ok      { background: #d1fae5; color: #065f46; }
+.badge.error   { background: #fee2e2; color: #991b1b; }
+.badge.skipped { background: #fef3c7; color: #92400e; }
+.badge.unknown { background: #e2e8f0; color: #334155; }
+
+/* ── Span detail ─────────────────────────────────────── */
+.span-detail {
+  display: none; margin: 0 0 4px 20px;
+  background: var(--color-bg); border: 1px solid var(--color-border);
+  border-radius: var(--radius-small);
+  padding: var(--space-sm) var(--space-md);
+  font-size: var(--text-sm);
+}
+.span-detail.visible { display: block; }
+.span-detail table { border-collapse: collapse; width: 100%; }
+.span-detail td { padding: 3px 8px 3px 0; vertical-align: top; }
+.span-detail td:first-child {
+  font-weight: 500; color: var(--color-text-secondary);
+  white-space: nowrap; width: 130px;
+}
+.span-detail pre {
+  background: var(--color-surface); border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-small); padding: 0.5rem; margin: 0.25rem 0 0 0;
+  overflow-x: auto; font-size: 11px; line-height: 1.5;
+}
+
+/* ── Legend ──────────────────────────────────────────── */
+.legend {
+  display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;
+  margin-bottom: var(--space-sm);
+  font-size: var(--text-xs); color: var(--color-text-secondary);
+}
+.legend-item { display: flex; align-items: center; gap: 0.3rem; }
+.legend-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.legend-dot.plan_action   { background: var(--span-plan-action); }
+.legend-dot.tool_call     { background: var(--span-tool-call); }
+.legend-dot.retrieval     { background: var(--span-retrieval); }
+.legend-dot.verification  { background: var(--span-verification); }
+.legend-dot.guardrail_check { background: var(--span-guardrail); }
+
+/* ── Empty / loading ─────────────────────────────────── */
+.state-msg {
+  text-align: center; padding: 3rem 1rem;
+  color: var(--color-text-secondary); font-size: var(--text-sm);
+}
+</style>
+</head>
+<body>
+
+<header class="traces-header">
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem">
+    <div>
+      <h1 style="margin:0;font-size:1.5rem">Trace Viewer</h1>
+      <p class="subtitle" style="margin:4px 0 0">Session spans &mdash; tool calls, plan actions, retrievals</p>
+    </div>
+    <nav style="display:flex;gap:1rem">
+      <a class="nav-link" href="index.html">Home</a>
+      <a class="nav-link" href="dashboard.html">Dashboard</a>
+      <a class="nav-link" href="projects.html">Projects</a>
+    </nav>
+  </div>
+</header>
+
+<main class="traces-body">
+
+  <!-- Toolbar -->
+  <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:var(--space-md);flex-wrap:wrap">
+    <button class="btn-primary" id="btn-open">Open memory folder&hellip;</button>
+    <span id="dir-label" style="font-size:var(--text-sm);color:var(--color-text-secondary)">No folder selected</span>
+    <div style="margin-left:auto">
+      <button class="btn-small" id="btn-refresh">Refresh</button>
+    </div>
+  </div>
+
+  <!-- Session selector -->
+  <div class="session-selector" id="session-selector" style="display:none">
+    <div class="date-row">
+      <label for="date-from">From</label>
+      <input type="date" id="date-from">
+      <label for="date-to">to</label>
+      <input type="date" id="date-to">
+    </div>
+    <div class="session-list-wrap">
+      <select class="session-select" id="session-select">
+        <option value="">— select a session —</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Filters -->
+  <div class="filters-row" id="filters-row" style="display:none">
+    <span style="font-size:var(--text-xs);color:var(--color-text-secondary);font-weight:500">TYPE</span>
+    <div class="filter-chip active" data-filter-type="all">All</div>
+    <div class="filter-chip" data-filter-type="plan_action">plan_action</div>
+    <div class="filter-chip" data-filter-type="tool_call">tool_call</div>
+    <div class="filter-chip" data-filter-type="retrieval">retrieval</div>
+    <div class="filter-chip" data-filter-type="verification">verification</div>
+    <div class="filter-chip" data-filter-type="guardrail_check">guardrail</div>
+    <span style="margin-left:0.5rem;font-size:var(--text-xs);color:var(--color-text-secondary);font-weight:500">STATUS</span>
+    <div class="filter-chip active" data-filter-status="all">All</div>
+    <div class="filter-chip" data-filter-status="ok">ok</div>
+    <div class="filter-chip" data-filter-status="error">error</div>
+    <div class="filter-chip" data-filter-status="skipped">skipped</div>
+    <div class="filter-chip" data-filter-status="unknown">unknown</div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-bar" id="stats-bar" style="display:none">
+    <div class="stat-item"><div class="stat-value" id="stat-total">0</div><div class="stat-label">Total spans</div></div>
+    <div class="stat-item"><div class="stat-value" id="stat-duration">—</div><div class="stat-label">Total duration</div></div>
+    <div class="stat-item"><div class="stat-value" id="stat-errors">0</div><div class="stat-label">Errors</div></div>
+    <div class="stat-item"><div class="stat-value" id="stat-plan-actions">0</div><div class="stat-label">Plan actions</div></div>
+    <div class="stat-item"><div class="stat-value" id="stat-retrievals">0</div><div class="stat-label">Retrievals</div></div>
+    <div class="stat-item"><div class="stat-value" id="stat-verifications">0</div><div class="stat-label">Verifications</div></div>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend" id="legend" style="display:none">
+    <div class="legend-item"><div class="legend-dot plan_action"></div> plan_action</div>
+    <div class="legend-item"><div class="legend-dot tool_call"></div> tool_call</div>
+    <div class="legend-item"><div class="legend-dot retrieval"></div> retrieval</div>
+    <div class="legend-item"><div class="legend-dot verification"></div> verification</div>
+    <div class="legend-item"><div class="legend-dot guardrail_check"></div> guardrail_check</div>
+  </div>
+
+  <!-- Timeline -->
+  <div id="main-content">
+    <div class="state-msg">Open your Engram memory folder to view traces.</div>
+  </div>
+
+</main>
+
+<script src="engram-utils.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var E = window.Engram;
+  var readFile = E && E.readFile;
+  var listDir = E && E.listDir;
+  var clearNode = E && E.clearNode;
+  var rootHandle = null;
+  var allSpans = [];
+  var activeTypeFilter = 'all';
+  var activeStatusFilter = 'all';
+
+  var KNOWN_SPAN_TYPES = {
+    plan_action: true,
+    tool_call: true,
+    retrieval: true,
+    verification: true,
+    guardrail_check: true
+  };
+  var KNOWN_STATUSES = {
+    ok: true,
+    error: true,
+    skipped: true,
+    unknown: true
+  };
+
+  if (typeof clearNode !== 'function') {
+    clearNode = function (node) {
+      if (!node) return;
+      while (node.firstChild) node.removeChild(node.firstChild);
+    };
+  }
+
+  function setMainState(message) {
+    var main = document.getElementById('main-content');
+    clearNode(main);
+    var state = document.createElement('div');
+    state.className = 'state-msg';
+    state.textContent = message;
+    main.appendChild(state);
+  }
+
+  function canonicalSpanType(value) {
+    var v = String(value || '').trim();
+    return KNOWN_SPAN_TYPES[v] ? v : 'unknown';
+  }
+
+  function canonicalStatus(value) {
+    var v = String(value || '').trim().toLowerCase();
+    return KNOWN_STATUSES[v] ? v : 'unknown';
+  }
+
+  function formatDate(d) {
+    return d.toISOString().slice(0, 10);
+  }
+
+  function buildStatusBadge(rawStatus) {
+    var token = canonicalStatus(rawStatus);
+    var badge = document.createElement('span');
+    badge.className = 'badge ' + token;
+    badge.textContent = token;
+    return badge;
+  }
+
+  function spanColor(type) {
+    var colors = {
+      plan_action: '#6366f1',
+      tool_call: '#0ea5e9',
+      retrieval: '#10b981',
+      verification: '#f59e0b',
+      guardrail_check: '#ef4444'
+    };
+    return colors[type] || '#94a3b8';
+  }
+
+  function buildDetailNode(span) {
+    var detail = document.createElement('div');
+    detail.className = 'span-detail';
+
+    var table = document.createElement('table');
+    var rows = [
+      ['span_id', span.span_id],
+      ['session_id', span.session_id],
+      ['timestamp', span.timestamp],
+      ['span_type', canonicalSpanType(span.span_type)],
+      ['status', canonicalStatus(span.status)],
+      ['duration_ms', span.duration_ms != null ? span.duration_ms + ' ms' : '—']
+    ];
+    if (span.parent_span_id) rows.push(['parent_span_id', span.parent_span_id]);
+
+    for (var i = 0; i < rows.length; i++) {
+      var tr = document.createElement('tr');
+      var keyCell = document.createElement('td');
+      var valCell = document.createElement('td');
+      keyCell.textContent = rows[i][0];
+      valCell.textContent = String(rows[i][1] != null ? rows[i][1] : '—');
+      tr.appendChild(keyCell);
+      tr.appendChild(valCell);
+      table.appendChild(tr);
+    }
+    detail.appendChild(table);
+
+    if (span.metadata && Object.keys(span.metadata).length > 0) {
+      var pre = document.createElement('pre');
+      pre.textContent = JSON.stringify(span.metadata, null, 2);
+      detail.appendChild(pre);
+    }
+
+    if (span.cost && Object.keys(span.cost).length > 0) {
+      var cost = document.createElement('div');
+      cost.style.marginTop = '4px';
+      cost.style.fontSize = '11px';
+      cost.style.color = 'var(--color-text-secondary)';
+      cost.textContent = 'cost: ' + JSON.stringify(span.cost);
+      detail.appendChild(cost);
+    }
+
+    return detail;
+  }
+
+  function updateStats(spans) {
+    var totalDuration = 0;
+    var errors = 0;
+    var planActions = 0;
+    var retrievals = 0;
+    var verifications = 0;
+
+    for (var i = 0; i < spans.length; i++) {
+      var span = spans[i];
+      totalDuration += span.duration_ms || 0;
+      if (canonicalStatus(span.status) === 'error') errors++;
+      if (span.span_type === 'plan_action') planActions++;
+      if (span.span_type === 'retrieval') retrievals++;
+      if (span.span_type === 'verification') verifications++;
+    }
+
+    document.getElementById('stat-total').textContent = spans.length;
+    document.getElementById('stat-duration').textContent =
+      totalDuration > 0
+        ? (totalDuration >= 1000 ? (totalDuration / 1000).toFixed(1) + 's' : totalDuration + 'ms')
+        : '—';
+    document.getElementById('stat-errors').textContent = errors;
+    document.getElementById('stat-plan-actions').textContent = planActions;
+    document.getElementById('stat-retrievals').textContent = retrievals;
+    document.getElementById('stat-verifications').textContent = verifications;
+  }
+
+  function clearView() {
+    setMainState('Select a session to view its traces.');
+    document.getElementById('stats-bar').style.display = 'none';
+    document.getElementById('filters-row').style.display = 'none';
+    document.getElementById('legend').style.display = 'none';
+  }
+
+  function showUI() {
+    document.getElementById('filters-row').style.display = '';
+    document.getElementById('stats-bar').style.display = '';
+    document.getElementById('legend').style.display = '';
+  }
+
+  function setTypeFilter(value, chipEl) {
+    activeTypeFilter = value;
+    document.querySelectorAll('[data-filter-type]').forEach(function (el) {
+      el.classList.remove('active');
+    });
+    chipEl.classList.add('active');
+    renderTimeline();
+  }
+
+  function setStatusFilter(value, chipEl) {
+    activeStatusFilter = value;
+    document.querySelectorAll('[data-filter-status]').forEach(function (el) {
+      el.classList.remove('active');
+    });
+    chipEl.classList.add('active');
+    renderTimeline();
+  }
+
+  function renderTimeline() {
+    var filtered = allSpans.filter(function (span) {
+      var typeMatch = activeTypeFilter === 'all' || canonicalSpanType(span.span_type) === activeTypeFilter;
+      var statusMatch = activeStatusFilter === 'all' || canonicalStatus(span.status) === activeStatusFilter;
+      return typeMatch && statusMatch;
+    });
+
+    updateStats(filtered);
+
+    if (filtered.length === 0) {
+      setMainState('No spans match the current filters.');
+      return;
+    }
+
+    var maxDuration = Math.max.apply(
+      null,
+      filtered.map(function (span) { return span.duration_ms || 0; })
+    );
+
+    var main = document.getElementById('main-content');
+    clearNode(main);
+    var timeline = document.createElement('div');
+    timeline.className = 'timeline';
+
+    for (var i = 0; i < filtered.length; i++) {
+      var span = filtered[i];
+      var row = document.createElement('div');
+      row.className = 'span-row';
+
+      var dot = document.createElement('div');
+      dot.className = 'span-dot ' + canonicalSpanType(span.span_type);
+      row.appendChild(dot);
+
+      var name = document.createElement('div');
+      name.className = 'span-name';
+      name.title = String(span.span_type || '');
+      name.textContent = String(span.name || span.span_type || '?');
+      row.appendChild(name);
+
+      var barPct = maxDuration > 0 ? Math.max(2, Math.round((span.duration_ms || 0) / maxDuration * 100)) : 0;
+      var barWrap = document.createElement('div');
+      barWrap.className = 'span-bar-wrap';
+      var bar = document.createElement('div');
+      bar.className = 'span-bar';
+      bar.style.width = barPct + '%';
+      bar.style.background = spanColor(canonicalSpanType(span.span_type));
+      barWrap.appendChild(bar);
+      row.appendChild(barWrap);
+
+      var duration = document.createElement('div');
+      duration.className = 'span-duration';
+      duration.textContent = span.duration_ms != null ? span.duration_ms + 'ms' : '—';
+      row.appendChild(duration);
+
+      var statusCell = document.createElement('div');
+      statusCell.className = 'span-status';
+      statusCell.appendChild(buildStatusBadge(span.status));
+      row.appendChild(statusCell);
+
+      var detail = buildDetailNode(span);
+      row.addEventListener('click', (function (detailEl, rowEl) {
+        return function () {
+          var open = detailEl.classList.toggle('visible');
+          rowEl.classList.toggle('expanded', open);
+        };
+      })(detail, row));
+
+      timeline.appendChild(row);
+      timeline.appendChild(detail);
+    }
+
+    main.appendChild(timeline);
+  }
+
+  async function scanSessions() {
+    if (!rootHandle) return;
+    var dateFrom = document.getElementById('date-from').value;
+    var dateTo = document.getElementById('date-to').value;
+    var activityRoot = 'core/memory/activity';
+    var sessions = [];
+
+    var yearsListing = await listDir(rootHandle, activityRoot);
+    var years = yearsListing.dirs || [];
+    for (var yi = 0; yi < years.length; yi++) {
+      var year = years[yi];
+      var monthsListing = await listDir(rootHandle, activityRoot + '/' + year);
+      var months = monthsListing.dirs || [];
+      for (var mi = 0; mi < months.length; mi++) {
+        var month = months[mi];
+        var daysListing = await listDir(rootHandle, activityRoot + '/' + year + '/' + month);
+        var days = daysListing.dirs || [];
+        for (var di = 0; di < days.length; di++) {
+          var day = days[di];
+          var dateStr = year + '-' + month + '-' + day;
+          if (dateFrom && dateStr < dateFrom) continue;
+          if (dateTo && dateStr > dateTo) continue;
+
+          var filesListing = await listDir(rootHandle, activityRoot + '/' + year + '/' + month + '/' + day);
+          var files = filesListing.files || [];
+          for (var fi = 0; fi < files.length; fi++) {
+            var fileName = files[fi];
+            if (!fileName.endsWith('.traces.jsonl')) continue;
+            var sessionName = fileName.replace('.traces.jsonl', '');
+            sessions.push({
+              id: 'memory/activity/' + year + '/' + month + '/' + day + '/' + sessionName,
+              label: dateStr + ' / ' + sessionName,
+              path: activityRoot + '/' + year + '/' + month + '/' + day + '/' + fileName
+            });
+          }
+        }
+      }
+    }
+
+    sessions.sort(function (a, b) { return b.label.localeCompare(a.label); });
+
+    var selector = document.getElementById('session-select');
+    var previous = selector.value;
+    clearNode(selector);
+    var defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = '— select a session —';
+    selector.appendChild(defaultOption);
+    for (var si = 0; si < sessions.length; si++) {
+      var option = document.createElement('option');
+      option.value = JSON.stringify(sessions[si]);
+      option.textContent = sessions[si].label;
+      selector.appendChild(option);
+    }
+
+    if (previous) {
+      for (var oi = 0; oi < selector.options.length; oi++) {
+        try {
+          if (JSON.parse(selector.options[oi].value).id === JSON.parse(previous).id) {
+            selector.selectedIndex = oi;
+            break;
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (sessions.length > 0 && !selector.value) {
+      selector.selectedIndex = 1;
+      await loadSession();
+    }
+  }
+
+  async function loadSession() {
+    var selector = document.getElementById('session-select');
+    if (!selector.value) {
+      clearView();
+      return;
+    }
+
+    var session;
+    try {
+      session = JSON.parse(selector.value);
+    } catch (_) {
+      return;
+    }
+
+    setMainState('Loading...');
+    var text = await readFile(rootHandle, session.path);
+    if (!text) {
+      setMainState('Trace file not found.');
+      return;
+    }
+
+    allSpans = [];
+    var lines = text.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line) continue;
+      try {
+        allSpans.push(JSON.parse(line));
+      } catch (_) {}
+    }
+
+    allSpans.sort(function (a, b) {
+      return String(a.timestamp || '').localeCompare(String(b.timestamp || ''));
+    });
+    showUI();
+    renderTimeline();
+  }
+
+  async function openDir() {
+    if (!window.showDirectoryPicker) {
+      setMainState('File System Access API is unavailable in this browser.');
+      return;
+    }
+    try {
+      rootHandle = await window.showDirectoryPicker({ mode: 'read' });
+      document.getElementById('dir-label').textContent = rootHandle.name;
+      var today = new Date();
+      var twoWeeksAgo = new Date(today.getTime() - 14 * 86400000);
+      document.getElementById('date-to').value = formatDate(today);
+      document.getElementById('date-from').value = formatDate(twoWeeksAgo);
+      document.getElementById('session-selector').style.display = '';
+      await scanSessions();
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        setMainState('Could not open folder: ' + err.message);
+      }
+    }
+  }
+
+  async function refresh() {
+    if (!rootHandle) return;
+    await scanSessions();
+  }
+
+  function bindControls() {
+    document.getElementById('btn-open').addEventListener('click', openDir);
+    document.getElementById('btn-refresh').addEventListener('click', refresh);
+    document.getElementById('date-from').addEventListener('change', scanSessions);
+    document.getElementById('date-to').addEventListener('change', scanSessions);
+    document.getElementById('session-select').addEventListener('change', loadSession);
+
+    document.querySelectorAll('[data-filter-type]').forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        setTypeFilter(chip.getAttribute('data-filter-type'), chip);
+      });
+    });
+    document.querySelectorAll('[data-filter-status]').forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        setStatusFilter(chip.getAttribute('data-filter-status'), chip);
+      });
+    });
+  }
+
+  if (!E || typeof readFile !== 'function' || typeof listDir !== 'function') {
+    setMainState('Engram utilities are unavailable. Reload this page from HUMANS/views.');
+    return;
+  }
+
+  bindControls();
+  clearView();
+
+  window.openDir = openDir;
+  window.refresh = refresh;
+})();
+</script>
+</body>
+</html>

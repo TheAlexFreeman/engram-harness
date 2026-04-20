@@ -1,0 +1,69 @@
+# ==========================================================================
+# engram-harness .gitignore
+# Merged from the pre-merge harness/.gitignore and Engram/.gitignore
+# ==========================================================================
+
+# --- Environment & secrets ---
+.env
+.env.local
+.env.*.local
+
+# --- Virtual environments ---
+.venv/
+venv/
+
+# --- Python artifacts ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzz
+*.egg-info/
+
+# --- Python tool caches ---
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# --- Editor / OS ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+launch.json
+
+# --- Claude Code working files (worktrees, plans, session state) ---
+# These are dev-tool artifacts from the upstream Engram repo; we don't want
+# them in this repo's history. The existing ones on disk were pulled in
+# during the initial copy and can be cleaned up later.
+.claude/
+
+# --- Agent / harness runtime ---
+scratch/
+traces/
+.todos.md
+progress.md
+test-2/
+
+# --- Engram runtime artifacts ---
+chatgpt-instructions.txt
+system-prompt.txt
+nul
+.engram/
+.context-cache.json
+
+# Do NOT ignore ACCESS.jsonl files — they are part of Engram's feedback loop
+# Do NOT ignore any .md files — they are the substance of Engram memory
+
+# Leftovers from failed git init attempts on the fuse mount (see README for context)
+.git.broken*/
+ount (see README for context)
+.git.broken/
+.git.broken2/
+.git.broken3/
+# pytest cache fallback dirs (used when .pytest_cache isn't writable)
+pytest-cache-files-*/

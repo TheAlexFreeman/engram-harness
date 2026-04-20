@@ -1,0 +1,311 @@
+id: concurrent-session-writes
+project: multi-user-support
+created: 2026-04-03
+origin_session: memory/activity/2026/04/03/chat-001
+status: active
+purpose:
+  summary: Enable safe concurrent writes from multiple MCP sessions via branch-per-user strategy.
+  context: |
+    When multiple users connect MCP sessions to the same repo simultaneously,
+    direct writes to main will conflict. This plan implements a branch-per-session
+    write strategy that leverages git's native merge capabilities, plus a merge
+    queue for conflict resolution. The goal is to make concurrent team use safe
+    without requiring external coordination.
+  questions:
+    - "Should branches be per-user (engram/alex) or per-session (engram/alex/2026-04-03-001)? Per-user is simpler but prevents the same user from running two sessions."
+    - "What merge strategy for ACCESS.jsonl? Append-only files could use a custom merge driver that concatenates both sides. Worth the git config complexity?"
+    - "Should the merge queue be a git-native mechanism (PR-like) or an in-repo queue file? Git-native is more robust but assumes GitHub/GitLab hosting."
+    - "How should the system handle merge conflicts in knowledge files? Auto-resolve by keeping both versions in separate sections, or block and require human review?"
+work:
+  phases:
+    - id: startup-baseline
+      title: Capture stable startup publication metadata.
+      status: completed
+      commit: null
+      blockers: []
+      sources:
+        - path: core/tools/agent_memory_mcp/session_state.py
+          type: internal
+          intent: Persist a stable publication baseline across the MCP session
+        - path: core/tools/agent_memory_mcp/server.py
+          type: internal
+          intent: Capture startup branch and worktree metadata when the session boots
+        - path: core/tools/agent_memory_mcp/git_repo.py
+          type: internal
+          intent: Expose current branch metadata without forcing an attached HEAD
+      changes:
+        - path: core/tools/agent_memory_mcp/session_state.py
+          action: update
+          description: Store startup publication branch/ref/worktree/common-dir metadata on SessionState and preserve it across reset snapshots.
+        - path: core/tools/agent_memory_mcp/server.py
+          action: update
+          description: Seed SessionState with the repo's startup publication baseline during MCP initialization.
+        - path: core/tools/agent_memory_mcp/git_repo.py
+          action: update
+          description: Add non-throwing branch inspection helpers so startup can capture attached and detached HEAD baselines.
+      postconditions:
+        - MCP sessions record a stable startup publication baseline before later branch isolation mutates repo state
+        - Detached linked-worktree sessions still retain worktree and common-dir identity even when no branch is attached
+
+    - id: session-branch-startup
+      title: Provision opt-in session branches at MCP startup.
+      status: completed
+      commit: null
+      blockers:
+        - startup-baseline
+      sources:
+        - path: core/tools/agent_memory_mcp/server.py
+          type: internal
+          intent: Extend startup flow with a guarded session-branch checkout path
+        - path: core/tools/agent_memory_mcp/git_repo.py
+          type: internal
+          intent: Add safe branch checkout helpers for clean worktrees
+        - path: core/tools/agent_memory_mcp/session_state.py
+          type: internal
+          intent: Persist the chosen session branch alongside the startup publication baseline
+      changes:
+        - path: core/tools/agent_memory_mcp/server.py
+          action: update
+          description: Resolve a startup session branch from MEMORY_SESSION_ID or CURRENT_SESSION, then create or checkout it when MEMORY_ENABLE_SESSION_BRANCHES is enabled.
+        - path: core/tools/agent_memory_mcp/git_repo.py
+          action: update
+          description: Add guarded branch checkout that refuses to switch worktrees with staged or unstaged tracked changes.
+        - path: core/tools/agent_memory_mcp/session_state.py
+          action: update
+          description: Store the active session branch name/ref so later flush and merge flows can reason about the isolated branch.
+      postconditions:
+        - Opt-in multi-user sessions can start on isolated engram/sessions/... branches without changing the default single-user path
+        - Dirty tracked worktrees and detached linked-worktree checkouts fail fast instead of silently switching to ambiguous branch state
+
+    - id: session-branch-base-metadata
+      title: Preserve original base metadata across session-branch restarts.
+      status: completed
+      commit: null
+      blockers:
+        - session-branch-startup
+      sources:
+        - path: core/tools/agent_memory_mcp/git_repo.py
+          type: internal
+          intent: Persist per-session-branch runtime metadata in the repo-common Engram state area
+        - path: core/tools/agent_memory_mcp/server.py
+          type: internal
+          intent: Restore the original base branch/ref when startup resumes on an existing session branch
+      changes:
+        - path: core/tools/agent_memory_mcp/git_repo.py
+          action: update
+          description: Store and load original base branch/ref metadata for session branches under git_common_dir/engram/session-branches/.
+        - path: core/tools/agent_memory_mcp/server.py
+          action: update
+          description: Apply persisted base metadata before startup snapshots an existing session branch as its own base, and fail fast if that metadata is missing.
+      postconditions:
+        - Repeated create_mcp() calls on an already-provisioned session branch retain the original base branch/ref instead of treating the session branch as its own base
+        - Existing session-branch checkouts without persisted base metadata fail explicitly instead of silently corrupting later merge assumptions
+
+    - id: session-flush-fast-forward
+      title: Fast-forward the preserved base branch on session flush.
+      status: completed
+      commit: null
+      blockers:
+        - session-branch-base-metadata
+      sources:
+        - path: core/tools/agent_memory_mcp/git_repo.py
+          type: internal
+          intent: Add a direct fast-forward ref update path that does not require switching worktrees
+        - path: core/tools/agent_memory_mcp/tools/semantic/session_tools.py
+          type: internal
+          intent: Apply best-effort fast-forward auto-merge from memory_session_flush and report blocked divergence
+      changes:
+        - path: core/tools/agent_memory_mcp/git_repo.py
+          action: update
+          description: Add a lock-aware fast-forward helper for advancing one ref to another when the move is a true fast-forward.
+        - path: core/tools/agent_memory_mcp/tools/semantic/session_tools.py
+          action: update
+          description: After the flush checkpoint commit lands on the session branch, fast-forward the preserved base ref when possible and return structured merge status when it is blocked.
+      postconditions:
+        - memory_session_flush advances the preserved base branch when the session branch is ahead by a clean fast-forward
+        - Diverged base branches are reported as blocked without losing the session-branch checkpoint commit
+
+    - id: session-record-fast-forward
+      title: Fast-forward the preserved base branch on full session record.
+      status: completed
+      commit: null
+      blockers:
+        - session-flush-fast-forward
+      sources:
+        - path: core/tools/agent_memory_mcp/tools/semantic/session_tools.py
+          type: internal
+          intent: Reuse the explicit publish fast-forward path for memory_record_session commits
+      changes:
+        - path: core/tools/agent_memory_mcp/tools/semantic/session_tools.py
+          action: update
+          description: Share the preserved-base fast-forward helper between memory_session_flush and memory_record_session so full session wrap-up commits publish the same structured merge outcome.
+      postconditions:
+        - memory_record_session advances the preserved base branch when the session branch is ahead by a clean fast-forward
+        - Diverged base branches are reported as blocked without losing the session-branch session record commit
+
+    - id: split-wrapup-fast-forward
+      title: Fast-forward the preserved base branch on split session wrap-up commits.
+      status: completed
+      commit: null
+      blockers:
+        - session-record-fast-forward
+      sources:
+        - path: core/tools/agent_memory_mcp/tools/semantic/session_tools.py
+          type: internal
+          intent: Reuse the explicit publish fast-forward path for memory_record_chat_summary and memory_record_reflection commits
+      changes:
+        - path: core/tools/agent_memory_mcp/tools/semantic/session_tools.py
+          action: update
+          description: Apply the preserved-base fast-forward helper to memory_record_chat_summary and memory_record_reflection so split wrap-up commits publish the same structured merge outcome as flush and full session recording.
+      postconditions:
+        - memory_record_chat_summary and memory_record_reflection advance the preserved base branch when the session branch is ahead by a clean fast-forward
+        - Diverged base branches are reported as blocked without losing the split wrap-up commit on the session branch
+
+    - id: access-log-fast-forward
+      title: Fast-forward the preserved base branch on ACCESS logging commits.
+      status: completed
+      commit: null
+      blockers:
+        - split-wrapup-fast-forward
+      sources:
+        - path: core/tools/agent_memory_mcp/tools/semantic/session_tools.py
+          type: internal
+          intent: Reuse the explicit publish fast-forward path for memory_log_access and memory_log_access_batch commits
+      changes:
+        - path: core/tools/agent_memory_mcp/tools/semantic/session_tools.py
+          action: update
+          description: Apply the preserved-base fast-forward helper to memory_log_access and memory_log_access_batch so ACCESS commits publish the same structured merge outcome as the session wrap-up tools.
+      postconditions:
+        - memory_log_access and memory_log_access_batch advance the preserved base branch when the session branch is ahead by a clean fast-forward
+        - Diverged base branches are reported as blocked without losing the ACCESS commit on the session branch
+
+    - id: scratchpad-fast-forward
+      title: Fast-forward the preserved base branch on scratchpad commits.
+      status: completed
+      commit: null
+      blockers:
+        - access-log-fast-forward
+      sources:
+        - path: core/tools/agent_memory_mcp/tools/semantic/session_tools.py
+          type: internal
+          intent: Reuse the explicit publish fast-forward path for memory_append_scratchpad commits
+      changes:
+        - path: core/tools/agent_memory_mcp/tools/semantic/session_tools.py
+          action: update
+          description: Apply the preserved-base fast-forward helper to memory_append_scratchpad so direct USER/CURRENT and working-note commits publish the same structured merge outcome as the other explicit session writes.
+      postconditions:
+        - memory_append_scratchpad advances the preserved base branch when the session branch is ahead by a clean fast-forward
+        - Diverged base branches are reported as blocked without losing the scratchpad commit on the session branch
+
+    - id: governance-maintenance-fast-forward
+      title: Fast-forward the preserved base branch on remaining semantic write commits.
+      status: completed
+      commit: null
+      blockers:
+        - scratchpad-fast-forward
+      sources:
+        - path: core/tools/agent_memory_mcp/tools/semantic/session_tools.py
+          type: internal
+          intent: Reuse the explicit publish fast-forward path for the remaining governance and maintenance commit flows
+      changes:
+        - path: core/tools/agent_memory_mcp/tools/semantic/session_tools.py
+          action: update
+          description: Apply the preserved-base fast-forward helper to review-queue writes, ACCESS aggregation, periodic review apply, and revert confirm so the remaining semantic write commits publish the same structured merge outcome.
+      postconditions:
+        - memory_flag_for_review, memory_resolve_review_item, memory_run_aggregation, memory_record_periodic_review, and memory_revert_commit advance the preserved base branch when the session branch is ahead by a clean fast-forward
+        - Diverged base branches are reported as blocked without losing the underlying semantic write commit on the session branch
+
+    - id: branch-strategy
+      title: Implement branch-per-session write isolation.
+      status: pending
+      commit: null
+      blockers: []
+      sources:
+        - path: core/tools/agent_memory_mcp/git_repo.py
+          type: internal
+          intent: Understand GitRepo wrapper to add branch management
+        - path: core/tools/agent_memory_mcp/server.py
+          type: internal
+          intent: Understand server lifecycle for branch creation/cleanup
+      changes:
+        - path: core/tools/agent_memory_mcp/git_repo.py
+          action: update
+          description: Add branch creation, checkout, and merge methods to GitRepo. Create engram/{user_id}/{session_slug} branches on session start.
+        - path: core/tools/agent_memory_mcp/server.py
+          action: update
+          description: Create session branch on MCP connection init when multi-user mode is detected; all writes go to this branch.
+      postconditions:
+        - MCP session creates an isolated branch on startup in multi-user mode
+        - All file writes during the session commit to the session branch, not main
+
+    - id: auto-merge
+      title: Auto-merge session branches on flush/checkpoint.
+      status: pending
+      commit: null
+      blockers:
+        - branch-strategy
+      changes:
+        - path: core/tools/agent_memory_mcp/tools/semantic/session_tools.py
+          action: update
+          description: On session flush or checkpoint, attempt fast-forward merge to main. If clean, merge and delete branch.
+        - path: core/tools/agent_memory_mcp/git_repo.py
+          action: update
+          description: Add merge conflict detection and reporting methods.
+      postconditions:
+        - Clean session flushes auto-merge to main
+        - Conflicting merges are detected and reported, not silently corrupted
+
+    - id: conflict-resolution
+      title: Build conflict queue for non-trivial merge failures.
+      status: pending
+      commit: null
+      blockers:
+        - auto-merge
+      changes:
+        - path: core/tools/agent_memory_mcp/tools/semantic/session_tools.py
+          action: update
+          description: When merge conflicts occur, park the branch and create a conflict record in memory/working/merge-queue/.
+        - path: core/memory/working/merge-queue/
+          action: create
+          description: Directory for pending merge conflict records with metadata about conflicting files and users.
+        - path: core/tools/agent_memory_mcp/tools/write_tools.py
+          action: update
+          description: Add memory_resolve_merge tool for reviewing and resolving queued conflicts.
+      postconditions:
+        - Merge conflicts create structured records rather than blocking the session
+        - memory_resolve_merge can accept one side or a manual resolution
+
+    - id: jsonl-merge-driver
+      title: Custom git merge driver for append-only JSONL files.
+      status: pending
+      commit: null
+      blockers:
+        - branch-strategy
+      changes:
+        - path: .gitattributes
+          action: update
+          description: Register custom merge driver for *.jsonl files.
+        - path: core/tools/agent_memory_mcp/jsonl_merge.py
+          action: create
+          description: Git merge driver script that concatenates both sides of JSONL conflicts and deduplicates by timestamp+file key.
+      postconditions:
+        - ACCESS.jsonl merges from concurrent sessions produce valid JSONL with all entries preserved
+        - No data loss on concurrent ACCESS log writes
+
+    - id: stale-branch-cleanup
+      title: Periodic cleanup of abandoned session branches.
+      status: pending
+      commit: null
+      blockers:
+        - auto-merge
+      changes:
+        - path: core/tools/agent_memory_mcp/git_repo.py
+          action: update
+          description: Add method to list and prune engram/* branches older than a configurable threshold (default 7 days).
+        - path: core/tools/agent_memory_mcp/tools/read_tools.py
+          action: update
+          description: Surface stale branches in memory_git_health output.
+      postconditions:
+        - memory_git_health reports stale session branches
+        - Branches older than threshold can be pruned via maintenance tool
+review: null
