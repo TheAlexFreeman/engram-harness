@@ -58,6 +58,7 @@ _MERGER_SKIPS: tuple[str, ...] = (
     "test_memory_mcp.py::MemoryMCPTests::test_read_only_profile_contains_only_runtime_read_only_tools",
     "test_memory_mcp.py::MemoryMCPTests::test_root_listing_can_include_humans",
     "test_memory_mcp.py::MemoryMCPTests::test_root_listing_hides_humans_by_default",
+    "test_memory_mcp.py::MemoryMCPTests::test_search_hides_humans_by_default",
     "test_memory_mcp.py::MemoryMCPTests::test_search_can_include_humans",
     "test_memory_mcp.py::MemoryMCPTests::test_explicit_humans_listing_still_works",
     "test_memory_mcp.py::MemoryMCPTests::test_explicit_humans_read_still_works",
