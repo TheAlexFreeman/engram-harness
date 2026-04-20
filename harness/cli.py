@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import argparse
 import os
 import sys
@@ -160,9 +161,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(prog="harness")
     parser.add_argument("task", help="What you want the agent to do.")
-    parser.add_argument(
-        "--workspace", default=".", help="Directory the agent may read/write."
-    )
+    parser.add_argument("--workspace", default=".", help="Directory the agent may read/write.")
     parser.add_argument("--mode", choices=["native", "text"], default="native")
     parser.add_argument(
         "--model",
@@ -258,9 +257,7 @@ def main() -> None:
     if is_grok_model:
         api_key = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
         if not api_key:
-            raise ValueError(
-                "GROK_API_KEY or XAI_API_KEY must be set in .env for Grok models"
-            )
+            raise ValueError("GROK_API_KEY or XAI_API_KEY must be set in .env for Grok models")
         client = OpenAI(
             api_key=api_key,
             base_url="https://api.x.ai/v1",

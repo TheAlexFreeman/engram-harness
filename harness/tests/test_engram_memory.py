@@ -33,9 +33,7 @@ def _make_engram_repo(tmp: Path) -> Path:
     (mem / "users" / "SUMMARY.md").write_text(
         "# Users\n\n- Tester (the default test user)\n", encoding="utf-8"
     )
-    (mem / "activity" / "SUMMARY.md").write_text(
-        "# Activity\n\nNothing yet.\n", encoding="utf-8"
-    )
+    (mem / "activity" / "SUMMARY.md").write_text("# Activity\n\nNothing yet.\n", encoding="utf-8")
     (mem / "knowledge" / "ssr.md").write_text(
         "---\nsource: user-stated\ntrust: high\n---\n\n# SSR\n\nServer-side rendering notes.\n",
         encoding="utf-8",
@@ -47,9 +45,7 @@ def _make_engram_repo(tmp: Path) -> Path:
 
     _git_init(repo)
     subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "init"], cwd=str(repo), check=True
-    )
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=str(repo), check=True)
     return repo
 
 
@@ -99,12 +95,7 @@ def test_engram_memory_record_and_end_session(engram_repo: Path) -> None:
     mem.record("noted user preference for terse output", kind="note")
     mem.end_session("Test summary text.")
 
-    summary_path = (
-        engram_repo
-        / "core"
-        / mem.session_dir_rel
-        / "summary.md"
-    )
+    summary_path = engram_repo / "core" / mem.session_dir_rel / "summary.md"
     assert summary_path.is_file(), f"summary not written: {summary_path}"
     text = summary_path.read_text(encoding="utf-8")
     assert "Test summary text." in text

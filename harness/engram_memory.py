@@ -21,10 +21,9 @@ Design points (see ROADMAP.md §1):
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -230,9 +229,7 @@ class EngramMemory:
         return results
 
     def record(self, content: str, kind: str = "note") -> None:
-        self._records.append(
-            _BufferedRecord(timestamp=datetime.now(), kind=kind, content=content)
-        )
+        self._records.append(_BufferedRecord(timestamp=datetime.now(), kind=kind, content=content))
 
     def end_session(self, summary: str) -> None:
         rel_dir = self._session_dir_rel()
@@ -457,9 +454,7 @@ def _resolve_content_root(repo_root: Path, content_prefix: str | None) -> tuple[
         prefix = content_prefix.strip("/")
         cr = (repo_root / prefix).resolve() if prefix else repo_root
         if not (cr / "memory" / "HOME.md").is_file():
-            raise ValueError(
-                f"No memory/HOME.md under {cr} (content_prefix={content_prefix!r})"
-            )
+            raise ValueError(f"No memory/HOME.md under {cr} (content_prefix={content_prefix!r})")
         return prefix, cr
 
     # Auto-detect.

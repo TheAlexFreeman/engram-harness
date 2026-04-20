@@ -53,8 +53,12 @@ def test_access_namespace_normalises_paths() -> None:
 
 def test_derive_read_helpfulness_then_edit() -> None:
     calls = [
-        _ToolCall(turn=0, seq=0, name="read_file", args={"path": "memory/knowledge/x.md"}, timestamp="t0"),
-        _ToolCall(turn=0, seq=1, name="edit_file", args={"path": "memory/knowledge/x.md"}, timestamp="t1"),
+        _ToolCall(
+            turn=0, seq=0, name="read_file", args={"path": "memory/knowledge/x.md"}, timestamp="t0"
+        ),
+        _ToolCall(
+            turn=0, seq=1, name="edit_file", args={"path": "memory/knowledge/x.md"}, timestamp="t1"
+        ),
     ]
     score, _ = _derive_read_helpfulness("memory/knowledge/x.md", 0, calls)
     assert score == HELPFULNESS_READ_THEN_EDIT
@@ -62,7 +66,9 @@ def test_derive_read_helpfulness_then_edit() -> None:
 
 def test_derive_read_helpfulness_unused() -> None:
     calls = [
-        _ToolCall(turn=0, seq=0, name="read_file", args={"path": "memory/knowledge/x.md"}, timestamp="t0"),
+        _ToolCall(
+            turn=0, seq=0, name="read_file", args={"path": "memory/knowledge/x.md"}, timestamp="t0"
+        ),
         _ToolCall(turn=0, seq=1, name="bash", args={"cmd": "ls"}, timestamp="t1"),
     ]
     score, _ = _derive_read_helpfulness("memory/knowledge/x.md", 0, calls)
@@ -75,12 +81,40 @@ def test_run_trace_bridge_minimal_session(repo: Path, memory: EngramMemory, tmp_
     events = [
         {"ts": ts, "kind": "session_start", "task": "explore the celery setup"},
         {"ts": ts, "kind": "model_response", "turn": 0},
-        {"ts": ts, "kind": "tool_call", "name": "read_file", "args": {"path": "memory/knowledge/celery.md"}},
-        {"ts": ts, "kind": "tool_result", "name": "read_file", "is_error": False, "content_preview": "celery..."},
+        {
+            "ts": ts,
+            "kind": "tool_call",
+            "name": "read_file",
+            "args": {"path": "memory/knowledge/celery.md"},
+        },
+        {
+            "ts": ts,
+            "kind": "tool_result",
+            "name": "read_file",
+            "is_error": False,
+            "content_preview": "celery...",
+        },
         {"ts": ts, "kind": "model_response", "turn": 1},
-        {"ts": ts, "kind": "tool_call", "name": "edit_file", "args": {"path": "memory/knowledge/celery.md"}},
-        {"ts": ts, "kind": "tool_result", "name": "edit_file", "is_error": False, "content_preview": "ok"},
-        {"ts": ts, "kind": "session_usage", "input_tokens": 1234, "output_tokens": 567, "total_cost_usd": 0.0123},
+        {
+            "ts": ts,
+            "kind": "tool_call",
+            "name": "edit_file",
+            "args": {"path": "memory/knowledge/celery.md"},
+        },
+        {
+            "ts": ts,
+            "kind": "tool_result",
+            "name": "edit_file",
+            "is_error": False,
+            "content_preview": "ok",
+        },
+        {
+            "ts": ts,
+            "kind": "session_usage",
+            "input_tokens": 1234,
+            "output_tokens": 567,
+            "total_cost_usd": 0.0123,
+        },
         {"ts": ts, "kind": "session_end", "turns": 2},
     ]
     _write_trace(trace, events)
@@ -98,7 +132,11 @@ def test_run_trace_bridge_minimal_session(repo: Path, memory: EngramMemory, tmp_
     assert "edit_file" in summary
     assert "Cost: $0.0123" in summary
 
-    spans = [json.loads(line) for line in result.spans_path.read_text(encoding="utf-8").splitlines() if line]
+    spans = [
+        json.loads(line)
+        for line in result.spans_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
     assert {s["name"] for s in spans} == {"read_file", "edit_file"}
     assert all(s["span_type"] == "tool_call" for s in spans)
 
@@ -110,13 +148,26 @@ def test_run_trace_bridge_minimal_session(repo: Path, memory: EngramMemory, tmp_
     assert rec["session_id"] == memory.session_id
 
 
-def test_run_trace_bridge_dedupe_safe_to_rerun(repo: Path, memory: EngramMemory, tmp_path: Path) -> None:
+def test_run_trace_bridge_dedupe_safe_to_rerun(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
     trace = tmp_path / "trace.jsonl"
     ts = _now_iso()
     events = [
         {"ts": ts, "kind": "session_start", "task": "x"},
-        {"ts": ts, "kind": "tool_call", "name": "read_file", "args": {"path": "memory/knowledge/celery.md"}},
-        {"ts": ts, "kind": "tool_result", "name": "read_file", "is_error": False, "content_preview": ""},
+        {
+            "ts": ts,
+            "kind": "tool_call",
+            "name": "read_file",
+            "args": {"path": "memory/knowledge/celery.md"},
+        },
+        {
+            "ts": ts,
+            "kind": "tool_result",
+            "name": "read_file",
+            "is_error": False,
+            "content_preview": "",
+        },
         {"ts": ts, "kind": "session_end", "turns": 1},
     ]
     _write_trace(trace, events)
@@ -129,7 +180,9 @@ def test_run_trace_bridge_dedupe_safe_to_rerun(repo: Path, memory: EngramMemory,
     assert first_lines == second_lines
 
 
-def test_run_trace_bridge_handles_recall_events(repo: Path, memory: EngramMemory, tmp_path: Path) -> None:
+def test_run_trace_bridge_handles_recall_events(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
     """Recall events recorded by EngramMemory.recall() get ACCESS entries."""
     memory.recall("celery worker pool", k=3)
     assert memory.recall_events  # sanity check
@@ -138,8 +191,19 @@ def test_run_trace_bridge_handles_recall_events(repo: Path, memory: EngramMemory
     ts = _now_iso()
     events = [
         {"ts": ts, "kind": "session_start", "task": "x"},
-        {"ts": ts, "kind": "tool_call", "name": "edit_file", "args": {"path": "memory/knowledge/celery.md"}},
-        {"ts": ts, "kind": "tool_result", "name": "edit_file", "is_error": False, "content_preview": ""},
+        {
+            "ts": ts,
+            "kind": "tool_call",
+            "name": "edit_file",
+            "args": {"path": "memory/knowledge/celery.md"},
+        },
+        {
+            "ts": ts,
+            "kind": "tool_result",
+            "name": "edit_file",
+            "is_error": False,
+            "content_preview": "",
+        },
         {"ts": ts, "kind": "session_end", "turns": 1},
     ]
     _write_trace(trace, events)
@@ -164,9 +228,7 @@ def test_run_trace_bridge_no_commit_when_disabled(
     assert result.summary_path.is_file()
 
 
-def test_run_trace_bridge_missing_trace_file_is_safe(
-    memory: EngramMemory, tmp_path: Path
-) -> None:
+def test_run_trace_bridge_missing_trace_file_is_safe(memory: EngramMemory, tmp_path: Path) -> None:
     missing = tmp_path / "no-such-trace.jsonl"
     result = run_trace_bridge(missing, memory, commit=False)
     # Even with no events we still produce summary/reflection skeletons.

@@ -320,8 +320,7 @@ def _render_summary(memory: EngramMemory, stats: _SessionStats, calls: list[_Too
         body_lines.append("")
         for ev in memory.recall_events[:10]:
             body_lines.append(
-                f"- {ev.file_path} ← {ev.query!r} "
-                f"(trust={ev.trust or '?'} score={ev.score:.3f})"
+                f"- {ev.file_path} ← {ev.query!r} (trust={ev.trust or '?'} score={ev.score:.3f})"
             )
         if len(memory.recall_events) > 10:
             body_lines.append(f"- … {len(memory.recall_events) - 10} more")
@@ -462,9 +461,7 @@ def _emit_access_entries(
         access_dir_rel = _access_namespace(ev.file_path)
         if not access_dir_rel:
             continue
-        helpfulness, note = _derive_recall_helpfulness(
-            ev.file_path, ev.timestamp, tool_calls
-        )
+        helpfulness, note = _derive_recall_helpfulness(ev.file_path, ev.timestamp, tool_calls)
         entry = {
             "file": _normalize_for_access(ev.file_path),
             "date": today,
@@ -548,7 +545,7 @@ def _access_namespace(file_path: str) -> str | None:
     norm = _norm(file_path).strip("/")
     # Strip a leading `core/` if present so we match against memory/...
     if norm.startswith("core/"):
-        norm = norm[len("core/"):]
+        norm = norm[len("core/") :]
     for root in _ACCESS_ROOTS:
         if norm == root or norm.startswith(root + "/"):
             return root

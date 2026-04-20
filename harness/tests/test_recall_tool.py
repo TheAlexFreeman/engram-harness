@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from harness.engram_memory import EngramMemory
-from harness.tools.recall import RecallMemory
 from harness.tests.test_engram_memory import _make_engram_repo
+from harness.tools.recall import RecallMemory
 
 
 @pytest.fixture
