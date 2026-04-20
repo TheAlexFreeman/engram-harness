@@ -115,6 +115,7 @@ README.md
 ROADMAP_1.md
 agent-bootstrap.toml
 cold-start-discoverability-roadmap.md
+conftest.py
 core/INIT.md
 core/governance/belief-diff-log.md
 core/governance/content-boundaries.md
