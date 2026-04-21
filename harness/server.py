@@ -43,6 +43,7 @@ from harness.server_models import (
     ToolCallInfo,
     UsageInfo,
 )
+from harness.session_store import SessionRecord, SessionStore
 from harness.sinks.sse import SSEEvent, SSEStreamSink, SSETraceSink
 from harness.usage import Usage
 
@@ -84,6 +85,22 @@ class ManagedSession:
 
 _sessions: dict[str, ManagedSession] = {}
 _sessions_lock = threading.Lock()
+
+# Lazily initialized on first use (requires --db path or default)
+_store: SessionStore | None = None
+_store_lock = threading.Lock()
+
+
+def _get_store() -> SessionStore | None:
+    return _store
+
+
+def init_store(db_path: Path) -> SessionStore:
+    """Initialize the session store. Called from serve() before the app starts."""
+    global _store
+    with _store_lock:
+        _store = SessionStore(db_path)
+    return _store
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +151,7 @@ def _run_session(session: ManagedSession) -> None:
     finally:
         _maybe_run_trace_bridge(session)
         session.components.tracer.close()
+        _store_complete_session(session)
 
 
 def _run_interactive_session(session: ManagedSession) -> None:
@@ -236,6 +254,40 @@ def _run_interactive_session(session: ManagedSession) -> None:
     finally:
         _maybe_run_trace_bridge(session)
         tracer.close()
+        _store_complete_session(session)
+
+
+def _store_complete_session(session: ManagedSession) -> None:
+    """Persist final session state to SQLite, if the store is initialized."""
+    store = _get_store()
+    if store is None:
+        return
+    try:
+        u = session.usage
+        tool_counts: dict[str, int] = {}
+        error_count = 0
+        for tc in session.tool_call_log:
+            tool_counts[tc["name"]] = tool_counts.get(tc["name"], 0) + 1
+            if tc.get("is_error"):
+                error_count += 1
+        store.complete_session(
+            session.id,
+            status=session.status,
+            ended_at=_now(),
+            turns_used=session.turns_used,
+            input_tokens=u.input_tokens,
+            output_tokens=u.output_tokens,
+            cache_read_tokens=u.cache_read_tokens,
+            cache_write_tokens=u.cache_write_tokens,
+            reasoning_tokens=u.reasoning_tokens,
+            total_cost_usd=u.total_cost_usd,
+            tool_counts=tool_counts or None,
+            error_count=error_count,
+            final_text=session.final_text,
+            max_turns_reached=(session.result.max_turns_reached if session.result else False),
+        )
+    except Exception:
+        pass
 
 
 def _bridge_enabled(session: ManagedSession) -> bool:
@@ -353,6 +405,24 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     with _sessions_lock:
         _sessions[session_id] = session
 
+    # Insert into persistent store if available
+    store = _get_store()
+    if store is not None:
+        try:
+            store.insert_session(SessionRecord(
+                session_id=session_id,
+                task=req.task,
+                status="running",
+                model=req.model,
+                mode=req.mode,
+                memory_backend=req.memory,
+                workspace=req.workspace,
+                created_at=session.created_at,
+                trace_path=str(components.trace_path),
+            ))
+        except Exception:
+            pass
+
     runner = _run_interactive_session if req.interactive else _run_session
     thread = threading.Thread(
         target=runner,
@@ -411,7 +481,32 @@ async def get_session(session_id: str) -> SessionDetail:
 
 
 @app.get("/sessions", response_model=SessionListResponse)
-async def list_sessions() -> SessionListResponse:
+async def list_sessions(
+    workspace: str | None = None,
+    status: str | None = None,
+    search: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> SessionListResponse:
+    store = _get_store()
+    if store is not None:
+        records = store.list_sessions(
+            workspace=workspace, status=status, search=search, limit=limit, offset=offset
+        )
+        return SessionListResponse(
+            sessions=[
+                SessionSummary(
+                    session_id=r.session_id,
+                    task=r.task,
+                    status=r.status,
+                    created_at=r.created_at,
+                    turns_used=r.turns_used or 0,
+                    total_cost_usd=r.total_cost_usd or 0.0,
+                )
+                for r in records
+            ]
+        )
+    # Fallback to in-memory sessions
     with _sessions_lock:
         sessions = list(_sessions.values())
     return SessionListResponse(
@@ -427,6 +522,22 @@ async def list_sessions() -> SessionListResponse:
             for s in sorted(sessions, key=lambda x: x.created_at, reverse=True)
         ]
     )
+
+
+@app.get("/sessions/stats")
+async def session_stats(workspace: str | None = None) -> dict:
+    store = _get_store()
+    if store is not None:
+        return store.stats(workspace=workspace)
+    with _sessions_lock:
+        sessions = list(_sessions.values())
+    total_cost = sum(s.usage.total_cost_usd for s in sessions)
+    turns = [s.turns_used for s in sessions if s.turns_used > 0]
+    return {
+        "total_sessions": len(sessions),
+        "total_cost_usd": total_cost,
+        "avg_turns": sum(turns) / len(turns) if turns else 0.0,
+    }
 
 
 @app.post("/sessions/{session_id}/stop", response_model=StopResponse)
@@ -456,7 +567,12 @@ async def send_message(session_id: str, req: SendMessageRequest) -> SendMessageR
 # ---------------------------------------------------------------------------
 
 
-def serve(host: str = "127.0.0.1", port: int = 8420) -> None:
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8420,
+    db_path: Path | None = None,
+    trace_dir: Path | None = None,
+) -> None:
     """Start the harness HTTP API server."""
     try:
         import uvicorn
@@ -465,4 +581,12 @@ def serve(host: str = "127.0.0.1", port: int = 8420) -> None:
             "uvicorn is required to run the server. "
             "Install with: pip install -e '.[api]'"
         )
+
+    if db_path is not None:
+        store = init_store(db_path)
+        if trace_dir is not None and trace_dir.is_dir():
+            n = store.backfill_from_traces(trace_dir)
+            if n:
+                print(f"[store] backfilled {n} sessions from {trace_dir}")
+
     uvicorn.run(app, host=host, port=port)
