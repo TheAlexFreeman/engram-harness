@@ -67,3 +67,7 @@ ount (see README for context)
 .git.broken3/
 # pytest cache fallback dirs (used when .pytest_cache isn't writable)
 pytest-cache-files-*/
+
+
+# One-off plans for in-session work tracking
+.plans/
