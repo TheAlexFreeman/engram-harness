@@ -5,6 +5,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +17,19 @@ if TYPE_CHECKING:
     from harness.engram_memory import EngramMemory
     from harness.modes.base import Mode
     from harness.tools import Tool
+
+
+class ToolProfile(str, Enum):
+    """Which set of tools to register for a session.
+
+    full      – all tools (default, matches prior behaviour)
+    no_shell  – all tools except Bash; safe for untrusted workspaces
+    read_only – only read / search tools; no writes, no shell
+    """
+
+    FULL = "full"
+    NO_SHELL = "no_shell"
+    READ_ONLY = "read_only"
 
 
 @dataclass
@@ -42,6 +56,9 @@ class SessionConfig:
     stream: bool = True
     trace_live: bool = True
     trace_to_engram: bool | None = None  # None = auto (on when memory=engram)
+
+    # Tool access control
+    tool_profile: ToolProfile = ToolProfile.FULL
 
     # Grok-specific
     grok_include: list[str] = field(default_factory=list)
@@ -76,6 +93,7 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         stream=args.stream,
         trace_live=args.trace_live,
         trace_to_engram=args.trace_to_engram,
+        tool_profile=ToolProfile(getattr(args, "tool_profile", "full")),
         grok_include=list(args.grok_include or []),
         grok_encrypted_reasoning=args.grok_encrypted_reasoning,
     )

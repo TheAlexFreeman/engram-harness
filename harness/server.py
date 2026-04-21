@@ -359,9 +359,11 @@ def _get_session(session_id: str) -> ManagedSession:
 @app.post("/sessions", response_model=CreateSessionResponse)
 async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     from harness.cli import build_tools
+    from harness.config import ToolProfile
     from harness.tools.fs import WorkspaceScope
 
     session_id = f"ses_{uuid.uuid4().hex[:8]}"
+    tool_profile = ToolProfile(req.tool_profile)
     config = SessionConfig(
         workspace=Path(req.workspace),
         model=req.model,
@@ -374,6 +376,7 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         stream=req.stream,
         trace_live=req.trace_live,
         trace_to_engram=req.trace_to_engram,
+        tool_profile=tool_profile,
     )
 
     queue: asyncio.Queue[SSEEvent] = asyncio.Queue(maxsize=1000)
@@ -383,7 +386,7 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     workspace = Path(req.workspace)
     workspace.mkdir(parents=True, exist_ok=True)
     scope = WorkspaceScope(root=workspace)
-    base_tools = build_tools(scope)
+    base_tools = build_tools(scope, profile=tool_profile)
 
     components = build_session(
         config,

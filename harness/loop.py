@@ -69,6 +69,7 @@ def run_until_idle(
     prev_batch_sig: tuple[tuple[str, str], ...] | None = None
     repeat_streak = 0
     nudge_text = repeat_guard_message or _DEFAULT_REPEAT_GUARD_MESSAGE
+    tool_seq = 0
 
     for turn in range(max_turns):
         if stop_event is not None and stop_event.is_set():
@@ -98,7 +99,8 @@ def run_until_idle(
             )
 
         for call in tool_calls:
-            tracer.event("tool_call", name=call.name, args=call.args)
+            tracer.event("tool_call", name=call.name, args=call.args, seq=tool_seq)
+            tool_seq += 1
 
         if max_parallel_tools <= 1 or len(tool_calls) == 1:
             results = [execute(c, tools) for c in tool_calls]

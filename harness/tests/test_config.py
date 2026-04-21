@@ -11,6 +11,7 @@ import pytest
 from harness.config import (
     SessionComponents,
     SessionConfig,
+    ToolProfile,
     build_session,
     config_from_args,
 )
@@ -31,6 +32,7 @@ def _minimal_namespace(**kwargs) -> argparse.Namespace:
         stream=True,
         trace_live=True,
         trace_to_engram=None,
+        tool_profile="full",
         grok_include=None,
         grok_encrypted_reasoning=False,
     )
@@ -222,3 +224,48 @@ def test_build_session_trace_path_file_memory(tmp_path):
         components = build_session(config, tools={})
 
     assert "traces" in str(components.trace_path)
+
+
+# ---------------------------------------------------------------------------
+# ToolProfile
+# ---------------------------------------------------------------------------
+
+
+def test_tool_profile_enum_values():
+    assert ToolProfile.FULL.value == "full"
+    assert ToolProfile.NO_SHELL.value == "no_shell"
+    assert ToolProfile.READ_ONLY.value == "read_only"
+
+
+def test_tool_profile_from_string():
+    assert ToolProfile("full") is ToolProfile.FULL
+    assert ToolProfile("no_shell") is ToolProfile.NO_SHELL
+    assert ToolProfile("read_only") is ToolProfile.READ_ONLY
+
+
+def test_tool_profile_invalid_raises():
+    with pytest.raises(ValueError):
+        ToolProfile("superuser")
+
+
+def test_session_config_default_tool_profile(tmp_path):
+    config = SessionConfig(workspace=tmp_path)
+    assert config.tool_profile is ToolProfile.FULL
+
+
+def test_config_from_args_tool_profile_full():
+    ns = _minimal_namespace(tool_profile="full")
+    config = config_from_args(ns)
+    assert config.tool_profile is ToolProfile.FULL
+
+
+def test_config_from_args_tool_profile_read_only():
+    ns = _minimal_namespace(tool_profile="read_only")
+    config = config_from_args(ns)
+    assert config.tool_profile is ToolProfile.READ_ONLY
+
+
+def test_config_from_args_tool_profile_no_shell():
+    ns = _minimal_namespace(tool_profile="no_shell")
+    config = config_from_args(ns)
+    assert config.tool_profile is ToolProfile.NO_SHELL

@@ -6,13 +6,32 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from harness.config import SessionComponents, SessionConfig, build_session, config_from_args
+from harness.config import SessionComponents, SessionConfig, ToolProfile, build_session, config_from_args
 from harness.loop import run, run_until_idle
 from harness.tools.fs import WorkspaceScope
 from harness.usage import Usage
 
 
-def build_tools(scope: WorkspaceScope, *, extra: list | None = None) -> dict:
+def build_tools(
+    scope: WorkspaceScope,
+    *,
+    profile: ToolProfile = ToolProfile.FULL,
+    extra: list | None = None,
+) -> dict:
+    """Build the tool registry for a session.
+
+    Parameters
+    ----------
+    scope:
+        Workspace scope passed to filesystem/shell tools.
+    profile:
+        Controls which tools are included.
+        ``full`` (default) – all tools.
+        ``no_shell`` – all tools except Bash.
+        ``read_only`` – only read and search tools; no writes, no shell, no git writes.
+    extra:
+        Additional pre-constructed tools to append (e.g. recall, plan tools).
+    """
     from harness.tools import Tool
     from harness.tools.bash import Bash
     from harness.tools.fs import (
@@ -33,31 +52,41 @@ def build_tools(scope: WorkspaceScope, *, extra: list | None = None) -> dict:
     from harness.tools.todos import AnalyzeTodos, ReadTodos, UpdateTodo, WriteTodos
     from harness.tools.x_search import XSearch
 
-    base: list[Tool] = [
+    read_only: list[Tool] = [
         ReadFile(scope),
         ListFiles(scope),
         PathStat(scope),
         GlobFiles(scope),
+        GrepWorkspace(scope),
+        GitStatus(scope),
+        GitDiff(scope),
+        GitLog(scope),
+        ReadTodos(scope),
+        AnalyzeTodos(scope),
+        WebSearch(),
+        XSearch(),
+    ]
+    write_only: list[Tool] = [
         Mkdir(scope),
         EditFile(scope),
         WriteFile(scope),
         DeletePath(scope),
         MovePath(scope),
         CopyPath(scope),
-        GrepWorkspace(scope),
-        Bash(scope),
-        GitStatus(scope),
-        GitDiff(scope),
-        GitLog(scope),
         GitCommit(scope),
         Git(scope),
         WriteTodos(scope),
-        ReadTodos(scope),
         UpdateTodo(scope),
-        AnalyzeTodos(scope),
-        WebSearch(),
-        XSearch(),
     ]
+    shell: list[Tool] = [Bash(scope)]
+
+    if profile == ToolProfile.READ_ONLY:
+        base = read_only
+    elif profile == ToolProfile.NO_SHELL:
+        base = read_only + write_only
+    else:
+        base = read_only + write_only + shell
+
     if extra:
         base.extend(extra)
     return {t.name: t for t in base}
@@ -224,6 +253,18 @@ def _parse_args() -> argparse.Namespace:
         dest="trace_to_engram",
         action="store_false",
         help="Disable post-run trace bridge even when --memory=engram.",
+    )
+    parser.add_argument(
+        "--tool-profile",
+        choices=["full", "no_shell", "read_only"],
+        default="full",
+        dest="tool_profile",
+        help=(
+            "Tool access profile. "
+            "'full' (default): all tools. "
+            "'no_shell': all tools except Bash. "
+            "'read_only': read and search only — no writes, no shell, no git mutations."
+        ),
     )
     parser.add_argument(
         "--grok-include",
@@ -510,7 +551,7 @@ def main() -> None:
     _ensure_workspace_in_gitignore(config.workspace)
 
     scope = WorkspaceScope(root=config.workspace)
-    base_tools = build_tools(scope)
+    base_tools = build_tools(scope, profile=config.tool_profile)
     components = build_session(config, tools=base_tools)
 
     if args.interactive:

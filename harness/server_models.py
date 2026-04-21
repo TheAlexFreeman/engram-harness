@@ -21,6 +21,7 @@ class CreateSessionRequest(BaseModel):
     trace_live: bool = False  # off by default in API mode (no stderr)
     trace_to_engram: bool | None = None
     interactive: bool = False
+    tool_profile: str = "full"  # "full" | "no_shell" | "read_only"
 
 
 class CreateSessionResponse(BaseModel):
