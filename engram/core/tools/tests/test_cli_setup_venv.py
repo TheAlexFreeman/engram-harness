@@ -8,6 +8,9 @@ from types import ModuleType
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+ENGRAM_PYPROJECT_FIXTURE = (
+    Path(__file__).resolve().parent / "fixtures" / "engram-overlay" / "pyproject.toml"
+)
 
 
 def _load_cmd() -> ModuleType:
@@ -37,7 +40,7 @@ def test_setup_venv_dry_run_calls_expected_commands(
     fake_root = tmp_path / "repo"
     fake_root.mkdir()
     (fake_root / "pyproject.toml").write_text(
-        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"),
+        ENGRAM_PYPROJECT_FIXTURE.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     recorded: list[tuple[list[str], Path]] = []

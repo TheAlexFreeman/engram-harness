@@ -52,25 +52,21 @@ _MERGER_SKIPS: tuple[str, ...] = (
     # Live-repo validators that inspect the actual engram/ content. In the
     # merged layout, engram/core/memory/ contains harness session traces
     # whose session_id format ('act-NNN') doesn't match the validator's
-    # expected 'core/memory/activity/YYYY/MM/DD/chat-NNN' pattern.
+    # expected 'core/memory/activity/YYYY/MM/DD/chat-NNN' pattern. The same
+    # content gets copied into the init-worktree seed tree, so the E2E
+    # validation test trips on it too.
     "test_validate_memory_repo.py::ValidateMemoryRepoTests::test_current_seed_repo_passes_validation",
     "test_cli_integration.py::test_validate_status_and_search_integration",
+    "test_setup_flows.py::SetupFlowTests::test_init_worktree_end_to_end_validation_passes",
     # Time-sensitive test with a hardcoded 'Last periodic review' date that
     # drifts past the 30-day threshold. Not layout-dependent; left skipped
     # to avoid flakiness until the test is reworked with time-machine.
     "test_agent_memory_mcp_write_tools.py::AgentMemoryWriteToolTests::test_memory_session_health_check_reports_due_aggregation",
-    # Tests that copy engram/pyproject.toml into a temp setup repo.
-    "test_cli_setup_venv.py::test_setup_venv_dry_run_calls_expected_commands",
-    "test_setup_flows.py::SetupFlowTests::test_init_worktree_dry_run_prints_commands_without_mutating_repo",
-    "test_setup_flows.py::SetupFlowTests::test_init_worktree_end_to_end_validation_passes",
-    "test_setup_flows.py::SetupFlowTests::test_init_worktree_prefers_engram_mcp_cli_when_available",
-    "test_setup_flows.py::SetupFlowTests::test_init_worktree_creates_orphan_branch_with_committed_memory_worktree",
-    "test_setup_flows.py::SetupFlowTests::test_setup_codex_portable_writes_portable_config",
-    "test_setup_flows.py::SetupFlowTests::test_setup_initial_commit_excludes_unrelated_local_files_and_generated_prompts",
-    "test_setup_flows.py::SetupFlowTests::test_setup_initializes_new_repo_on_core_branch",
-    "test_setup_flows.py::SetupFlowTests::test_setup_missing_git_identity_stages_only_allowlisted_paths_and_prints_safe_command",
-    "test_setup_flows.py::SetupFlowTests::test_setup_rewrites_codex_config_for_current_clone",
-    "test_setup_flows.py::SetupFlowTests::test_setup_sh_personalization_flags_write_browser_parity_summary",
+    # Manifest vs git-ls-files comparison test that can't work in the merged
+    # layout: engram/ ships additional tracked files (conftest.py, per-session
+    # activity traces) that aren't in the engram-standalone
+    # initial-commit-paths.txt manifest.
+    "test_setup_flows.py::SetupFlowTests::test_initial_commit_manifest_matches_tracked_repo_paths",
 )
 
 
