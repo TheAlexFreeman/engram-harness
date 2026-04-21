@@ -49,28 +49,16 @@ def _is_engram_git_root() -> bool:
 # Tests skipped when engram is not the git root. Match by node-id substring so
 # class-level entries cover every method on the class.
 _MERGER_SKIPS: tuple[str, ...] = (
-    # Live-repo MCP tests — MemoryMCPTests in test_memory_mcp.py.
-    "test_memory_mcp.py::MemoryMCPTests::test_get_tool_profiles_returns_expanded_advisory_profiles",
-    "test_memory_mcp.py::MemoryMCPTests::test_memory_validate_finds_validator_from_content_prefix_root",
-    "test_memory_mcp.py::MemoryMCPTests::test_native_resources_enumerate_and_read",
-    "test_memory_mcp.py::MemoryMCPTests::test_policy_state_covers_session_maintenance_tools",
-    "test_memory_mcp.py::MemoryMCPTests::test_read_file_returns_structured_payload",
-    "test_memory_mcp.py::MemoryMCPTests::test_read_only_profile_contains_only_runtime_read_only_tools",
-    "test_memory_mcp.py::MemoryMCPTests::test_root_listing_can_include_humans",
-    "test_memory_mcp.py::MemoryMCPTests::test_root_listing_hides_humans_by_default",
-    "test_memory_mcp.py::MemoryMCPTests::test_search_hides_humans_by_default",
-    "test_memory_mcp.py::MemoryMCPTests::test_search_can_include_humans",
-    "test_memory_mcp.py::MemoryMCPTests::test_explicit_humans_listing_still_works",
-    "test_memory_mcp.py::MemoryMCPTests::test_explicit_humans_read_still_works",
-    "test_memory_mcp.py::MemoryMCPTests::test_get_capabilities_returns_structured_payload",
-    "test_memory_mcp.py::MemoryMCPTests::test_get_capabilities_summary_reports_registered_tool_count",
-    # Live-repo search tests in TestSearchFreshnessWeight.
-    "test_search_freshness.py::TestSearchFreshnessWeight",
-    # Live-repo / engram-pyproject dependent.
-    "test_surface_unlinked.py",
+    # Live-repo validators that inspect the actual engram/ content. In the
+    # merged layout, engram/core/memory/ contains harness session traces
+    # whose session_id format ('act-NNN') doesn't match the validator's
+    # expected 'core/memory/activity/YYYY/MM/DD/chat-NNN' pattern.
     "test_validate_memory_repo.py::ValidateMemoryRepoTests::test_current_seed_repo_passes_validation",
-    "test_agent_memory_mcp_write_tools.py::AgentMemoryWriteToolTests::test_memory_session_health_check_reports_due_aggregation",
     "test_cli_integration.py::test_validate_status_and_search_integration",
+    # Time-sensitive test with a hardcoded 'Last periodic review' date that
+    # drifts past the 30-day threshold. Not layout-dependent; left skipped
+    # to avoid flakiness until the test is reworked with time-machine.
+    "test_agent_memory_mcp_write_tools.py::AgentMemoryWriteToolTests::test_memory_session_health_check_reports_due_aggregation",
     # Tests that copy engram/pyproject.toml into a temp setup repo.
     "test_cli_setup_venv.py::test_setup_venv_dry_run_calls_expected_commands",
     "test_setup_flows.py::SetupFlowTests::test_init_worktree_dry_run_prints_commands_without_mutating_repo",
