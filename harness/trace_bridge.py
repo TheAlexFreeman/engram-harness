@@ -285,13 +285,26 @@ def _extract_tool_calls(events: list[dict[str, Any]]) -> list[_ToolCall]:
             seq += 1
             calls.append(tc)  # no pending_calls entry — result already baked in
         elif kind == "tool_result":
-            name = str(ev.get("name", ""))
-            for tc in pending_calls:
-                if tc.name == name:
-                    tc.is_error = bool(ev.get("is_error", False))
-                    tc.content_preview = str(ev.get("content_preview", ""))
-                    pending_calls.remove(tc)
-                    break
+            result_seq = ev.get("seq")
+            matched: _ToolCall | None = None
+            if result_seq is not None:
+                # Prefer seq-based match — correct for parallel batches with
+                # duplicate tool names (e.g. two concurrent bash calls).
+                for tc in pending_calls:
+                    if tc.seq == result_seq:
+                        matched = tc
+                        break
+            if matched is None:
+                # Fallback: match by name for traces without seq field.
+                name = str(ev.get("name", ""))
+                for tc in pending_calls:
+                    if tc.name == name:
+                        matched = tc
+                        break
+            if matched is not None:
+                matched.is_error = bool(ev.get("is_error", False))
+                matched.content_preview = str(ev.get("content_preview", ""))
+                pending_calls.remove(matched)
     return calls
 
 

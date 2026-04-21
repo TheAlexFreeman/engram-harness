@@ -407,8 +407,16 @@ async def _lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 
 
-async def _event_generator(queue: asyncio.Queue):
-    """Yield SSE-formatted events from the session queue."""
+_TERMINAL_STATUSES = frozenset({"completed", "error", "stopped"})
+
+
+async def _event_generator(queue: asyncio.Queue, session: "ManagedSession"):
+    """Yield SSE-formatted events from the session queue.
+
+    Terminates when a control/done or control/error event is consumed, or when
+    the session reaches a terminal status with an empty queue (handles clients
+    that connect after the session has already finished).
+    """
     while True:
         try:
             event: SSEEvent = await asyncio.wait_for(queue.get(), timeout=15.0)
@@ -416,6 +424,17 @@ async def _event_generator(queue: asyncio.Queue):
             if event.channel == "control" and event.event in ("done", "error"):
                 break
         except asyncio.TimeoutError:
+            if session.status in _TERMINAL_STATUSES and queue.empty():
+                # Session is done and all queued events have been consumed.
+                # Emit a synthetic done so the client knows to close.
+                done_ev = SSEEvent(
+                    channel="control",
+                    event="done",
+                    data={"usage": session.usage.as_trace_dict(), "turns_used": session.turns_used},
+                    ts=_now(),
+                )
+                yield {"data": done_ev.to_json(), "event": "done"}
+                break
             heartbeat = SSEEvent(
                 channel="control",
                 event="heartbeat",
@@ -551,7 +570,7 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
 async def session_events(session_id: str):
     session = _get_session(session_id)
     return EventSourceResponse(
-        _event_generator(session.queue),
+        _event_generator(session.queue, session),
         media_type="text/event-stream",
     )
 
