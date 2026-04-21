@@ -6,8 +6,16 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from harness.cmd_serve import main as _serve_main
+from harness.cmd_status import (
+    _print_active_plans,
+    _print_recent_sessions,
+    _resolve_engram_content_root,
+    main as _status_main,
+)
 from harness.config import SessionComponents, SessionConfig, ToolProfile, build_session, config_from_args
-from harness.loop import run, run_until_idle
+from harness.report import print_usage
+from harness.runner import run_batch, run_interactive, run_trace_bridge_if_enabled
 from harness.tools.fs import WorkspaceScope
 from harness.usage import Usage
 
@@ -18,20 +26,7 @@ def build_tools(
     profile: ToolProfile = ToolProfile.FULL,
     extra: list | None = None,
 ) -> dict:
-    """Build the tool registry for a session.
-
-    Parameters
-    ----------
-    scope:
-        Workspace scope passed to filesystem/shell tools.
-    profile:
-        Controls which tools are included.
-        ``full`` (default) – all tools.
-        ``no_shell`` – all tools except Bash.
-        ``read_only`` – only read and search tools; no writes, no shell, no git writes.
-    extra:
-        Additional pre-constructed tools to append (e.g. recall, plan tools).
-    """
+    """Build the tool registry for a session."""
     from harness.tools import Tool
     from harness.tools.bash import Bash
     from harness.tools.fs import (
@@ -299,393 +294,7 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-_INTERACTIVE_EXIT = frozenset({"exit", "quit"})
-_INTERACTIVE_SESSION_LABEL = "Interactive session"
-
-
-def _read_interactive_line() -> str | None:
-    try:
-        return input()
-    except EOFError:
-        return None
-
-
-def _run_interactive(args: argparse.Namespace, components: SessionComponents) -> Usage:
-    """Run the interactive REPL. Returns total usage."""
-    config = components.config
-    bridge_enabled = config.trace_to_engram if config.trace_to_engram is not None else (
-        components.engram_memory is not None
-    )
-
-    total_usage = Usage.zero()
-    total_turns = 0
-    last_final: str | None = None
-    session_started = False
-    messages: list[dict] = []
-
-    with components.tracer as tracer:
-        try:
-            opener = (args.task or "").strip()
-
-            if opener:
-                prior = components.memory.start_session(opener)
-                messages = components.mode.initial_messages(
-                    task=opener, prior=prior, tools=components.tools
-                )
-                tracer.event("session_start", task=opener)
-                session_started = True
-                r0 = run_until_idle(
-                    messages,
-                    components.mode,
-                    components.tools,
-                    components.memory,
-                    tracer,
-                    max_turns=config.max_turns,
-                    max_parallel_tools=config.max_parallel_tools,
-                    stream_sink=components.stream_sink,
-                    repeat_guard_threshold=config.repeat_guard_threshold,
-                    error_recall_threshold=config.error_recall_threshold,
-                )
-                total_usage = total_usage + r0.usage
-                total_turns += r0.turns_used
-                last_final = r0.final_text
-                print("\n" + "=" * 60)
-                print(r0.final_text)
-                print("=" * 60)
-            else:
-                first: str | None = None
-                while first is None:
-                    print("harness> ", end="", file=sys.stderr, flush=True)
-                    raw = _read_interactive_line()
-                    if raw is None:
-                        break
-                    s = raw.strip()
-                    if not s:
-                        continue
-                    if s.lower() in _INTERACTIVE_EXIT:
-                        break
-                    first = s
-
-                if first is not None:
-                    prior = components.memory.start_session(_INTERACTIVE_SESSION_LABEL)
-                    messages = components.mode.initial_messages(
-                        task=first, prior=prior, tools=components.tools
-                    )
-                    tracer.event(
-                        "session_start",
-                        task=_INTERACTIVE_SESSION_LABEL,
-                        opener=first,
-                    )
-                    session_started = True
-                    r0 = run_until_idle(
-                        messages,
-                        components.mode,
-                        components.tools,
-                        components.memory,
-                        tracer,
-                        max_turns=config.max_turns,
-                        max_parallel_tools=config.max_parallel_tools,
-                        stream_sink=components.stream_sink,
-                        repeat_guard_threshold=config.repeat_guard_threshold,
-                        error_recall_threshold=config.error_recall_threshold,
-                    )
-                    total_usage = total_usage + r0.usage
-                    total_turns += r0.turns_used
-                    last_final = r0.final_text
-                    print("\n" + "=" * 60)
-                    print(r0.final_text)
-                    print("=" * 60)
-
-            while session_started:
-                print("harness> ", end="", file=sys.stderr, flush=True)
-                raw = _read_interactive_line()
-                if raw is None:
-                    break
-                line = raw.strip()
-                if not line:
-                    continue
-                if line.lower() in _INTERACTIVE_EXIT:
-                    break
-
-                tracer.event("interactive_turn", chars=len(line))
-                messages.append({"role": "user", "content": line})
-                r = run_until_idle(
-                    messages,
-                    components.mode,
-                    components.tools,
-                    components.memory,
-                    tracer,
-                    max_turns=config.max_turns,
-                    max_parallel_tools=config.max_parallel_tools,
-                    stream_sink=components.stream_sink,
-                    repeat_guard_threshold=config.repeat_guard_threshold,
-                    error_recall_threshold=config.error_recall_threshold,
-                )
-                total_usage = total_usage + r.usage
-                total_turns += r.turns_used
-                last_final = r.final_text
-                print("\n" + "=" * 60)
-                print(r.final_text)
-                print("=" * 60)
-
-        except KeyboardInterrupt:
-            print("\n[interrupt]", file=sys.stderr)
-
-        if session_started:
-            summary = (
-                (last_final or "")[:2000]
-                if last_final
-                else "(interactive exit before any assistant reply)"
-            )
-            components.memory.end_session(summary=summary, skip_commit=bridge_enabled)
-            tracer.event("session_usage", **total_usage.as_trace_dict())
-            tracer.event("session_end", turns=total_turns, reason="interactive_exit")
-
-    return total_usage
-
-
-def _run_batch(args: argparse.Namespace, components: SessionComponents):
-    """Run a single batch session. Returns RunResult."""
-    config = components.config
-    bridge_enabled = config.trace_to_engram if config.trace_to_engram is not None else (
-        components.engram_memory is not None
-    )
-    with components.tracer as tracer:
-        return run(
-            str(args.task),
-            components.mode,
-            components.tools,
-            components.memory,
-            tracer,
-            max_turns=config.max_turns,
-            max_parallel_tools=config.max_parallel_tools,
-            stream_sink=components.stream_sink,
-            repeat_guard_threshold=config.repeat_guard_threshold,
-            error_recall_threshold=config.error_recall_threshold,
-            skip_end_session_commit=bridge_enabled,
-        )
-
-
-def _run_trace_bridge(components: SessionComponents) -> None:
-    """Run the trace bridge if configured."""
-    config = components.config
-    bridge_enabled = config.trace_to_engram if config.trace_to_engram is not None else (
-        components.engram_memory is not None
-    )
-    if not (bridge_enabled and components.engram_memory is not None):
-        return
-    try:
-        from harness.trace_bridge import run_trace_bridge
-
-        bridge_result = run_trace_bridge(components.trace_path, components.engram_memory)
-        print(
-            f"[engram] trace bridge: {len(bridge_result.artifacts)} artifact(s), "
-            f"{bridge_result.access_entries} ACCESS entries"
-            + (f", commit {bridge_result.commit_sha[:8]}" if bridge_result.commit_sha else ""),
-            file=sys.stderr,
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"[warning] trace bridge failed: {exc}", file=sys.stderr)
-
-
-def _print_usage(u: Usage, components: SessionComponents) -> None:
-    print(
-        f"tokens: in={u.input_tokens:,} out={u.output_tokens:,} "
-        f"cache_read={u.cache_read_tokens:,} cache_write={u.cache_write_tokens:,} "
-        f"reasoning={u.reasoning_tokens:,}"
-    )
-    if u.server_search_calls or u.server_sources:
-        print(f"search: calls={u.server_search_calls} sources={u.server_sources}")
-    print(
-        f"cost:  ${u.total_cost_usd:.4f} total  "
-        f"(in ${u.input_cost_usd:.4f} / out ${u.output_cost_usd:.4f} / "
-        f"cache ${u.cache_read_cost_usd + u.cache_write_cost_usd:.4f} / "
-        f"search ${u.search_cost_usd:.4f})"
-    )
-    if u.pricing_missing:
-        models = ", ".join(u.missing_models) or "(unknown)"
-        print(f"[warning] no pricing for model(s): {models}", file=sys.stderr)
-    print(f"trace: {components.trace_path}")
-    if components.engram_memory is not None:
-        print(
-            f"engram: {components.engram_memory.content_root / components.engram_memory.session_dir_rel}"
-        )
-    else:
-        print(f"progress: {components.config.workspace / 'progress.md'}")
-
-
-def _serve_main() -> None:
-    """Entry point for `harness serve` subcommand."""
-    import argparse
-
-    parser = argparse.ArgumentParser(prog="harness serve")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8420)
-    parser.add_argument(
-        "--db",
-        default=None,
-        help="Path to SQLite session database (enables session persistence). "
-        "Defaults to $HARNESS_DB_PATH env var.",
-    )
-    parser.add_argument(
-        "--trace-dir",
-        default=None,
-        help="Directory to scan for JSONL trace files to backfill into the database.",
-    )
-    args = parser.parse_args(sys.argv[2:])
-
-    import os
-    db_env = os.getenv("HARNESS_DB_PATH")
-    db_path = Path(args.db) if args.db else (Path(db_env) if db_env else None)
-    trace_dir = Path(args.trace_dir) if args.trace_dir else None
-
-    from harness.server import serve
-
-    serve(host=args.host, port=args.port, db_path=db_path, trace_dir=trace_dir)
-
-
-def _status_main() -> None:
-    """Entry point for `harness status` subcommand."""
-    import argparse
-    import os
-
-    parser = argparse.ArgumentParser(
-        prog="harness status",
-        description="Show active plans, recent sessions, and memory stats.",
-    )
-    parser.add_argument(
-        "--memory-repo",
-        default=None,
-        dest="memory_repo",
-        help="Path to an Engram repo root (or its parent) to show active plans. "
-        "Defaults to auto-detect from CWD, or $HARNESS_MEMORY_REPO.",
-    )
-    parser.add_argument(
-        "--db",
-        default=None,
-        help="Path to SQLite session database. "
-        "Defaults to $HARNESS_DB_PATH env var.",
-    )
-    parser.add_argument(
-        "--sessions",
-        type=int,
-        default=10,
-        metavar="N",
-        help="Number of recent sessions to show (default: 10).",
-    )
-    args = parser.parse_args(sys.argv[2:])
-
-    db_env = os.getenv("HARNESS_DB_PATH")
-    db_path = Path(args.db) if args.db else (Path(db_env) if db_env else None)
-
-    repo_env = os.getenv("HARNESS_MEMORY_REPO")
-    memory_repo = args.memory_repo or repo_env
-
-    print("=== Harness Status ===")
-
-    # ---- Active plans from Engram repo ----
-    content_root = _resolve_engram_content_root(memory_repo)
-    if content_root is not None:
-        _print_active_plans(content_root)
-    else:
-        print("\nMemory repo: not configured (pass --memory-repo to show active plans)")
-
-    # ---- Recent sessions from SQLite store ----
-    if db_path is not None and db_path.exists():
-        _print_recent_sessions(db_path, limit=args.sessions)
-    else:
-        print("\nSession store: not configured (pass --db to show session history)")
-
-
-def _resolve_engram_content_root(memory_repo: str | None) -> "Path | None":
-    """Try to locate the Engram content root given an optional repo-root hint."""
-    from harness.engram_memory import detect_engram_repo, _resolve_content_root
-
-    if memory_repo:
-        repo_root = Path(memory_repo).expanduser().resolve()
-    else:
-        repo_root = detect_engram_repo(Path.cwd())
-
-    if repo_root is None:
-        return None
-    try:
-        _, content_root = _resolve_content_root(repo_root, None)
-        return content_root
-    except Exception:
-        return None
-
-
-def _print_active_plans(content_root: Path) -> None:
-    try:
-        from harness.tools.plan_tools import (
-            find_active_plans,
-            _load_plan_yaml,
-            _load_run_state,
-        )
-    except ImportError:
-        return
-
-    print(f"\nMemory repo content root: {content_root}")
-    active = find_active_plans(content_root)
-    if not active:
-        print("Active plans: none")
-        return
-
-    print(f"Active plans ({len(active)}):")
-    for plan_dir in active:
-        try:
-            state = _load_run_state(plan_dir)
-            plan = _load_plan_yaml(plan_dir)
-        except Exception:
-            continue
-        plan_id = state.get("plan_id", plan_dir.name)
-        title = plan.get("title", "?")
-        phases: list = plan.get("phases", [])
-        current_idx = int(state.get("current_phase", 0))
-        phase_name = phases[current_idx]["name"] if current_idx < len(phases) else "—"
-        n_sessions = len(state.get("sessions", []))
-        max_sessions = plan.get("max_sessions")
-        budget_str = f"{n_sessions}/{max_sessions}" if max_sessions else str(n_sessions)
-        print(
-            f"  {plan_id:<10} {title[:40]:<42}"
-            f"Phase {current_idx + 1}/{len(phases)}: {phase_name[:28]:<30}"
-            f"{budget_str} session(s)"
-        )
-
-
-def _print_recent_sessions(db_path: Path, limit: int) -> None:
-    try:
-        from harness.session_store import SessionStore
-    except ImportError:
-        return
-
-    store = SessionStore(db_path)
-    stats = store.stats()
-    records = store.list_sessions(limit=limit)
-
-    print(f"\nSession store: {db_path}")
-    if records:
-        print(f"Recent sessions (last {min(limit, len(records))}):")
-        for r in records:
-            ts = (r.created_at or "?")[:19]
-            sid = (r.session_id or "?")[:12]
-            status = (r.status or "?")[:10]
-            cost = f"${r.total_cost_usd:.4f}" if r.total_cost_usd else "  —    "
-            task_preview = (r.task or "")[:50]
-            print(f"  {ts}  {sid}  {status:<10}  {cost}  {task_preview!r}")
-    else:
-        print("Recent sessions: none recorded")
-
-    print(
-        f"\nStats: {stats.get('total_sessions', 0)} sessions  "
-        f"avg {stats.get('avg_turns', 0):.1f} turns  "
-        f"total ${stats.get('total_cost_usd', 0.0):.4f}"
-    )
-
-
 def main() -> None:
-    # Dispatch subcommands before the main arg parser so they don't
-    # conflict with the positional `task` argument.
     if len(sys.argv) > 1 and sys.argv[1] == "serve":
         _serve_main()
         return
@@ -712,13 +321,13 @@ def main() -> None:
     components = build_session(config, tools=base_tools)
 
     if args.interactive:
-        usage = _run_interactive(args, components)
-        _run_trace_bridge(components)
-        _print_usage(usage, components)
+        usage = run_interactive(args, components)
+        run_trace_bridge_if_enabled(components)
+        print_usage(usage, components)
     else:
-        batch_result = _run_batch(args, components)
-        _run_trace_bridge(components)
+        batch_result = run_batch(args, components)
+        run_trace_bridge_if_enabled(components)
         print("\n" + "=" * 60)
         print(batch_result.final_text)
         print("=" * 60)
-        _print_usage(batch_result.usage, components)
+        print_usage(batch_result.usage, components)

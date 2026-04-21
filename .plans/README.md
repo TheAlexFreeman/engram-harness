@@ -54,7 +54,7 @@ Plans 01–03 were fixed and archived. 295 harness tests pass at that point.
 | #  | Plan | Key files | Effort | Origin |
 |----|------|-----------|--------|--------|
 | 16 | [Interactive mode per-subtask tracing](16-interactive-subtask-tracing.md) | `cli.py`, `trace_bridge.py` | M | new |
-| 17 | [CLI session-setup extraction](17-cli-session-setup-extraction.md) | `cli.py`, `config.py` | M | R1 |
+| 17 | ~~CLI session-setup extraction~~ | archived/done (2026-04-21) | — | — |
 
 ## Superseded worktree plans
 

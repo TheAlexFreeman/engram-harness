@@ -6,7 +6,11 @@ import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
+
+if TYPE_CHECKING:
+    from harness.config import SessionComponents
+    from harness.usage import Usage
 
 
 @dataclass
@@ -216,6 +220,32 @@ def format_directory_summary(reports: list[TraceReport]) -> str:
         models = ", ".join(sorted(missing_models)) or "(unknown)"
         rows.append(f"[warning] no pricing for model(s): {models}")
     return "\n".join(rows)
+
+
+def print_usage(u: "Usage", components: "SessionComponents") -> None:
+    print(
+        f"tokens: in={u.input_tokens:,} out={u.output_tokens:,} "
+        f"cache_read={u.cache_read_tokens:,} cache_write={u.cache_write_tokens:,} "
+        f"reasoning={u.reasoning_tokens:,}"
+    )
+    if u.server_search_calls or u.server_sources:
+        print(f"search: calls={u.server_search_calls} sources={u.server_sources}")
+    print(
+        f"cost:  ${u.total_cost_usd:.4f} total  "
+        f"(in ${u.input_cost_usd:.4f} / out ${u.output_cost_usd:.4f} / "
+        f"cache ${u.cache_read_cost_usd + u.cache_write_cost_usd:.4f} / "
+        f"search ${u.search_cost_usd:.4f})"
+    )
+    if u.pricing_missing:
+        models = ", ".join(u.missing_models) or "(unknown)"
+        print(f"[warning] no pricing for model(s): {models}", file=sys.stderr)
+    print(f"trace: {components.trace_path}")
+    if components.engram_memory is not None:
+        print(
+            f"engram: {components.engram_memory.content_root / components.engram_memory.session_dir_rel}"
+        )
+    else:
+        print(f"progress: {components.config.workspace / 'progress.md'}")
 
 
 def main(argv: list[str] | None = None) -> int:
