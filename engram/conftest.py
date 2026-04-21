@@ -62,11 +62,6 @@ _MERGER_SKIPS: tuple[str, ...] = (
     # drifts past the 30-day threshold. Not layout-dependent; left skipped
     # to avoid flakiness until the test is reworked with time-machine.
     "test_agent_memory_mcp_write_tools.py::AgentMemoryWriteToolTests::test_memory_session_health_check_reports_due_aggregation",
-    # Manifest vs git-ls-files comparison test that can't work in the merged
-    # layout: engram/ ships additional tracked files (conftest.py, per-session
-    # activity traces) that aren't in the engram-standalone
-    # initial-commit-paths.txt manifest.
-    "test_setup_flows.py::SetupFlowTests::test_initial_commit_manifest_matches_tracked_repo_paths",
 )
 
 
