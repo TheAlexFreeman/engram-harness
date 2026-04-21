@@ -87,6 +87,7 @@
     done:       { bg: 'rgba(107,202,138,0.15)', fg: '#6bca8a', label: 'done'       },
     error:      { bg: 'rgba(211,95,74,0.18)',  fg: '#d35f4a', label: 'error'      },
     cancelled:  { bg: 'rgba(224,185,78,0.15)', fg: '#e0b94e', label: 'cancelled'  },
+    stopped:    { bg: 'rgba(245,158,11,0.15)', fg: '#f59e0b', label: 'stopped'    },
     incomplete: { bg: 'rgba(122,112,103,0.25)',fg: '#a89e91', label: 'incomplete' },
     unknown:    { bg: 'rgba(122,112,103,0.25)',fg: '#a89e91', label: 'unknown'    }
   };

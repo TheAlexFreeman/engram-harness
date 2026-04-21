@@ -56,6 +56,7 @@ function sseToAction(payload: SSEPayload): SessionAction {
           name: (data.name as string) ?? "",
           args: (data.args as Record<string, unknown>) ?? {},
           turn: (data.turn as number) ?? 0,
+          seq: data.seq as number | undefined,
         };
       case "tool_result":
         return {
@@ -64,6 +65,7 @@ function sseToAction(payload: SSEPayload): SessionAction {
           isError: (data.is_error as boolean) ?? false,
           turn: (data.turn as number) ?? 0,
           result: data.result as string | undefined,
+          seq: data.seq as number | undefined,
         };
       case "usage":
         return {
@@ -148,7 +150,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const sendMessage = useCallback(async (content: string) => {
     if (!state.sessionId) return;
     dispatch({ type: "USER_MESSAGE_SENT", content });
-    await api.sendMessage(state.sessionId, content);
+    try {
+      await api.sendMessage(state.sessionId, content);
+    } catch {
+      dispatch({ type: "SEND_FAILED" });
+    }
   }, [state.sessionId]);
 
   const stopSession = useCallback(async () => {

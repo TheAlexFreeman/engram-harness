@@ -38,9 +38,9 @@ Plans 01–03 were fixed and archived. 295 harness tests pass at that point.
 
 | #  | Plan | Key files | Effort | Origin |
 |----|------|-----------|--------|--------|
-| 11 | [Frontend tool-result keying](11-frontend-tool-result-keying.md) | `frontend/src/state/` | S | worktree-10 |
-| 12 | [Frontend SSE robustness](12-frontend-sse-robustness.md) | `frontend/src/api/sse.ts` | S | worktree-11 |
-| 13 | [Frontend optimistic send rollback](13-frontend-optimistic-send.md) | `frontend/src/state/` | XS | worktree-12 |
+| 11 | ~~Frontend tool-result keying~~ | archived/done (2026-04-21) | — | — |
+| 12 | ~~Frontend SSE robustness~~ | archived/done (2026-04-21) | — | — |
+| 13 | ~~Frontend optimistic send rollback~~ | archived/done (2026-04-21) | — | — |
 
 ## Packaging + testing
 

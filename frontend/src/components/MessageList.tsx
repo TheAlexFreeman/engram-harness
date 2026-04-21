@@ -27,8 +27,13 @@ export function MessageList({ messages, activeBlock, status, turnNumber }: Props
               <div className="flex-shrink-0 w-6 h-6 rounded bg-blue-700 flex items-center justify-center text-xs font-bold mt-0.5">
                 U
               </div>
-              <div className="flex-1 text-gray-200 leading-relaxed whitespace-pre-wrap break-words">
-                {msg.content}
+              <div className="flex-1">
+                <div className={`leading-relaxed whitespace-pre-wrap break-words ${msg.sendError ? "text-gray-500" : "text-gray-200"}`}>
+                  {msg.content}
+                </div>
+                {msg.sendError && (
+                  <div className="text-red-400 text-xs mt-1">{msg.sendError}</div>
+                )}
               </div>
             </div>
           );

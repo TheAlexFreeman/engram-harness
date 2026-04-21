@@ -10,6 +10,7 @@ export interface ToolCallEntry {
   result?: string;
   isError: boolean;
   turn: number;
+  seq?: number;
   pending: boolean;
 }
 
@@ -20,6 +21,7 @@ export interface ConversationMessage {
   turn: number;
   toolCalls: ToolCallEntry[];
   timestamp: string;
+  sendError?: string;
 }
 
 export interface UsageStats {
@@ -203,6 +205,7 @@ export function reducer(state: SessionState, action: SessionAction): SessionStat
         argsText: JSON.stringify(action.args, null, 2),
         isError: false,
         turn: action.turn,
+        seq: action.seq,
         pending: true,
       };
       const counts = { ...state.toolCounts, [action.name]: (state.toolCounts[action.name] ?? 0) + 1 };
@@ -210,16 +213,21 @@ export function reducer(state: SessionState, action: SessionAction): SessionStat
         ...m,
         toolCalls: [...m.toolCalls, entry],
       }));
-      const pending = { ...state.pendingToolCalls, [action.name + action.turn]: entry };
+      // Key by seq when available for correct parallel-tool matching
+      const pendingKey = action.seq != null ? String(action.seq) : action.name + action.turn;
+      const pending = { ...state.pendingToolCalls, [pendingKey]: entry };
       return { ...state, messages: msgs, toolCounts: counts, pendingToolCalls: pending };
     }
 
     case "TOOL_RESULT": {
-      const key = action.name + action.turn;
+      const pendingKey = action.seq != null ? String(action.seq) : action.name + action.turn;
       const msgs = state.messages.map((m) => {
         if (m.role !== "assistant") return m;
         const tcs = m.toolCalls.map((tc) => {
-          if (tc.pending && tc.name === action.name && tc.turn === action.turn) {
+          const matches = action.seq != null
+            ? tc.pending && tc.seq === action.seq
+            : tc.pending && tc.name === action.name && tc.turn === action.turn;
+          if (matches) {
             return { ...tc, result: action.result, isError: action.isError, pending: false };
           }
           return tc;
@@ -228,7 +236,7 @@ export function reducer(state: SessionState, action: SessionAction): SessionStat
       });
       const errorCount = state.errorCount + (action.isError ? 1 : 0);
       const pending = { ...state.pendingToolCalls };
-      delete pending[key];
+      delete pending[pendingKey];
       return { ...state, messages: msgs, errorCount, pendingToolCalls: pending };
     }
 
@@ -279,6 +287,17 @@ export function reducer(state: SessionState, action: SessionAction): SessionStat
           { role: "user", content: action.content, turn: state.turnNumber, toolCalls: [], timestamp: now() },
         ],
       };
+
+    case "SEND_FAILED": {
+      // Mark the last pending user message as failed
+      const lastIdx = [...state.messages].reverse().findIndex((m) => m.role === "user" && !m.sendError);
+      if (lastIdx === -1) return { ...state, status: "idle" };
+      const idx = state.messages.length - 1 - lastIdx;
+      const msgs = state.messages.map((m, i) =>
+        i === idx ? { ...m, sendError: "Send failed — please retry" } : m
+      );
+      return { ...state, status: "idle", messages: msgs };
+    }
 
     case "UNKNOWN_EVENT":
       return state;
