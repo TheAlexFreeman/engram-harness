@@ -21,6 +21,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
+# Load `.env` when the server module is imported (covers `uvicorn harness.server:app`,
+# which does not go through `harness` CLI's load_dotenv).
+load_dotenv()
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
 try:
     from fastapi import FastAPI, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
@@ -84,6 +91,7 @@ class ManagedSession:
     turn_number: int = 0
     messages: list[dict] = field(default_factory=list)
     final_text: str | None = None
+    loop: asyncio.AbstractEventLoop | None = None
 
 
 
@@ -151,6 +159,23 @@ def init_store(db_path: Path) -> SessionStore:
 
 
 # ---------------------------------------------------------------------------
+# Thread-safe event emit helper
+# ---------------------------------------------------------------------------
+
+
+def _emit(session: ManagedSession, event: SSEEvent) -> None:
+    """Push an SSEEvent to the session queue from a background thread."""
+    loop = session.loop
+    if loop is not None:
+        try:
+            loop.call_soon_threadsafe(session.queue.put_nowait, event)
+        except RuntimeError:
+            pass  # loop closed during shutdown
+    else:
+        session.queue.put_nowait(event)
+
+
+# ---------------------------------------------------------------------------
 # Session runner (background thread)
 # ---------------------------------------------------------------------------
 
@@ -177,7 +202,7 @@ def _run_session(session: ManagedSession) -> None:
         session.usage = result.usage
         session.turns_used = result.turns_used
         session.status = "stopped" if session.stop_event.is_set() else "completed"
-        session.queue.put_nowait(SSEEvent(
+        _emit(session, SSEEvent(
             channel="control",
             event="done",
             data={
@@ -190,7 +215,7 @@ def _run_session(session: ManagedSession) -> None:
         ))
     except Exception as exc:
         session.status = "error"
-        session.queue.put_nowait(SSEEvent(
+        _emit(session, SSEEvent(
             channel="control",
             event="error",
             data={"error_type": type(exc).__name__, "message": str(exc)},
@@ -231,7 +256,7 @@ def _run_interactive_session(session: ManagedSession) -> None:
         session.turn_number += 1
         session.final_text = result.final_text
 
-        session.queue.put_nowait(SSEEvent(
+        _emit(session, SSEEvent(
             channel="control",
             event="idle",
             data={"final_text": result.final_text, "turn_number": session.turn_number},
@@ -268,7 +293,7 @@ def _run_interactive_session(session: ManagedSession) -> None:
             session.turn_number += 1
             session.final_text = result.final_text
 
-            session.queue.put_nowait(SSEEvent(
+            _emit(session, SSEEvent(
                 channel="control",
                 event="idle",
                 data={"final_text": result.final_text, "turn_number": session.turn_number},
@@ -287,7 +312,7 @@ def _run_interactive_session(session: ManagedSession) -> None:
         )
         session.turns_used = session.turn_number
         session.status = "completed"
-        session.queue.put_nowait(SSEEvent(
+        _emit(session, SSEEvent(
             channel="control",
             event="done",
             data={"usage": session.usage.as_trace_dict(), "turns_used": session.turn_number},
@@ -295,7 +320,7 @@ def _run_interactive_session(session: ManagedSession) -> None:
         ))
     except Exception as exc:
         session.status = "error"
-        session.queue.put_nowait(SSEEvent(
+        _emit(session, SSEEvent(
             channel="control",
             event="error",
             data={"error_type": type(exc).__name__, "message": str(exc)},
@@ -400,6 +425,9 @@ async def _lifespan(app: FastAPI):
             if s.status in ("running", "idle"):
                 s.stop_event.set()
         await asyncio.sleep(3)
+        store = _get_store()
+        if store is not None:
+            store.close()
 
 
 # ---------------------------------------------------------------------------
@@ -497,9 +525,10 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         tool_profile=tool_profile,
     )
 
+    loop = asyncio.get_running_loop()
     queue: asyncio.Queue[SSEEvent] = asyncio.Queue(maxsize=1000)
-    sse_trace = SSETraceSink(queue)
-    sse_stream = SSEStreamSink(queue)
+    sse_trace = SSETraceSink(queue, loop=loop)
+    sse_stream = SSEStreamSink(queue, loop=loop)
 
     workspace.mkdir(parents=True, exist_ok=True)
     scope = WorkspaceScope(root=workspace)
@@ -525,6 +554,7 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         interactive=req.interactive,
         created_at=_now(),
         tool_call_log=tool_call_log,
+        loop=loop,
     )
 
     with _sessions_lock:
@@ -573,6 +603,22 @@ async def session_events(session_id: str):
         _event_generator(session.queue, session),
         media_type="text/event-stream",
     )
+
+
+@app.get("/sessions/stats")
+async def session_stats(workspace: str | None = None) -> dict:
+    store = _get_store()
+    if store is not None:
+        return store.stats(workspace=workspace)
+    with _sessions_lock:
+        sessions = list(_sessions.values())
+    total_cost = sum(s.usage.total_cost_usd for s in sessions)
+    turns = [s.turns_used for s in sessions if s.turns_used > 0]
+    return {
+        "total_sessions": len(sessions),
+        "total_cost_usd": total_cost,
+        "avg_turns": sum(turns) / len(turns) if turns else 0.0,
+    }
 
 
 @app.get("/sessions/{session_id}", response_model=SessionDetail)
@@ -658,22 +704,6 @@ async def list_sessions(
             for s in sorted(sessions, key=lambda x: x.created_at, reverse=True)
         ]
     )
-
-
-@app.get("/sessions/stats")
-async def session_stats(workspace: str | None = None) -> dict:
-    store = _get_store()
-    if store is not None:
-        return store.stats(workspace=workspace)
-    with _sessions_lock:
-        sessions = list(_sessions.values())
-    total_cost = sum(s.usage.total_cost_usd for s in sessions)
-    turns = [s.turns_used for s in sessions if s.turns_used > 0]
-    return {
-        "total_sessions": len(sessions),
-        "total_cost_usd": total_cost,
-        "avg_turns": sum(turns) / len(turns) if turns else 0.0,
-    }
 
 
 @app.post("/sessions/{session_id}/stop", response_model=StopResponse)

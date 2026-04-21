@@ -152,8 +152,16 @@ def run_until_idle(
             else:
                 tool_error_streaks.pop(result.call.name, None)
 
+        tool_results_msg = mode.as_tool_results_message(results)
+        if isinstance(tool_results_msg, list):
+            messages.extend(tool_results_msg)
+        else:
+            messages.append(tool_results_msg)
+
         # Adaptive recall: when a tool has failed repeatedly and recall_memory is
         # available, inject a nudge prompting the agent to query prior context.
+        # Must come AFTER tool_results to satisfy the API contract that tool_result
+        # immediately follows tool_use.
         if error_recall_threshold > 0 and "recall_memory" in tools:
             for tool_name, streak in list(tool_error_streaks.items()):
                 if streak >= error_recall_threshold:
@@ -169,12 +177,6 @@ def run_until_idle(
                     messages.append({"role": "user", "content": recall_nudge})
                     tool_error_streaks[tool_name] = 0
                     break  # one nudge per turn is enough
-
-        tool_results_msg = mode.as_tool_results_message(results)
-        if isinstance(tool_results_msg, list):
-            messages.extend(tool_results_msg)
-        else:
-            messages.append(tool_results_msg)
 
         if repeat_guard_threshold > 0 and tool_calls:
             batch_sig = _tool_batch_signature(tool_calls)

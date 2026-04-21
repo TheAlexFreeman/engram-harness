@@ -232,3 +232,42 @@ def test_tool_args_delta():
     items = q.drain()
     assert items[0].event == "tool_args_delta"
     assert items[0].data["name"] == "read_file"
+
+
+# ---------------------------------------------------------------------------
+# Cross-thread safety (real asyncio.Queue + loop.call_soon_threadsafe)
+# ---------------------------------------------------------------------------
+
+
+def test_cross_thread_push_trace_sink():
+    """Events emitted from a background thread arrive on the asyncio queue."""
+    import threading
+
+    EVENT_COUNT = 50
+
+    async def _inner():
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+        sink = SSETraceSink(q, loop=loop)
+
+        barrier = threading.Barrier(2)
+
+        def worker():
+            barrier.wait()
+            for i in range(EVENT_COUNT):
+                sink.event(f"e{i}", index=i)
+
+        t = threading.Thread(target=worker)
+        t.start()
+        barrier.wait()
+
+        received = []
+        while len(received) < EVENT_COUNT:
+            ev = await asyncio.wait_for(q.get(), timeout=5.0)
+            received.append(ev)
+
+        t.join()
+        assert len(received) == EVENT_COUNT
+        assert sink.drops == 0
+
+    asyncio.run(_inner())

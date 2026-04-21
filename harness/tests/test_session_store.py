@@ -254,3 +254,33 @@ def test_parse_trace_no_session_start(tmp_path):
     _write_trace(path, [{"kind": "tool_call", "name": "read_file"}])
     result = _parse_trace_for_backfill(path)
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Concurrent write safety
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_writes(tmp_path):
+    """10 threads writing sessions concurrently must all succeed without error."""
+    import threading
+
+    store = SessionStore(tmp_path / "concurrent.db")
+    errors: list[Exception] = []
+
+    def write_session(idx: int) -> None:
+        try:
+            store.insert_session(_make_record(f"ses_{idx:03d}"))
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write_session, args=(i,)) for i in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], f"Concurrent writes raised: {errors}"
+    results = store.list_sessions()
+    assert len(results) == 10
+    store.close()

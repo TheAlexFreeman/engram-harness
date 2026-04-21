@@ -3,13 +3,16 @@
 Both sinks bridge from the synchronous run loop thread into an asyncio.Queue
 so the FastAPI server can forward events to browser clients over SSE.
 
-Thread safety: asyncio.Queue.put_nowait() is safe to call from synchronous
-threads on CPython. Each push constructs a new SSEEvent (no shared mutable
-state). The drop counter is an int incremented under the GIL.
+Thread safety: asyncio.Queue is NOT thread-safe from non-async threads.
+Callers must pass the event loop so events are dispatched via
+loop.call_soon_threadsafe(), which is the only safe cross-thread path.
+When loop=None (unit tests with a plain queue shim), put_nowait() is called
+directly — only safe when the caller and the sink share a thread.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -44,17 +47,31 @@ def _now() -> str:
 class SSETraceSink:
     """TraceSink that pushes events into an asyncio.Queue as SSEEvents.
 
-    Called from the synchronous run loop thread. Uses put_nowait() which is
-    thread-safe for asyncio.Queue when called from a non-async context.
+    Must be called from a non-async thread. Pass the running event loop so
+    events are dispatched via call_soon_threadsafe (the only safe cross-thread
+    path). When loop=None the sink calls put_nowait() directly, which is only
+    safe when caller and sink are on the same thread (unit-test mode).
     """
 
-    def __init__(self, queue: Any, *, maxsize: int = 1000) -> None:
+    def __init__(
+        self,
+        queue: Any,
+        *,
+        maxsize: int = 1000,
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> None:
         self._queue = queue
+        self._loop = loop
         self._drops = 0
 
     def _push(self, event: SSEEvent) -> None:
         try:
-            self._queue.put_nowait(event)
+            if self._loop is not None:
+                self._loop.call_soon_threadsafe(self._queue.put_nowait, event)
+            else:
+                self._queue.put_nowait(event)
+        except RuntimeError:
+            self._drops += 1  # loop closed during shutdown
         except Exception:
             self._drops += 1
 
@@ -74,16 +91,23 @@ class SSEStreamSink:
 
     Implements the full StreamSink protocol. High-frequency events (text_delta,
     reasoning_delta) carry only the delta — the client accumulates them.
+    Pass loop for thread-safe cross-thread dispatch; omit only in tests.
     """
 
-    def __init__(self, queue: Any) -> None:
+    def __init__(self, queue: Any, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
         self._queue = queue
+        self._loop = loop
         self._drops = 0
 
     def _push(self, event: str, **data: Any) -> None:
         ev = SSEEvent(channel="stream", event=event, data=data, ts=_now())
         try:
-            self._queue.put_nowait(ev)
+            if self._loop is not None:
+                self._loop.call_soon_threadsafe(self._queue.put_nowait, ev)
+            else:
+                self._queue.put_nowait(ev)
+        except RuntimeError:
+            self._drops += 1  # loop closed during shutdown
         except Exception:
             self._drops += 1
 

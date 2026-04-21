@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -127,6 +128,7 @@ class SessionStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
+        self._write_lock = threading.Lock()
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -138,15 +140,16 @@ class SessionStore:
         d = record.as_dict()
         cols = ", ".join(d.keys())
         placeholders = ", ".join(f":{k}" for k in d)
-        self._conn.execute(
-            f"INSERT OR IGNORE INTO sessions ({cols}) VALUES ({placeholders})", d
-        )
-        # Keep FTS index in sync
-        self._conn.execute(
-            "INSERT OR IGNORE INTO sessions_fts(session_id, task, final_text) VALUES (?, ?, ?)",
-            (record.session_id, record.task, record.final_text),
-        )
-        self._conn.commit()
+        with self._write_lock:
+            self._conn.execute(
+                f"INSERT OR IGNORE INTO sessions ({cols}) VALUES ({placeholders})", d
+            )
+            # Keep FTS index in sync
+            self._conn.execute(
+                "INSERT OR IGNORE INTO sessions_fts(session_id, task, final_text) VALUES (?, ?, ?)",
+                (record.session_id, record.task, record.final_text),
+            )
+            self._conn.commit()
 
     def complete_session(
         self,
@@ -185,34 +188,35 @@ class SessionStore:
             "max_turns_reached": 1 if max_turns_reached else 0,
             "engram_session_dir": engram_session_dir,
         }
-        self._conn.execute(
-            """
-            UPDATE sessions SET
-                status = :status,
-                ended_at = :ended_at,
-                turns_used = :turns_used,
-                input_tokens = :input_tokens,
-                output_tokens = :output_tokens,
-                cache_read_tokens = :cache_read_tokens,
-                cache_write_tokens = :cache_write_tokens,
-                reasoning_tokens = :reasoning_tokens,
-                total_cost_usd = :total_cost_usd,
-                tool_counts = :tool_counts,
-                error_count = :error_count,
-                final_text = :final_text,
-                max_turns_reached = :max_turns_reached,
-                engram_session_dir = :engram_session_dir
-            WHERE session_id = :session_id
-            """,
-            params,
-        )
-        # Update FTS index for changed final_text
-        if final_text is not None:
+        with self._write_lock:
             self._conn.execute(
-                "UPDATE sessions_fts SET final_text = ? WHERE session_id = ?",
-                (final_text, session_id),
+                """
+                UPDATE sessions SET
+                    status = :status,
+                    ended_at = :ended_at,
+                    turns_used = :turns_used,
+                    input_tokens = :input_tokens,
+                    output_tokens = :output_tokens,
+                    cache_read_tokens = :cache_read_tokens,
+                    cache_write_tokens = :cache_write_tokens,
+                    reasoning_tokens = :reasoning_tokens,
+                    total_cost_usd = :total_cost_usd,
+                    tool_counts = :tool_counts,
+                    error_count = :error_count,
+                    final_text = :final_text,
+                    max_turns_reached = :max_turns_reached,
+                    engram_session_dir = :engram_session_dir
+                WHERE session_id = :session_id
+                """,
+                params,
             )
-        self._conn.commit()
+            # Update FTS index for changed final_text
+            if final_text is not None:
+                self._conn.execute(
+                    "UPDATE sessions_fts SET final_text = ? WHERE session_id = ?",
+                    (final_text, session_id),
+                )
+            self._conn.commit()
 
     def get_session(self, session_id: str) -> SessionRecord | None:
         row = self._conn.execute(

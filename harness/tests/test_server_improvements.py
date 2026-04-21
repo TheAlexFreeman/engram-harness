@@ -198,6 +198,18 @@ def test_validate_workspace_within_root(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_stats_route_reachable():
+    """/sessions/stats must return 200, not be absorbed by /sessions/{session_id}."""
+    srv = _import_server()
+    from fastapi.testclient import TestClient
+
+    client = TestClient(srv.app)
+    resp = client.get("/sessions/stats")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "total_sessions" in body
+
+
 def test_lifespan_signals_running_sessions_on_shutdown():
     srv = _import_server()
 

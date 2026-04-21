@@ -339,6 +339,62 @@ def test_adaptive_recall_one_nudge_per_turn():
     assert len(triggers) == 1
 
 
+def test_adaptive_recall_nudge_after_tool_results():
+    """Nudge must appear AFTER tool_results, never between assistant and tool_results."""
+    fail = ErrorTool("bad_tool")
+    recall = NullRecallTool()
+    tools: dict[str, Tool] = {"bad_tool": fail, "recall_memory": recall}
+
+    call = ToolCall(name="bad_tool", args={}, id="c0")
+    mode = CaptureScriptedMode(
+        [
+            _ScriptedResponse(tool_calls=[call]),
+            _ScriptedResponse(tool_calls=[call]),
+            _ScriptedResponse(tool_calls=[call]),  # nudge fires at threshold=3
+            _ScriptedResponse(tool_calls=[], text="done"),
+        ]
+    )
+
+    run(
+        task="go",
+        mode=mode,
+        tools=tools,
+        memory=RecordingMemory(),
+        tracer=RecordingTracer(),
+        max_parallel_tools=1,
+        error_recall_threshold=3,
+    )
+
+    # The final complete() sees all messages including the nudge.
+    final_msgs = mode.last_messages
+    assert final_msgs is not None
+
+    nudge_idx = next(
+        (
+            i
+            for i, m in enumerate(final_msgs)
+            if m.get("role") == "user"
+            and isinstance(m.get("content"), str)
+            and "[harness]" in m["content"]
+        ),
+        None,
+    )
+    assert nudge_idx is not None, "No nudge message found in final message list"
+
+    # The message immediately before the nudge must be a tool_results user message
+    # (list content), not an assistant message. An assistant message directly before
+    # the nudge would mean the nudge was injected before tool_results.
+    prev = final_msgs[nudge_idx - 1]
+    assert prev.get("role") == "user", (
+        f"Message before nudge (idx {nudge_idx-1}) must be role=user (tool_results), "
+        f"got role={prev.get('role')!r}"
+    )
+    assert isinstance(prev.get("content"), list), (
+        "Message before nudge must be tool_results (list content), "
+        f"got content type {type(prev.get('content')).__name__!r}"
+    )
+
+
 def test_adaptive_recall_nudge_contains_tool_name():
     """The nudge message names the failing tool so the model knows what failed."""
     fail = ErrorTool("my_special_tool")
