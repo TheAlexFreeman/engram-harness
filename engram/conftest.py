@@ -49,15 +49,6 @@ def _is_engram_git_root() -> bool:
 # Tests skipped when engram is not the git root. Match by node-id substring so
 # class-level entries cover every method on the class.
 _MERGER_SKIPS: tuple[str, ...] = (
-    # Live-repo validators that inspect the actual engram/ content. In the
-    # merged layout, engram/core/memory/ contains harness session traces
-    # whose session_id format ('act-NNN') doesn't match the validator's
-    # expected 'core/memory/activity/YYYY/MM/DD/chat-NNN' pattern. The same
-    # content gets copied into the init-worktree seed tree, so the E2E
-    # validation test trips on it too.
-    "test_validate_memory_repo.py::ValidateMemoryRepoTests::test_current_seed_repo_passes_validation",
-    "test_cli_integration.py::test_validate_status_and_search_integration",
-    "test_setup_flows.py::SetupFlowTests::test_init_worktree_end_to_end_validation_passes",
     # Time-sensitive test with a hardcoded 'Last periodic review' date that
     # drifts past the 30-day threshold. Not layout-dependent; left skipped
     # to avoid flakiness until the test is reworked with time-machine.

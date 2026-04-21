@@ -145,7 +145,7 @@ def test_run_trace_bridge_minimal_session(repo: Path, memory: EngramMemory, tmp_
     rec = json.loads(lines[-1])
     assert rec["file"] == "core/memory/knowledge/celery.md"
     assert rec["helpfulness"] == HELPFULNESS_READ_THEN_EDIT
-    assert rec["session_id"] == memory.session_id
+    assert rec["session_id"] == f"core/{memory._session_dir_rel()}"
 
 
 def test_run_trace_bridge_dedupe_safe_to_rerun(

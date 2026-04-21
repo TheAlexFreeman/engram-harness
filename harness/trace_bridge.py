@@ -475,6 +475,7 @@ def _emit_access_entries(
     # match the existing (file, session_id, date) dedupe key.
     access_date = stats.session_date or datetime.now().date().isoformat()
     task_slug = _task_slug(stats.task) or memory.session_id
+    canonical_session_id = f"core/{memory._session_dir_rel()}"
 
     for idx, tc in enumerate(tool_calls):
         if tc.name != "read_file":
@@ -492,7 +493,7 @@ def _emit_access_entries(
             "task": task_slug,
             "helpfulness": round(helpfulness, 3),
             "note": note,
-            "session_id": memory.session_id,
+            "session_id": canonical_session_id,
         }
         access_path = memory.content_root / access_dir_rel / "ACCESS.jsonl"
         entries_by_file[access_path].append(entry)
@@ -508,7 +509,7 @@ def _emit_access_entries(
             "task": task_slug,
             "helpfulness": round(helpfulness, 3),
             "note": f"recall: {note}",
-            "session_id": memory.session_id,
+            "session_id": canonical_session_id,
         }
         access_path = memory.content_root / access_dir_rel / "ACCESS.jsonl"
         entries_by_file[access_path].append(entry)
