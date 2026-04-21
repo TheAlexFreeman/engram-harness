@@ -300,6 +300,19 @@ class EngramMemory:
             except Exception as exc:  # noqa: BLE001
                 _log.warning("Failed to commit session summary: %s", exc)
 
+    def commit(self, message: str, paths: list[str]) -> None:
+        """Stage and commit content-relative paths to the Engram repo.
+
+        Silently logs and returns on any git error so callers don't need to
+        guard against read-only or detached-HEAD repos.
+        """
+        try:
+            self.repo.add(*paths)
+            if self.repo.has_staged_changes(*paths):
+                self.repo.commit(f"[plan] {message}", paths=paths)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Failed to commit plan state (%s): %s", message, exc)
+
     # ------------------------------------------------------------------
     # Helpers exposed to the trace bridge
     # ------------------------------------------------------------------

@@ -91,7 +91,7 @@ harness = "harness"
 engram_mcp = "engram/core/tools"
 
 [tool.setuptools.package-data]
-harness = ["pricing.json"]
+harness = ["pricing.json", "py.typed"]
 
 [tool.ruff]
 line-length = 100

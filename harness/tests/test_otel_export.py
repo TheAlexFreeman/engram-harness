@@ -14,11 +14,69 @@ import pytest
 
 import harness.otel_export as otel_mod
 from harness.otel_export import (
+    _build_endpoint,
     _iso_to_ns,
     _session_has_errors,
     _session_trace_id,
     export_session_spans,
 )
+
+
+# ---------------------------------------------------------------------------
+# _build_endpoint URL normalization
+# ---------------------------------------------------------------------------
+
+
+def test_build_endpoint_base_url() -> None:
+    assert _build_endpoint("http://localhost:4318") == "http://localhost:4318/v1/traces"
+
+
+def test_build_endpoint_trailing_slash() -> None:
+    assert _build_endpoint("http://localhost:4318/") == "http://localhost:4318/v1/traces"
+
+
+def test_build_endpoint_multiple_trailing_slashes() -> None:
+    assert _build_endpoint("http://localhost:4318///") == "http://localhost:4318/v1/traces"
+
+
+def test_build_endpoint_already_has_path() -> None:
+    full = "http://localhost:4318/v1/traces"
+    assert _build_endpoint(full) == full
+
+
+def test_build_endpoint_full_url_with_trailing_slash() -> None:
+    assert _build_endpoint("http://localhost:4318/v1/traces/") == "http://localhost:4318/v1/traces"
+
+
+def test_export_uses_env_var_when_no_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When endpoint is not passed, OTEL_EXPORTER_OTLP_ENDPOINT is used as base URL."""
+    spans_file = tmp_path / "spans.jsonl"
+    spans_file.write_text("{}\n")  # non-empty so we get past the empty check
+
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://myhost:4318/")
+
+    with mock.patch.object(otel_mod, "_OTEL_AVAILABLE", False):
+        # Returns 0 because SDK not available, but env var was read (no error)
+        result = export_session_spans(spans_file, session_id="act-001")
+
+    assert result == 0
+
+
+def test_export_default_endpoint_when_no_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When endpoint and env var are both absent, uses the default localhost base."""
+    spans_file = tmp_path / "spans.jsonl"
+    spans_file.write_text("{}\n")
+
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+
+    with mock.patch.object(otel_mod, "_OTEL_AVAILABLE", False):
+        result = export_session_spans(spans_file, session_id="act-001")
+
+    assert result == 0
 
 
 # ---------------------------------------------------------------------------

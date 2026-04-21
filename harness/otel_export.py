@@ -32,19 +32,46 @@ except ImportError:
     _OTEL_AVAILABLE = False
 
 
+_DEFAULT_OTLP_BASE = "http://localhost:4318"
+
+
+def _build_endpoint(base_or_full: str) -> str:
+    """Normalize a base URL or full endpoint URL to the traces endpoint.
+
+    Strips trailing slashes from the input. If the result already ends with
+    ``/v1/traces``, it is returned unchanged. Otherwise ``/v1/traces`` is
+    appended.
+    """
+    url = base_or_full.rstrip("/")
+    if url.endswith("/v1/traces"):
+        return url
+    return url + "/v1/traces"
+
+
 def export_session_spans(
     spans_jsonl_path: Path,
     *,
-    endpoint: str = "http://localhost:4318/v1/traces",
+    endpoint: str | None = None,
     service_name: str = "engram-harness",
     session_id: str | None = None,
 ) -> int:
     """Export spans from a trace bridge JSONL file to an OTLP endpoint.
 
+    ``endpoint`` accepts either a full URL (``http://host:4318/v1/traces``) or
+    a base URL (``http://host:4318``); trailing slashes are stripped either way.
+    When omitted the value of ``OTEL_EXPORTER_OTLP_ENDPOINT`` env var is used,
+    falling back to ``http://localhost:4318``.
+
     Returns the number of spans exported. Returns 0 (without raising) if the
     OTel SDK is not installed, the spans file is missing/empty, or the session
     is sampled out.
     """
+    resolved_endpoint = _build_endpoint(
+        endpoint
+        if endpoint is not None
+        else os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", _DEFAULT_OTLP_BASE)
+    )
+
     if not _OTEL_AVAILABLE:
         _log.debug("opentelemetry-sdk not installed; skipping OTLP export")
         return 0
@@ -75,7 +102,7 @@ def export_session_spans(
         "service.name": service_name,
         "service.version": "0.1.0",
     })
-    exporter = OTLPSpanExporter(endpoint=endpoint)
+    exporter = OTLPSpanExporter(endpoint=resolved_endpoint)
     provider = TracerProvider(resource=resource)
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = provider.get_tracer("harness")
@@ -217,4 +244,4 @@ def _iso_to_ns(iso: str) -> int:
         return 0
 
 
-__all__ = ["export_session_spans", "_OTEL_AVAILABLE"]
+__all__ = ["export_session_spans", "_build_endpoint", "_OTEL_AVAILABLE"]

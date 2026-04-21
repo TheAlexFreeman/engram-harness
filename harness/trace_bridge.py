@@ -165,7 +165,7 @@ def run_trace_bridge(
 
             n = export_session_spans(
                 spans_path,
-                endpoint=otel_endpoint.rstrip("/") + "/v1/traces",
+                endpoint=otel_endpoint,
                 service_name="engram-harness",
                 session_id=memory.session_id,
             )

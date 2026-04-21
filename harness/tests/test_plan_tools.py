@@ -392,6 +392,61 @@ def test_find_active_plans_sorts_by_mtime(content_root: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Git provenance — commit() is called for write operations
+# ---------------------------------------------------------------------------
+
+
+def test_create_plan_calls_commit(mock_memory: MagicMock, content_root: Path) -> None:
+    creator = CreatePlan(mock_memory)
+    creator.run({"title": "Git test", "phases": [{"name": "P", "tasks": ["t"]}]})
+    mock_memory.commit.assert_called_once()
+    call_args = mock_memory.commit.call_args
+    msg, paths = call_args.args
+    assert "plan-001" in msg
+    assert any("plan.yaml" in p for p in paths)
+    assert any("run-state.json" in p for p in paths)
+
+
+def test_complete_phase_calls_commit(mock_memory: MagicMock, content_root: Path) -> None:
+    creator = CreatePlan(mock_memory)
+    completer = CompletePlan(mock_memory)
+    plan_id = _create_plan(creator)
+    mock_memory.commit.reset_mock()
+
+    completer.run({"plan_id": plan_id, "summary": "done"})
+
+    mock_memory.commit.assert_called_once()
+    msg, paths = mock_memory.commit.call_args.args
+    assert plan_id in msg
+    assert any("run-state.json" in p for p in paths)
+
+
+def test_record_failure_calls_commit(mock_memory: MagicMock, content_root: Path) -> None:
+    creator = CreatePlan(mock_memory)
+    recorder = RecordFailure(mock_memory)
+    plan_id = _create_plan(creator)
+    mock_memory.commit.reset_mock()
+
+    recorder.run({"plan_id": plan_id, "description": "it broke"})
+
+    mock_memory.commit.assert_called_once()
+    msg, paths = mock_memory.commit.call_args.args
+    assert plan_id in msg
+    assert any("run-state.json" in p for p in paths)
+
+
+def test_resume_plan_does_not_commit(mock_memory: MagicMock, content_root: Path) -> None:
+    creator = CreatePlan(mock_memory)
+    resuming = ResumePlan(mock_memory)
+    plan_id = _create_plan(creator)
+    mock_memory.commit.reset_mock()
+
+    resuming.run({"plan_id": plan_id})
+
+    mock_memory.commit.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Round-trip test
 # ---------------------------------------------------------------------------
 

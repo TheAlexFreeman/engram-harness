@@ -184,6 +184,10 @@ class CreatePlan:
         _save_run_state(plan_dir, run_state)
 
         rel = plan_dir.relative_to(content_root).as_posix()
+        self._memory.commit(
+            f"create {plan_id}",
+            [f"{rel}/plan.yaml", f"{rel}/run-state.json"],
+        )
         return (
             f"Plan created: **{plan_id}** — {title}\n"
             f"Path: `{rel}/`\n"
@@ -378,13 +382,22 @@ class CompletePlan:
         state["current_task"] = 0
         state["last_checkpoint"] = args.get("summary") or None
 
+        rel = plan_dir.relative_to(self._memory.content_root).as_posix()
         if state["current_phase"] >= len(phases):
             state["status"] = "complete"
             _save_run_state(plan_dir, state)
+            self._memory.commit(
+                f"complete phase {current_idx} of {plan_id}",
+                [f"{rel}/run-state.json"],
+            )
             result = f"Phase **{current_phase['name']}** complete. Plan **{plan_id}** is now finished.\n"
         else:
             next_phase = phases[state["current_phase"]]
             _save_run_state(plan_dir, state)
+            self._memory.commit(
+                f"complete phase {current_idx} of {plan_id}",
+                [f"{rel}/run-state.json"],
+            )
             result = (
                 f"Phase **{current_phase['name']}** complete. "
                 f"Next: **{next_phase['name']}** "
@@ -461,6 +474,12 @@ class RecordFailure:
             state["suggest_revision"] = True
 
         _save_run_state(plan_dir, state)
+
+        rel = plan_dir.relative_to(self._memory.content_root).as_posix()
+        self._memory.commit(
+            f"record failure in {plan_id}",
+            [f"{rel}/run-state.json"],
+        )
 
         result = (
             f"Failure recorded for plan **{plan_id}**, phase index {current_idx}.\n"
