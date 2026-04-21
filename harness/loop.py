@@ -170,6 +170,7 @@ def run(
     *,
     repeat_guard_threshold: int = 3,
     repeat_guard_message: str | None = None,
+    skip_end_session_commit: bool = False,
 ) -> RunResult:
     prior = memory.start_session(task)
     messages = mode.initial_messages(task=task, prior=prior, tools=tools)
@@ -191,10 +192,10 @@ def run(
 
     tracer.event("session_usage", **result.usage.as_trace_dict())
     if result.max_turns_reached:
-        memory.end_session(summary="(max turns reached)")
+        memory.end_session(summary="(max turns reached)", skip_commit=skip_end_session_commit)
         tracer.event("session_end", turns=result.turns_used, reason="max_turns")
     else:
-        memory.end_session(summary=result.final_text[:500])
+        memory.end_session(summary=result.final_text[:2000], skip_commit=skip_end_session_commit)
         tracer.event("session_end", turns=result.turns_used)
 
     return result

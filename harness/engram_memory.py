@@ -181,6 +181,10 @@ class EngramMemory:
         if relevant:
             sections.append(relevant)
 
+        active_plan = self._active_plan_briefing()
+        if active_plan:
+            sections.append(active_plan)
+
         return "".join(sections)
 
     def recall(self, query: str, k: int = 5) -> list[Memory]:
@@ -231,7 +235,7 @@ class EngramMemory:
     def record(self, content: str, kind: str = "note") -> None:
         self._records.append(_BufferedRecord(timestamp=datetime.now(), kind=kind, content=content))
 
-    def end_session(self, summary: str) -> None:
+    def end_session(self, summary: str, *, skip_commit: bool = False) -> None:
         rel_dir = self._session_dir_rel()
         summary_rel = f"{rel_dir}/summary.md"
         summary_abs = self.content_root / summary_rel
@@ -284,15 +288,16 @@ class EngramMemory:
         }
         write_with_frontmatter(summary_abs, fm, body)
 
-        try:
-            self.repo.add(summary_rel)
-            if self.repo.has_staged_changes(summary_rel):
-                self.repo.commit(
-                    f"[chat] harness session {self.session_id}",
-                    paths=[summary_rel],
-                )
-        except Exception as exc:  # noqa: BLE001
-            _log.warning("Failed to commit session summary: %s", exc)
+        if not skip_commit:
+            try:
+                self.repo.add(summary_rel)
+                if self.repo.has_staged_changes(summary_rel):
+                    self.repo.commit(
+                        f"[chat] harness session {self.session_id}",
+                        paths=[summary_rel],
+                    )
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("Failed to commit session summary: %s", exc)
 
     # ------------------------------------------------------------------
     # Helpers exposed to the trace bridge
@@ -341,6 +346,38 @@ class EngramMemory:
 
     def _session_dir_rel(self) -> str:
         return f"memory/activity/{self._session_path_fragment()}/{self.session_id}"
+
+    def _active_plan_briefing(self, max_chars: int = 2000) -> str:
+        """Return a brief briefing for the most recently active plan, if any."""
+        try:
+            from harness.tools.plan_tools import find_active_plans, _load_run_state, _load_plan_yaml
+        except ImportError:
+            return ""
+        active = find_active_plans(self.content_root)
+        if not active:
+            return ""
+        plan_dir = active[0]
+        try:
+            state = _load_run_state(plan_dir)
+            plan = _load_plan_yaml(plan_dir)
+        except (FileNotFoundError, Exception):
+            return ""
+        plan_id = state.get("plan_id", plan_dir.name)
+        title = plan.get("title", "?")
+        phases: list[dict] = plan.get("phases", [])
+        current_idx = int(state.get("current_phase", 0))
+        phase_name = phases[current_idx]["name"] if current_idx < len(phases) else "?"
+        rel = plan_dir.relative_to(self.content_root).as_posix()
+        lines = [
+            "\n## Active plan detected",
+            "",
+            f"**{plan_id}** — {title}",
+            f"Current phase ({current_idx + 1}/{len(phases)}): {phase_name}",
+            f"Path: `{rel}/`",
+            "",
+            "Call `resume_plan` with the plan_id above to get a full briefing and continue.",
+        ]
+        return "\n".join(lines) + "\n"
 
     def _task_relevant_excerpt(self, task: str, *, char_budget: int) -> str:
         if char_budget <= 200:

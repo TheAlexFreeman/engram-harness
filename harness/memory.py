@@ -25,7 +25,7 @@ class MemoryBackend(Protocol):
     def record(self, content: str, kind: str = "note") -> None:
         """Capture an observation during the session."""
 
-    def end_session(self, summary: str) -> None:
+    def end_session(self, summary: str, *, skip_commit: bool = False) -> None:
         """Wrap up. Persist whatever needs persisting."""
 
 
@@ -52,7 +52,7 @@ class FileMemory:
         stamp = datetime.now().isoformat(timespec="seconds")
         self._append(f"- `{stamp}` [{kind}] {content}\n")
 
-    def end_session(self, summary: str) -> None:
+    def end_session(self, summary: str, *, skip_commit: bool = False) -> None:
         self._append(f"\n**Summary:** {summary}\n")
 
     def _append(self, text: str) -> None:

@@ -103,6 +103,7 @@ def _build_memory(args, workspace: Path):
 
     from harness.engram_memory import EngramMemory, detect_engram_repo
     from harness.tools.recall import RecallMemory
+    from harness.tools.plan_tools import CreatePlan, ResumePlan, CompletePlan, RecordFailure
 
     repo_path = args.memory_repo
     if repo_path is None:
@@ -131,7 +132,8 @@ def _build_memory(args, workspace: Path):
         f"[engram] session={engram.session_id} repo={engram.content_root}",
         file=sys.stderr,
     )
-    return engram, engram, [RecallMemory(engram)]
+    plan_tools = [CreatePlan(engram), ResumePlan(engram), CompletePlan(engram), RecordFailure(engram)]
+    return engram, engram, [RecallMemory(engram)] + plan_tools
 
 
 _INTERACTIVE_SESSION_LABEL = "Interactive session"
@@ -344,8 +346,14 @@ def main() -> None:
 
         if args.mode == "native":
             from harness.modes.native import NativeMode
+            from harness.prompts import system_prompt_native
 
-            mode = NativeMode(client=client, model=args.model, tools=tools)
+            mode = NativeMode(
+                client=client,
+                model=args.model,
+                tools=tools,
+                system=system_prompt_native(with_plan_tools=engram_memory is not None),
+            )
         else:
             from harness.modes.text import TextMode
 
@@ -371,6 +379,9 @@ def main() -> None:
         tracer_ctx = Tracer(trace_path)
 
     stream_sink = StderrStreamPrinter() if args.stream else NullStreamSink()
+
+    bridge_default = engram_memory is not None
+    bridge_enabled = args.trace_to_engram if args.trace_to_engram is not None else bridge_default
 
     if args.interactive:
         total_usage = Usage.zero()
@@ -484,11 +495,11 @@ def main() -> None:
 
             if session_started:
                 summary = (
-                    (last_final or "")[:500]
+                    (last_final or "")[:2000]
                     if last_final
                     else "(interactive exit before any assistant reply)"
                 )
-                memory.end_session(summary=summary)
+                memory.end_session(summary=summary, skip_commit=bridge_enabled)
                 tracer.event("session_usage", **total_usage.as_trace_dict())
                 tracer.event(
                     "session_end",
@@ -510,10 +521,9 @@ def main() -> None:
                 max_parallel_tools=args.max_parallel_tools,
                 stream_sink=stream_sink,
                 repeat_guard_threshold=args.repeat_guard_threshold,
+                skip_end_session_commit=bridge_enabled,
             )
 
-    bridge_default = engram_memory is not None
-    bridge_enabled = args.trace_to_engram if args.trace_to_engram is not None else bridge_default
     if bridge_enabled and engram_memory is not None:
         try:
             from harness.trace_bridge import run_trace_bridge

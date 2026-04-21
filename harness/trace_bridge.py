@@ -79,6 +79,8 @@ class _SessionStats:
     # if available, else the earliest event). Used for ACCESS rows so reruns
     # on a later day don't collide with the (file, session_id, date) dedupe.
     session_date: str = ""
+    # turn number → total cost for that turn (from "usage" events)
+    turn_costs: dict[int, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -137,7 +139,7 @@ def run_trace_bridge(
     _write_artifact(reflection_path, reflection_text)
     written.append(_relpath(memory, reflection_path))
 
-    spans = _build_spans(memory, tool_calls, events)
+    spans = _build_spans(memory, tool_calls, events, stats)
     _write_jsonl(spans_path, spans)
     written.append(_relpath(memory, spans_path))
 
@@ -211,6 +213,10 @@ def _aggregate_stats(events: list[dict[str, Any]]) -> _SessionStats:
             s.total_input_tokens = int(ev.get("input_tokens", 0) or 0)
             s.total_output_tokens = int(ev.get("output_tokens", 0) or 0)
             s.total_cost_usd = float(ev.get("total_cost_usd", 0.0) or 0.0)
+        elif kind == "usage":
+            turn = int(ev.get("turn", -1))
+            if turn >= 0:
+                s.turn_costs[turn] = float(ev.get("total_cost_usd", 0.0) or 0.0)
     return s
 
 
@@ -420,10 +426,20 @@ def _build_spans(
     memory: EngramMemory,
     calls: list[_ToolCall],
     events: list[dict[str, Any]],
+    stats: _SessionStats,
 ) -> list[dict[str, Any]]:
     session_id = f"memory/activity/{memory._session_path_fragment()}/{memory.session_id}"
+
+    # Count calls per turn so we can split the turn's cost evenly.
+    calls_per_turn: dict[int, int] = defaultdict(int)
+    for tc in calls:
+        calls_per_turn[tc.turn] += 1
+
     spans: list[dict[str, Any]] = []
     for tc in calls:
+        n = calls_per_turn[tc.turn] or 1
+        turn_cost = stats.turn_costs.get(tc.turn, 0.0)
+        span_cost = round(turn_cost / n, 6)
         spans.append(
             {
                 "span_id": _short_hash(f"{session_id}:{tc.seq}:{tc.name}:{tc.timestamp}"),
@@ -432,6 +448,7 @@ def _build_spans(
                 "span_type": "tool_call",
                 "name": tc.name,
                 "status": "error" if tc.is_error else "ok",
+                "cost": {"usd": span_cost},
                 "metadata": {
                     "turn": tc.turn,
                     "seq": tc.seq,

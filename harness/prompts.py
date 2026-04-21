@@ -35,8 +35,20 @@ def _render_tool(tool: Tool) -> str:
     )
 
 
-def system_prompt_native() -> str:
-    return f"{_IDENTITY}\n\n{_RULES}\n\n{_OUTPUT_NATIVE}"
+_PLAN_TOOLS_SECTION = """\
+## Plan tools
+You have access to multi-session plan management tools:
+- `create_plan` — create a structured multi-phase plan
+- `resume_plan` — load and brief a plan's current state
+- `complete_phase` — seal the current phase and advance
+- `record_failure` — log a failed attempt with context
+
+Use plans for tasks that span multiple sessions or have distinct verifiable phases."""
+
+
+def system_prompt_native(*, with_plan_tools: bool = False) -> str:
+    extra = f"\n\n{_PLAN_TOOLS_SECTION}" if with_plan_tools else ""
+    return f"{_IDENTITY}\n\n{_RULES}\n\n{_OUTPUT_NATIVE}{extra}"
 
 
 def system_prompt_text(tools: dict[str, Tool]) -> str:

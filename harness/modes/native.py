@@ -8,11 +8,18 @@ from harness.usage import Usage
 
 
 class NativeMode:
-    def __init__(self, client: anthropic.Anthropic, model: str, tools: dict[str, Tool]):
+    def __init__(
+        self,
+        client: anthropic.Anthropic,
+        model: str,
+        tools: dict[str, Tool],
+        *,
+        system: str | None = None,
+    ):
         self.client = client
         self.model = model
         self.tools = tools
-        self._system = system_prompt_native()
+        self._system = system if system is not None else system_prompt_native()
         self._tool_schemas = [
             {
                 "name": t.name,
