@@ -171,6 +171,16 @@ def main() -> None:
     )
     parser.add_argument("--max-turns", type=int, default=100)
     parser.add_argument(
+        "--repeat-guard-threshold",
+        type=int,
+        default=3,
+        metavar="N",
+        help=(
+            "Abort repetitive tool loops: after N consecutive identical tool batches, "
+            "inject a user nudge. Use 0 to disable."
+        ),
+    )
+    parser.add_argument(
         "--max-parallel-tools",
         type=int,
         default=4,
@@ -341,6 +351,7 @@ def main() -> None:
             max_turns=args.max_turns,
             max_parallel_tools=args.max_parallel_tools,
             stream_sink=stream_sink,
+            repeat_guard_threshold=args.repeat_guard_threshold,
         )
 
     bridge_default = engram_memory is not None

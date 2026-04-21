@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -7,9 +8,25 @@ from harness.memory import MemoryBackend
 from harness.modes.base import Mode
 from harness.pricing import PricingTable, compute_cost, load_pricing
 from harness.stream import StreamSink
-from harness.tools import Tool, execute
+from harness.tools import Tool, ToolCall, execute
 from harness.trace import TraceSink
 from harness.usage import Usage
+
+_DEFAULT_REPEAT_GUARD_MESSAGE = (
+    "[harness] Repetition detected: the same tool batch was requested multiple "
+    "times in a row. Stop repeating identical tool calls. Change strategy: use "
+    "different tools or arguments, answer from context you already have, or "
+    "summarize and finish."
+)
+
+
+def _tool_batch_signature(tool_calls: list[ToolCall]) -> tuple[tuple[str, str], ...]:
+    """Stable, order-independent signature for a batch of tool calls."""
+    parts: list[tuple[str, str]] = []
+    for c in tool_calls:
+        blob = json.dumps(c.args, sort_keys=True, default=str, separators=(",", ":"))
+        parts.append((c.name, blob))
+    return tuple(sorted(parts))
 
 
 @dataclass
@@ -28,6 +45,9 @@ def run(
     pricing: PricingTable | None = None,
     max_parallel_tools: int = 4,
     stream_sink: StreamSink | None = None,
+    *,
+    repeat_guard_threshold: int = 3,
+    repeat_guard_message: str | None = None,
 ) -> RunResult:
     if pricing is None:
         pricing = load_pricing()
@@ -37,6 +57,10 @@ def run(
     tracer.event("session_start", task=task)
 
     total = Usage.zero()
+
+    prev_batch_sig: tuple[tuple[str, str], ...] | None = None
+    repeat_streak = 0
+    nudge_text = repeat_guard_message or _DEFAULT_REPEAT_GUARD_MESSAGE
 
     for turn in range(max_turns):
         response = mode.complete(messages, stream=stream_sink)
@@ -90,6 +114,32 @@ def run(
             messages.extend(tool_results_msg)
         else:
             messages.append(tool_results_msg)
+
+        if repeat_guard_threshold > 0 and tool_calls:
+            batch_sig = _tool_batch_signature(tool_calls)
+            if prev_batch_sig is not None and batch_sig == prev_batch_sig:
+                repeat_streak += 1
+            else:
+                repeat_streak = 1
+            prev_batch_sig = batch_sig
+
+            if repeat_streak >= repeat_guard_threshold:
+                sig_preview = str(batch_sig)
+                if len(sig_preview) > 500:
+                    sig_preview = sig_preview[:497] + "..."
+                tracer.event(
+                    "repetition_guard",
+                    turn=turn,
+                    threshold=repeat_guard_threshold,
+                    signature=sig_preview,
+                )
+                memory.record(
+                    f"repetition_guard: same tool batch {repeat_streak}x "
+                    f"(threshold={repeat_guard_threshold})",
+                    kind="error",
+                )
+                messages.append({"role": "user", "content": nudge_text})
+                repeat_streak = 0
 
     tracer.event("session_usage", **total.as_trace_dict())
     tracer.event("session_end", turns=max_turns, reason="max_turns")

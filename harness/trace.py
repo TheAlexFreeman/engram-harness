@@ -125,6 +125,11 @@ class ConsoleTracePrinter:
                 line = f"session end: turns={turns} reason={reason}"
             else:
                 line = f"session end: turns={turns}"
+        elif kind == "repetition_guard":
+            turn = data.get("turn", "")
+            th = data.get("threshold", "")
+            sig = str(data.get("signature", ""))
+            line = f"repetition_guard: turn={turn} threshold={th} sig={_truncate(sig, 200)}"
         else:
             line = f"[trace] {kind} {data!r}"
 

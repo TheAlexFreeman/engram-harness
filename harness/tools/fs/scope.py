@@ -52,8 +52,15 @@ def normalize_workspace_relative(relative: str) -> str:
         if match:
             s = match.group(1)
 
-    # Normalize path separators and remove any remaining invalid prefix
-    s = s.replace("\\", "/").strip("./")
+    # Normalize path separators
+    s = s.replace("\\", "/")
+
+    # Never strip "./" when parent segments are present — it destroys ".." (escape tests).
+    path_parts = [p for p in s.split("/") if p != ""]
+    if ".." in path_parts:
+        return s.strip()
+
+    s = s.strip("./")
 
     # Basic sanity: if empty or looks like URL/absolute, fallback to something safe
     if not s or s.startswith(("http", "/", "~", "C:")):

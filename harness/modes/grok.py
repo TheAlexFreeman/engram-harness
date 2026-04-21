@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import sys
 from typing import Any, cast
@@ -10,6 +9,12 @@ from openai.types.responses.response import Response
 
 from harness.prompts import system_prompt_native
 from harness.stream import StreamSink
+from harness.tool_args_canon import (
+    arguments_json_canonical,
+    canonicalize_tool_args,
+    maybe_canonicalize_function_call_item,
+    parse_tool_arguments,
+)
 from harness.tools import Tool, ToolCall, ToolResult
 from harness.usage import Usage
 
@@ -69,7 +74,11 @@ def _build_tool_schemas(harness_tools: dict[str, Tool]) -> list[dict[str, Any]]:
     return schemas
 
 
-def _instructions_and_input(messages: list[dict], default_instructions: str) -> tuple[str, list[dict[str, Any]]]:
+def _instructions_and_input(
+    messages: list[dict],
+    default_instructions: str,
+    tools: dict[str, Tool] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
     """Convert chat-style history to Responses `instructions` + `input` items."""
     instructions = default_instructions
     start = 0
@@ -90,6 +99,8 @@ def _instructions_and_input(messages: list[dict], default_instructions: str) -> 
                 for item in saved:
                     if isinstance(item, dict) and _grok_saved_item_skip_for_input(item):
                         continue
+                    if isinstance(item, dict):
+                        maybe_canonicalize_function_call_item(item, tools)
                     input_items.append(item)
                 continue
             content = m.get("content")
@@ -102,11 +113,17 @@ def _instructions_and_input(messages: list[dict], default_instructions: str) -> 
                 call_id = tc.get("id") or tc.get("call_id")
                 if not call_id:
                     continue
+                fn_name = fn.get("name", "")
+                raw_args = fn.get("arguments") or "{}"
+                if isinstance(fn_name, str) and tools and fn_name in tools:
+                    raw_args = arguments_json_canonical(
+                        raw_args, fn_name, tools[fn_name]
+                    )
                 input_items.append(
                     {
                         "type": "function_call",
-                        "name": fn.get("name", ""),
-                        "arguments": fn.get("arguments") or "{}",
+                        "name": fn_name,
+                        "arguments": raw_args,
                         "call_id": call_id,
                     }
                 )
@@ -168,7 +185,9 @@ class GrokMode:
         self, messages: list[dict], *, stream: StreamSink | None = None
     ) -> Response:
         """Call Grok via xAI Responses API (native search + function tools)."""
-        instructions, input_items = _instructions_and_input(messages, self._system)
+        instructions, input_items = _instructions_and_input(
+            messages, self._system, self.tools
+        )
         create_kw = self._responses_api_kwargs(instructions, input_items)
         if stream is None:
             return self.client.responses.create(**create_kw)
@@ -290,7 +309,12 @@ class GrokMode:
     def as_assistant_message(self, response: Response) -> dict:
         """Serialize for chat-style history; `grok_saved_output` preserves Responses state."""
         result: dict[str, Any] = {"role": "assistant"}
-        result["grok_saved_output"] = [it.model_dump(mode="json") for it in response.output]
+        result["grok_saved_output"] = [
+            it.model_dump(mode="json") for it in response.output
+        ]
+        for item in result["grok_saved_output"]:
+            if isinstance(item, dict):
+                maybe_canonicalize_function_call_item(item, self.tools)
 
         text = response.output_text
         if text:
@@ -303,13 +327,16 @@ class GrokMode:
                 name = getattr(item, "name", None)
                 if not call_id or not name:
                     continue
+                raw = getattr(item, "arguments", "") or "{}"
+                if name in self.tools:
+                    raw = arguments_json_canonical(raw, name, self.tools[name])
                 tool_calls.append(
                     {
                         "id": call_id,
                         "type": "function",
                         "function": {
                             "name": name,
-                            "arguments": getattr(item, "arguments", "") or "{}",
+                            "arguments": raw,
                         },
                     }
                 )
@@ -328,10 +355,8 @@ class GrokMode:
             if not name or name not in self.tools:
                 continue
             raw = getattr(item, "arguments", "") or "{}"
-            try:
-                args = json.loads(raw) if isinstance(raw, str) else {}
-            except (json.JSONDecodeError, TypeError):
-                args = {}
+            args = parse_tool_arguments(raw)
+            args = canonicalize_tool_args(name, args, self.tools.get(name))
             calls.append(
                 ToolCall(
                     name=name,

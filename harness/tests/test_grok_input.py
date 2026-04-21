@@ -1,6 +1,10 @@
 """Tests for Grok Responses `input` construction."""
 
+import json
+from pathlib import Path
+
 from harness.modes.grok import _instructions_and_input  # noqa: PLC2701
+from harness.tools.fs import ReadFile, WorkspaceScope
 
 
 def test_grok_saved_output_drops_reasoning_and_native_search_calls():
@@ -61,3 +65,28 @@ def test_grok_saved_output_keeps_encrypted_reasoning():
     ]
     _, input_items = _instructions_and_input(messages, system)
     assert any(it.get("type") == "reasoning" for it in input_items)
+
+
+def test_grok_input_canonicalizes_malformed_read_file_path_in_saved_output():
+    system = "sys"
+    scope = WorkspaceScope(Path("."))
+    tools = {"read_file": ReadFile(scope)}
+    ugly = '{"path":"\\"\\\\\\"progress.md\\\\\\"\\""}'
+    messages = [
+        {"role": "system", "content": system},
+        {
+            "role": "assistant",
+            "grok_saved_output": [
+                {
+                    "type": "function_call",
+                    "name": "read_file",
+                    "arguments": ugly,
+                    "call_id": "call_1",
+                },
+            ],
+        },
+    ]
+    _, input_items = _instructions_and_input(messages, system, tools)
+    fc = next(i for i in input_items if i.get("type") == "function_call")
+    args = json.loads(fc["arguments"])
+    assert args["path"] == "progress.md"
