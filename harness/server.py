@@ -44,6 +44,7 @@ from harness.server_models import (
     UsageInfo,
 )
 from harness.session_store import SessionRecord, SessionStore
+from harness.sinks.session_tracker import SessionStateTrackerSink
 from harness.sinks.sse import SSEEvent, SSEStreamSink, SSETraceSink
 from harness.usage import Usage
 
@@ -81,6 +82,7 @@ class ManagedSession:
     turn_number: int = 0
     messages: list[dict] = field(default_factory=list)
     final_text: str | None = None
+
 
 
 _sessions: dict[str, ManagedSession] = {}
@@ -392,10 +394,14 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     scope = WorkspaceScope(root=workspace)
     base_tools = build_tools(scope, profile=tool_profile)
 
+    # Shared list passed to both the tracker and the session so events
+    # recorded during the run are visible in the ManagedSession.
+    tool_call_log: list[dict] = []
+    state_tracker = SessionStateTrackerSink(tool_call_log)
     components = build_session(
         config,
         tools=base_tools,
-        extra_trace_sinks=[sse_trace],
+        extra_trace_sinks=[sse_trace, state_tracker],
         stream_sink_override=sse_stream,
     )
 
@@ -407,6 +413,7 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         task=req.task,
         interactive=req.interactive,
         created_at=_now(),
+        tool_call_log=tool_call_log,
     )
 
     with _sessions_lock:

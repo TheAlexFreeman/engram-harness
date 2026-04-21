@@ -115,8 +115,9 @@ def run_until_idle(
                 max_turns_reached=False,
             )
 
+        batch_start_seq = tool_seq
         for call in tool_calls:
-            tracer.event("tool_call", name=call.name, args=call.args, seq=tool_seq)
+            tracer.event("tool_call", name=call.name, args=call.args, turn=turn, seq=tool_seq)
             tool_seq += 1
 
         if max_parallel_tools <= 1 or len(tool_calls) == 1:
@@ -132,12 +133,13 @@ def run_until_idle(
                 futures = [pool.submit(execute, c, tools) for c in tool_calls]
                 results = [f.result() for f in futures]
 
-        for result in results:
+        for i, result in enumerate(results):
             tracer.event(
                 "tool_result",
                 name=result.call.name,
                 is_error=result.is_error,
                 content_preview=result.content[:200],
+                seq=batch_start_seq + i,
             )
             if result.is_error:
                 memory.record(
