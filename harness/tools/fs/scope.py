@@ -14,6 +14,14 @@ MAX_GREP_BYTES_PER_FILE = 512_000
 TRUNCATION_SUFFIX = "\n\n[harness: output truncated]"
 
 
+def normalize_workspace_relative(relative: str) -> str:
+    """Strip outer quote pairs models sometimes emit inside JSON strings (e.g. ``\\"path/to/file\\"``)."""
+    s = relative.strip()
+    while len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+        s = s[1:-1].strip()
+    return s
+
+
 def truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
     if max_chars <= 0 or len(text) <= max_chars:
         return text, False
@@ -39,6 +47,7 @@ class WorkspaceScope:
         return self.root.resolve()
 
     def resolve(self, relative: str) -> Path:
+        relative = normalize_workspace_relative(relative)
         p = (self.root / relative).resolve()
         root_r = self._root_resolved()
         if root_r not in p.parents and p != root_r:

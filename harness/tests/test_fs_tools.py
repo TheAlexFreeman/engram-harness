@@ -33,6 +33,16 @@ def test_workspace_scope_escape(tmp_path: Path) -> None:
         s.resolve("..")
 
 
+def test_workspace_scope_strips_llm_outer_quotes(tmp_path: Path) -> None:
+    """Models sometimes pass JSON string values that still contain quote characters."""
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "a.txt").write_text("ok", encoding="utf-8")
+    s = _scope(tmp_path)
+    assert s.resolve('"nested/a.txt"') == (tmp_path / "nested" / "a.txt").resolve()
+    assert ReadFile(s).run({"path": '"nested/a.txt"'}) == "ok"
+    assert "a.txt" in ListFiles(s).run({"path": '"nested"'})
+
+
 def test_read_file_full_and_lines(tmp_path: Path) -> None:
     p = tmp_path / "a.txt"
     p.write_text("line1\nline2\nline3\n", encoding="utf-8")
