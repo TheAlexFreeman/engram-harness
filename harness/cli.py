@@ -10,7 +10,7 @@ import anthropic
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from harness.loop import run
+from harness.loop import run, run_until_idle
 from harness.memory import FileMemory
 from harness.stream import NullStreamSink, StderrStreamPrinter
 from harness.tools import Tool
@@ -34,6 +34,7 @@ from harness.tools.search import WebSearch
 from harness.tools.todos import AnalyzeTodos, ReadTodos, UpdateTodo, WriteTodos
 from harness.tools.x_search import XSearch
 from harness.trace import CompositeTracer, ConsoleTracePrinter, Tracer
+from harness.usage import Usage
 
 
 def build_tools(scope: WorkspaceScope, *, extra: list[Tool] | None = None) -> dict[str, Tool]:
@@ -133,6 +134,18 @@ def _build_memory(args, workspace: Path):
     return engram, engram, [RecallMemory(engram)]
 
 
+_INTERACTIVE_SESSION_LABEL = "Interactive session"
+_INTERACTIVE_EXIT = frozenset({"exit", "quit"})
+
+
+def _read_interactive_line() -> str | None:
+    """Read one line from stdin; return None on EOF."""
+    try:
+        return input()
+    except EOFError:
+        return None
+
+
 def _ensure_workspace_in_gitignore(workspace: Path) -> None:
     git_root = _find_git_root(workspace)
     if git_root is None:
@@ -160,7 +173,25 @@ def main() -> None:
     load_dotenv(Path(__file__).resolve().parent / ".env")
 
     parser = argparse.ArgumentParser(prog="harness")
-    parser.add_argument("task", help="What you want the agent to do.")
+    parser.add_argument(
+        "task",
+        nargs="?",
+        default=None,
+        help=(
+            "What you want the agent to do. Required unless --interactive. "
+            "With --interactive, optional opening message (then REPL reads more on stdin)."
+        ),
+    )
+    parser.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help=(
+            "Interactive REPL: keep conversation context across follow-up instructions read "
+            "from stdin. Type 'exit' or 'quit', or press Ctrl+D (EOF), to stop. "
+            "Prompt is written to stderr."
+        ),
+    )
     parser.add_argument("--workspace", default=".", help="Directory the agent may read/write.")
     parser.add_argument("--mode", choices=["native", "text"], default="native")
     parser.add_argument(
@@ -273,6 +304,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if not args.interactive and (args.task is None or not str(args.task).strip()):
+        parser.error("task is required unless --interactive is set")
+
     workspace = Path(args.workspace).resolve()
     workspace.mkdir(parents=True, exist_ok=True)
     _ensure_workspace_in_gitignore(workspace)
@@ -327,10 +361,7 @@ def main() -> None:
         trace_path.parent.mkdir(parents=True, exist_ok=True)
         trace_path.write_text("", encoding="utf-8")
     else:
-        trace_path = (
-            Path("traces")
-            / f"{datetime.now():%Y%m%d-%H%M%S}-{actions_suffix}.jsonl"
-        )
+        trace_path = Path("traces") / f"{datetime.now():%Y%m%d-%H%M%S}-{actions_suffix}.jsonl"
 
     if args.trace_live:
         tracer_ctx: CompositeTracer | Tracer = CompositeTracer(
@@ -341,18 +372,145 @@ def main() -> None:
 
     stream_sink = StderrStreamPrinter() if args.stream else NullStreamSink()
 
-    with tracer_ctx as tracer:
-        result = run(
-            args.task,
-            mode,
-            tools,
-            memory,
-            tracer,
-            max_turns=args.max_turns,
-            max_parallel_tools=args.max_parallel_tools,
-            stream_sink=stream_sink,
-            repeat_guard_threshold=args.repeat_guard_threshold,
-        )
+    if args.interactive:
+        total_usage = Usage.zero()
+        total_turns = 0
+        last_final: str | None = None
+        session_started = False
+        messages: list[dict] = []
+
+        with tracer_ctx as tracer:
+            try:
+                opener = (args.task or "").strip()
+
+                if opener:
+                    prior = memory.start_session(opener)
+                    messages = mode.initial_messages(task=opener, prior=prior, tools=tools)
+                    tracer.event("session_start", task=opener)
+                    session_started = True
+                    r0 = run_until_idle(
+                        messages,
+                        mode,
+                        tools,
+                        memory,
+                        tracer,
+                        max_turns=args.max_turns,
+                        max_parallel_tools=args.max_parallel_tools,
+                        stream_sink=stream_sink,
+                        repeat_guard_threshold=args.repeat_guard_threshold,
+                    )
+                    total_usage = total_usage + r0.usage
+                    total_turns += r0.turns_used
+                    last_final = r0.final_text
+                    print("\n" + "=" * 60)
+                    print(r0.final_text)
+                    print("=" * 60)
+                else:
+                    first: str | None = None
+                    while first is None:
+                        print("harness> ", end="", file=sys.stderr, flush=True)
+                        raw = _read_interactive_line()
+                        if raw is None:
+                            break
+                        s = raw.strip()
+                        if not s:
+                            continue
+                        if s.lower() in _INTERACTIVE_EXIT:
+                            break
+                        first = s
+
+                    if first is None:
+                        pass
+                    else:
+                        prior = memory.start_session(_INTERACTIVE_SESSION_LABEL)
+                        messages = mode.initial_messages(task=first, prior=prior, tools=tools)
+                        tracer.event(
+                            "session_start",
+                            task=_INTERACTIVE_SESSION_LABEL,
+                            opener=first,
+                        )
+                        session_started = True
+                        r0 = run_until_idle(
+                            messages,
+                            mode,
+                            tools,
+                            memory,
+                            tracer,
+                            max_turns=args.max_turns,
+                            max_parallel_tools=args.max_parallel_tools,
+                            stream_sink=stream_sink,
+                            repeat_guard_threshold=args.repeat_guard_threshold,
+                        )
+                        total_usage = total_usage + r0.usage
+                        total_turns += r0.turns_used
+                        last_final = r0.final_text
+                        print("\n" + "=" * 60)
+                        print(r0.final_text)
+                        print("=" * 60)
+
+                while session_started:
+                    print("harness> ", end="", file=sys.stderr, flush=True)
+                    raw = _read_interactive_line()
+                    if raw is None:
+                        break
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    if line.lower() in _INTERACTIVE_EXIT:
+                        break
+
+                    tracer.event("interactive_turn", chars=len(line))
+                    messages.append({"role": "user", "content": line})
+                    r = run_until_idle(
+                        messages,
+                        mode,
+                        tools,
+                        memory,
+                        tracer,
+                        max_turns=args.max_turns,
+                        max_parallel_tools=args.max_parallel_tools,
+                        stream_sink=stream_sink,
+                        repeat_guard_threshold=args.repeat_guard_threshold,
+                    )
+                    total_usage = total_usage + r.usage
+                    total_turns += r.turns_used
+                    last_final = r.final_text
+                    print("\n" + "=" * 60)
+                    print(r.final_text)
+                    print("=" * 60)
+
+            except KeyboardInterrupt:
+                print("\n[interrupt]", file=sys.stderr)
+
+            if session_started:
+                summary = (
+                    (last_final or "")[:500]
+                    if last_final
+                    else "(interactive exit before any assistant reply)"
+                )
+                memory.end_session(summary=summary)
+                tracer.event("session_usage", **total_usage.as_trace_dict())
+                tracer.event(
+                    "session_end",
+                    turns=total_turns,
+                    reason="interactive_exit",
+                )
+
+        interactive_usage = total_usage
+    else:
+        interactive_usage = None
+        with tracer_ctx as tracer:
+            batch_result = run(
+                str(args.task),
+                mode,
+                tools,
+                memory,
+                tracer,
+                max_turns=args.max_turns,
+                max_parallel_tools=args.max_parallel_tools,
+                stream_sink=stream_sink,
+                repeat_guard_threshold=args.repeat_guard_threshold,
+            )
 
     bridge_default = engram_memory is not None
     bridge_enabled = args.trace_to_engram if args.trace_to_engram is not None else bridge_default
@@ -370,10 +528,14 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001
             print(f"[warning] trace bridge failed: {exc}", file=sys.stderr)
 
-    print("\n" + "=" * 60)
-    print(result.final_text)
-    print("=" * 60)
-    u = result.usage
+    if args.interactive:
+        assert interactive_usage is not None
+        u = interactive_usage
+    else:
+        print("\n" + "=" * 60)
+        print(batch_result.final_text)
+        print("=" * 60)
+        u = batch_result.usage
     print(
         f"tokens: in={u.input_tokens:,} out={u.output_tokens:,} "
         f"cache_read={u.cache_read_tokens:,} cache_write={u.cache_write_tokens:,} "

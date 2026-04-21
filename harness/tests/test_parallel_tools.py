@@ -84,8 +84,11 @@ class RecordingMemory:
     prior: str = ""
     notes: list[tuple[str, str]] = field(default_factory=list)
     summary: str | None = None
+    start_calls: int = 0
+    end_calls: int = 0
 
     def start_session(self, task: str) -> str:
+        self.start_calls += 1
         return self.prior
 
     def recall(self, query: str, k: int = 5):
@@ -95,6 +98,7 @@ class RecordingMemory:
         self.notes.append((kind, content))
 
     def end_session(self, summary: str) -> None:
+        self.end_calls += 1
         self.summary = summary
 
 

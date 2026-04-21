@@ -33,10 +33,12 @@ def _tool_batch_signature(tool_calls: list[ToolCall]) -> tuple[tuple[str, str], 
 class RunResult:
     final_text: str
     usage: Usage
+    turns_used: int = 0
+    max_turns_reached: bool = False
 
 
-def run(
-    task: str,
+def run_until_idle(
+    messages: list[dict],
     mode: Mode,
     tools: dict[str, Tool],
     memory: MemoryBackend,
@@ -49,12 +51,16 @@ def run(
     repeat_guard_threshold: int = 3,
     repeat_guard_message: str | None = None,
 ) -> RunResult:
+    """Run model/tool turns until the assistant responds without tool calls or
+    ``max_turns`` is hit.
+
+    Mutates ``messages`` in place. Does not call ``memory.start_session`` /
+    ``end_session`` or emit ``session_start`` / ``session_end``. The last
+    message in ``messages`` must already be the latest user turn (or initial
+    bootstrap) expected by the model.
+    """
     if pricing is None:
         pricing = load_pricing()
-
-    prior = memory.start_session(task)
-    messages = mode.initial_messages(task=task, prior=prior, tools=tools)
-    tracer.event("session_start", task=task)
 
     total = Usage.zero()
 
@@ -75,10 +81,12 @@ def run(
         tool_calls = mode.extract_tool_calls(response)
         if not tool_calls:
             final = mode.final_text(response)
-            memory.end_session(summary=final[:500])
-            tracer.event("session_usage", **total.as_trace_dict())
-            tracer.event("session_end", turns=turn + 1)
-            return RunResult(final_text=final, usage=total)
+            return RunResult(
+                final_text=final,
+                usage=total,
+                turns_used=turn + 1,
+                max_turns_reached=False,
+            )
 
         for call in tool_calls:
             tracer.event("tool_call", name=call.name, args=call.args)
@@ -141,10 +149,52 @@ def run(
                 messages.append({"role": "user", "content": nudge_text})
                 repeat_streak = 0
 
-    tracer.event("session_usage", **total.as_trace_dict())
-    tracer.event("session_end", turns=max_turns, reason="max_turns")
-    memory.end_session(summary="(max turns reached)")
     return RunResult(
         final_text="(max turns reached without completion)",
         usage=total,
+        turns_used=max_turns,
+        max_turns_reached=True,
     )
+
+
+def run(
+    task: str,
+    mode: Mode,
+    tools: dict[str, Tool],
+    memory: MemoryBackend,
+    tracer: TraceSink,
+    max_turns: int = 100,
+    pricing: PricingTable | None = None,
+    max_parallel_tools: int = 4,
+    stream_sink: StreamSink | None = None,
+    *,
+    repeat_guard_threshold: int = 3,
+    repeat_guard_message: str | None = None,
+) -> RunResult:
+    prior = memory.start_session(task)
+    messages = mode.initial_messages(task=task, prior=prior, tools=tools)
+    tracer.event("session_start", task=task)
+
+    result = run_until_idle(
+        messages,
+        mode,
+        tools,
+        memory,
+        tracer,
+        max_turns=max_turns,
+        pricing=pricing,
+        max_parallel_tools=max_parallel_tools,
+        stream_sink=stream_sink,
+        repeat_guard_threshold=repeat_guard_threshold,
+        repeat_guard_message=repeat_guard_message,
+    )
+
+    tracer.event("session_usage", **result.usage.as_trace_dict())
+    if result.max_turns_reached:
+        memory.end_session(summary="(max turns reached)")
+        tracer.event("session_end", turns=result.turns_used, reason="max_turns")
+    else:
+        memory.end_session(summary=result.final_text[:500])
+        tracer.event("session_end", turns=result.turns_used)
+
+    return result
