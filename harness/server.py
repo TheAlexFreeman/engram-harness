@@ -11,11 +11,13 @@ Run: uvicorn harness.server:app --host 127.0.0.1 --port 8420
 from __future__ import annotations
 
 import asyncio
+import os
 import queue as stdlib_queue
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +85,49 @@ class ManagedSession:
     messages: list[dict] = field(default_factory=list)
     final_text: str | None = None
 
+
+
+# Session eviction: remove terminal sessions older than this from memory.
+_SESSION_EVICTION_SECS = int(os.environ.get("HARNESS_SESSION_EVICTION_SECS", "7200"))
+
+# CORS: comma-separated origins in env var, falling back to localhost dev ports.
+_CORS_ORIGINS: list[str] = [
+    o.strip()
+    for o in os.environ.get(
+        "HARNESS_CORS_ORIGINS", "http://localhost:3000,http://localhost:5173"
+    ).split(",")
+    if o.strip()
+]
+
+# Workspace validation: optional root boundary from env.
+_WORKSPACE_ROOT: Path | None = (
+    Path(os.environ["HARNESS_WORKSPACE_ROOT"]).resolve()
+    if "HARNESS_WORKSPACE_ROOT" in os.environ
+    else None
+)
+
+_FORBIDDEN_PATHS: frozenset[str] = frozenset(
+    str(Path(p).resolve())
+    for p in ["/", "/etc", "/usr", "/bin", "/sbin", "/lib", "/proc", "/sys", "/dev",
+              "C:/", "C:/Windows", "C:/Windows/System32"]
+    if Path(p).exists() or p in ("/", "C:/")
+)
+
+
+def _validate_workspace(workspace_str: str) -> Path:
+    """Resolve and validate a workspace path. Raises HTTPException on bad input."""
+    p = Path(workspace_str).resolve()
+    if str(p) in _FORBIDDEN_PATHS:
+        raise HTTPException(status_code=400, detail=f"Workspace '{p}' is a restricted path")
+    if _WORKSPACE_ROOT is not None:
+        try:
+            p.relative_to(_WORKSPACE_ROOT)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Workspace must be under {_WORKSPACE_ROOT}",
+            )
+    return p
 
 
 _sessions: dict[str, ManagedSession] = {}
@@ -318,6 +363,46 @@ def _monotonic() -> float:
 
 
 # ---------------------------------------------------------------------------
+# Session eviction background task + graceful shutdown
+# ---------------------------------------------------------------------------
+
+
+async def _evict_old_sessions() -> None:
+    """Periodically remove terminal sessions older than _SESSION_EVICTION_SECS."""
+    while True:
+        await asyncio.sleep(300)  # check every 5 minutes
+        cutoff = datetime.now() - timedelta(seconds=_SESSION_EVICTION_SECS)
+        to_remove: list[str] = []
+        with _sessions_lock:
+            for sid, s in _sessions.items():
+                if s.status in ("completed", "stopped", "error"):
+                    try:
+                        ts = datetime.fromisoformat(s.created_at)
+                        if ts < cutoff:
+                            to_remove.append(sid)
+                    except Exception:
+                        pass
+            for sid in to_remove:
+                del _sessions[sid]
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    cleanup_task = asyncio.create_task(_evict_old_sessions())
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        # Signal all active sessions to stop and wait briefly for orderly wind-down.
+        with _sessions_lock:
+            sessions = list(_sessions.values())
+        for s in sessions:
+            if s.status in ("running", "idle"):
+                s.stop_event.set()
+        await asyncio.sleep(3)
+
+
+# ---------------------------------------------------------------------------
 # SSE event generator
 # ---------------------------------------------------------------------------
 
@@ -344,14 +429,21 @@ async def _event_generator(queue: asyncio.Queue):
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Engram Harness API", version="0.1.0")
+app = FastAPI(title="Engram Harness API", version="0.1.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=_CORS_ORIGINS,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+@app.get("/health")
+async def health() -> dict:
+    with _sessions_lock:
+        active = sum(1 for s in _sessions.values() if s.status in ("running", "idle"))
+    return {"status": "ok", "active_sessions": active}
 
 
 def _get_session(session_id: str) -> ManagedSession:
@@ -368,9 +460,10 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     from harness.tools.fs import WorkspaceScope
 
     session_id = f"ses_{uuid.uuid4().hex[:8]}"
+    workspace = _validate_workspace(req.workspace)
     tool_profile = ToolProfile(req.tool_profile)
     config = SessionConfig(
-        workspace=Path(req.workspace),
+        workspace=workspace,
         model=req.model,
         mode=req.mode,
         memory_backend=req.memory,
@@ -389,7 +482,6 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     sse_trace = SSETraceSink(queue)
     sse_stream = SSEStreamSink(queue)
 
-    workspace = Path(req.workspace)
     workspace.mkdir(parents=True, exist_ok=True)
     scope = WorkspaceScope(root=workspace)
     base_tools = build_tools(scope, profile=tool_profile)
