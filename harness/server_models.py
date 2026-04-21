@@ -17,6 +17,7 @@ class CreateSessionRequest(BaseModel):
     max_turns: int = 100
     max_parallel_tools: int = 4
     repeat_guard_threshold: int = 3
+    error_recall_threshold: int = 0
     stream: bool = True
     trace_live: bool = False  # off by default in API mode (no stderr)
     trace_to_engram: bool | None = None

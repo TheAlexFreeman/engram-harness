@@ -20,6 +20,12 @@ _DEFAULT_REPEAT_GUARD_MESSAGE = (
     "summarize and finish."
 )
 
+_DEFAULT_ERROR_RECALL_MESSAGE_TEMPLATE = (
+    "[harness] {tool_name} has failed {streak} consecutive times. "
+    "Use recall_memory with a query describing your goal or the error to retrieve "
+    "relevant context from prior sessions that might help resolve this."
+)
+
 
 def _tool_batch_signature(tool_calls: list[ToolCall]) -> tuple[tuple[str, str], ...]:
     """Stable, order-independent signature for a batch of tool calls."""
@@ -51,6 +57,7 @@ def run_until_idle(
     *,
     repeat_guard_threshold: int = 3,
     repeat_guard_message: str | None = None,
+    error_recall_threshold: int = 0,
     stop_event: threading.Event | None = None,
 ) -> RunResult:
     """Run model/tool turns until the assistant responds without tool calls or
@@ -70,6 +77,8 @@ def run_until_idle(
     repeat_streak = 0
     nudge_text = repeat_guard_message or _DEFAULT_REPEAT_GUARD_MESSAGE
     tool_seq = 0
+    # Per-tool consecutive-error counts; reset to 0 on a successful call.
+    tool_error_streaks: dict[str, int] = {}
 
     for turn in range(max_turns):
         if stop_event is not None and stop_event.is_set():
@@ -135,6 +144,29 @@ def run_until_idle(
                     f"{result.call.name} failed: {result.content[:200]}",
                     kind="error",
                 )
+                tool_error_streaks[result.call.name] = (
+                    tool_error_streaks.get(result.call.name, 0) + 1
+                )
+            else:
+                tool_error_streaks.pop(result.call.name, None)
+
+        # Adaptive recall: when a tool has failed repeatedly and recall_memory is
+        # available, inject a nudge prompting the agent to query prior context.
+        if error_recall_threshold > 0 and "recall_memory" in tools:
+            for tool_name, streak in list(tool_error_streaks.items()):
+                if streak >= error_recall_threshold:
+                    tracer.event(
+                        "adaptive_recall_trigger",
+                        turn=turn,
+                        tool=tool_name,
+                        streak=streak,
+                    )
+                    recall_nudge = _DEFAULT_ERROR_RECALL_MESSAGE_TEMPLATE.format(
+                        tool_name=tool_name, streak=streak
+                    )
+                    messages.append({"role": "user", "content": recall_nudge})
+                    tool_error_streaks[tool_name] = 0
+                    break  # one nudge per turn is enough
 
         tool_results_msg = mode.as_tool_results_message(results)
         if isinstance(tool_results_msg, list):
@@ -189,6 +221,7 @@ def run(
     *,
     repeat_guard_threshold: int = 3,
     repeat_guard_message: str | None = None,
+    error_recall_threshold: int = 0,
     skip_end_session_commit: bool = False,
     stop_event: threading.Event | None = None,
 ) -> RunResult:
@@ -208,6 +241,7 @@ def run(
         stream_sink=stream_sink,
         repeat_guard_threshold=repeat_guard_threshold,
         repeat_guard_message=repeat_guard_message,
+        error_recall_threshold=error_recall_threshold,
         stop_event=stop_event,
     )
 

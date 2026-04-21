@@ -51,6 +51,7 @@ class SessionConfig:
     max_turns: int = 100
     max_parallel_tools: int = 4
     repeat_guard_threshold: int = 3
+    error_recall_threshold: int = 0  # 0 = disabled; set to e.g. 3 to enable
 
     # Streaming / tracing
     stream: bool = True
@@ -90,6 +91,7 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         max_turns=args.max_turns,
         max_parallel_tools=args.max_parallel_tools,
         repeat_guard_threshold=args.repeat_guard_threshold,
+        error_recall_threshold=getattr(args, "error_recall_threshold", 0),
         stream=args.stream,
         trace_live=args.trace_live,
         trace_to_engram=args.trace_to_engram,

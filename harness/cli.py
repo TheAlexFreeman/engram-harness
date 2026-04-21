@@ -183,6 +183,16 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--error-recall-threshold",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "Adaptive recall: after N consecutive failures from the same tool, inject a "
+            "recall_memory nudge (requires --memory=engram). Use 0 to disable (default)."
+        ),
+    )
+    parser.add_argument(
         "--max-parallel-tools",
         type=int,
         default=4,
@@ -334,6 +344,7 @@ def _run_interactive(args: argparse.Namespace, components: SessionComponents) ->
                     max_parallel_tools=config.max_parallel_tools,
                     stream_sink=components.stream_sink,
                     repeat_guard_threshold=config.repeat_guard_threshold,
+                    error_recall_threshold=config.error_recall_threshold,
                 )
                 total_usage = total_usage + r0.usage
                 total_turns += r0.turns_used
@@ -376,6 +387,7 @@ def _run_interactive(args: argparse.Namespace, components: SessionComponents) ->
                         max_parallel_tools=config.max_parallel_tools,
                         stream_sink=components.stream_sink,
                         repeat_guard_threshold=config.repeat_guard_threshold,
+                        error_recall_threshold=config.error_recall_threshold,
                     )
                     total_usage = total_usage + r0.usage
                     total_turns += r0.turns_used
@@ -407,6 +419,7 @@ def _run_interactive(args: argparse.Namespace, components: SessionComponents) ->
                     max_parallel_tools=config.max_parallel_tools,
                     stream_sink=components.stream_sink,
                     repeat_guard_threshold=config.repeat_guard_threshold,
+                    error_recall_threshold=config.error_recall_threshold,
                 )
                 total_usage = total_usage + r.usage
                 total_turns += r.turns_used
@@ -448,6 +461,7 @@ def _run_batch(args: argparse.Namespace, components: SessionComponents):
             max_parallel_tools=config.max_parallel_tools,
             stream_sink=components.stream_sink,
             repeat_guard_threshold=config.repeat_guard_threshold,
+            error_recall_threshold=config.error_recall_threshold,
             skip_end_session_commit=bridge_enabled,
         )
 
