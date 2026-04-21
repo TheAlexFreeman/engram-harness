@@ -85,7 +85,8 @@ def test_detect_returns_none_when_no_marker(tmp_path: Path) -> None:
 
 
 def test_explicit_env_override_preserved_in_create_mcp(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path,
+    monkeypatch,
 ) -> None:
     """MEMORY_CORE_PREFIX must still override auto-detection (including empty string)."""
     # We don't actually boot the server here — just verify the branching in the

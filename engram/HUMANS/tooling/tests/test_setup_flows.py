@@ -12,6 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VALIDATOR_PATH = REPO_ROOT / "HUMANS" / "tooling" / "scripts" / "validate_memory_repo.py"
+ENGRAM_OVERLAY_FIXTURE = REPO_ROOT / "core" / "tools" / "tests" / "fixtures" / "engram-overlay"
 
 SPEC = importlib.util.spec_from_file_location("validate_memory_repo", VALIDATOR_PATH)
 assert SPEC is not None
@@ -49,7 +50,6 @@ def build_setup_repo(root: Path) -> None:
         "README.md",
         "CHANGELOG.md",
         "agent-bootstrap.toml",
-        "pyproject.toml",
         "setup.sh",
         "setup.html",
         "AGENTS.md",
@@ -62,7 +62,6 @@ def build_setup_repo(root: Path) -> None:
 
     for dirname in (
         ".codex",
-        ".github",
         ".vscode",
         "core",
         "HUMANS",
@@ -72,6 +71,22 @@ def build_setup_repo(root: Path) -> None:
             root / dirname,
             ignore=shutil.ignore_patterns("__pycache__"),
         )
+
+    # Overlay fixtures for files the merged engram-harness layout no longer
+    # ships at engram/ (engram-only pyproject.toml and the engram-standalone
+    # .github/workflows/). The overlay represents what a standalone engram
+    # checkout would carry, so setup-flow tests remain layout-independent.
+    _copy_overlay(ENGRAM_OVERLAY_FIXTURE, root)
+
+
+def _copy_overlay(src: Path, dst: Path) -> None:
+    for entry in src.iterdir():
+        target = dst / entry.name
+        if entry.is_dir():
+            shutil.copytree(entry, target, dirs_exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(entry, target)
 
 
 def read_initial_commit_manifest(root: Path) -> list[str]:

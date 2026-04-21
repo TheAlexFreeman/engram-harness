@@ -61,12 +61,18 @@ search-extras install separately.
 
 ## Intentional quirks to not "fix"
 
-`engram/conftest.py` auto-skips ~30 tests that assume `engram/` is the git
-toplevel (e.g. tests that call `git rev-parse --show-toplevel` and expect
-`engram/`, or copy `engram/pyproject.toml` into a temp setup repo). In the merged
-layout those tests can't pass without restructuring — they still run cleanly when
-`engram/` is checked out as its own repo. The skip list is maintained as a set of
-node-id substrings at the top of that file; don't delete it.
+`engram/conftest.py` auto-skips a small list of tests when `engram/` isn't the
+git toplevel. The original ~30-entry list shrank to 5 as the runtime and test
+fixtures were adjusted: content-prefix auto-detection in `server.py` unblocked
+the MCP-live tests, and an `engram-overlay` fixture at
+`engram/core/tools/tests/fixtures/engram-overlay/` supplies the
+`pyproject.toml` + `.github/workflows/` that setup-flow tests expect. What
+remains are three live-repo validators that trip on harness-session
+`act-NNN` ids in `engram/core/memory/*/ACCESS.jsonl`, one time-sensitive
+health-check test with a hardcoded date, and one manifest test that can't
+match when engram/ ships extra tracked files. Each is documented inline in
+`_MERGER_SKIPS`; don't delete the gate without resolving the underlying
+issues.
 
 `engram/.pre-commit-config.yaml` is dead in the merged layout (pre-commit anchors
 hooks at the git toplevel, which is the parent repo). Root CI runs the same
