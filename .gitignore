@@ -71,3 +71,6 @@ pytest-cache-files-*/
 
 # One-off plans for in-session work tracking
 .plans/
+# --- Frontend build artifacts ---
+frontend/node_modules/
+frontend/dist/

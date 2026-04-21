@@ -589,4 +589,10 @@ def serve(
             if n:
                 print(f"[store] backfilled {n} sessions from {trace_dir}")
 
+    # Serve the React frontend if it has been built
+    frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
+    if frontend_dist.is_dir():
+        from fastapi.staticfiles import StaticFiles
+        app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+
     uvicorn.run(app, host=host, port=port)
