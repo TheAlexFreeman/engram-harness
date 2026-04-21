@@ -38,6 +38,11 @@ class SessionSummary(BaseModel):
     created_at: str
     turns_used: int
     total_cost_usd: float
+    model: str | None = None
+    mode: str | None = None
+    ended_at: str | None = None
+    tool_count: int = 0
+    error_count: int = 0
 
 
 class ToolCallInfo(BaseModel):
@@ -64,6 +69,9 @@ class SessionDetail(BaseModel):
     usage: UsageInfo
     tool_calls: list[ToolCallInfo]
     final_text: str | None
+    model: str | None = None
+    mode: str | None = None
+    ended_at: str | None = None
 
 
 class SessionListResponse(BaseModel):

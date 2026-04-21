@@ -463,6 +463,8 @@ async def get_session(session_id: str) -> SessionDetail:
         task=session.task,
         created_at=session.created_at,
         turns_used=session.turns_used,
+        model=session.config.model,
+        mode=session.config.mode,
         usage=UsageInfo(
             input_tokens=u.input_tokens,
             output_tokens=u.output_tokens,
@@ -505,6 +507,11 @@ async def list_sessions(
                     created_at=r.created_at,
                     turns_used=r.turns_used or 0,
                     total_cost_usd=r.total_cost_usd or 0.0,
+                    model=r.model,
+                    mode=r.mode,
+                    ended_at=r.ended_at,
+                    tool_count=sum(r.tool_counts.values()) if r.tool_counts else 0,
+                    error_count=r.error_count,
                 )
                 for r in records
             ]
@@ -521,6 +528,10 @@ async def list_sessions(
                 created_at=s.created_at,
                 turns_used=s.turns_used,
                 total_cost_usd=s.usage.total_cost_usd,
+                model=s.config.model,
+                mode=s.config.mode,
+                tool_count=len(s.tool_call_log),
+                error_count=sum(1 for tc in s.tool_call_log if tc.get("is_error")),
             )
             for s in sorted(sessions, key=lambda x: x.created_at, reverse=True)
         ]
