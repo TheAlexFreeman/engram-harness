@@ -133,8 +133,21 @@ def run_trace_bridge(
     reflection_path = session_dir / "reflection.md"
 
     written: list[str] = []
+    access_count = 0
 
-    summary_text = _render_summary(memory, stats, tool_calls)
+    # Interactive sessions: per-subtask records when markers are present.
+    subsessions = _split_subsessions(events)
+    sub_ids: list[str] = []
+    if subsessions:
+        for idx, segment in enumerate(subsessions):
+            sub_written, sub_access = _run_subsession_bridge(
+                memory, session_dir, segment, idx, content_prefix
+            )
+            written.extend(sub_written)
+            access_count += sub_access
+            sub_ids.append(f"sub-{idx + 1:03d}")
+
+    summary_text = _render_summary(memory, stats, tool_calls, sub_sessions=sub_ids)
     _write_artifact(summary_path, summary_text)
     written.append(_relpath(memory, summary_path))
 
@@ -146,7 +159,8 @@ def run_trace_bridge(
     _write_jsonl(spans_path, spans)
     written.append(_relpath(memory, spans_path))
 
-    access_count = _emit_access_entries(memory, tool_calls, stats, content_prefix=content_prefix)
+    if not subsessions:
+        access_count = _emit_access_entries(memory, tool_calls, stats, content_prefix=content_prefix)
 
     if trace_path.is_file():
         try:
@@ -187,6 +201,81 @@ def run_trace_bridge(
         commit_sha=commit_sha,
         artifacts=written,
     )
+
+
+# ---------------------------------------------------------------------------
+# Sub-session splitting (interactive mode with sub_session_start/end markers)
+# ---------------------------------------------------------------------------
+
+
+def _split_subsessions(events: list[dict[str, Any]]) -> "list[list[dict]] | None":
+    """Split events at sub_session_start/end boundaries.
+
+    Returns a list of per-subtask event segments if any markers are found,
+    or None if the trace has no sub-session structure (non-interactive or old traces).
+    Each segment includes the sub_session_start and sub_session_end events.
+    """
+    segments: list[list[dict]] = []
+    current: list[dict] = []
+    in_sub = False
+
+    for ev in events:
+        kind = ev.get("kind")
+        if kind == "sub_session_start":
+            current = [ev]
+            in_sub = True
+        elif kind == "sub_session_end":
+            if in_sub:
+                current.append(ev)
+                segments.append(current)
+                current = []
+                in_sub = False
+        elif in_sub:
+            current.append(ev)
+
+    return segments if segments else None
+
+
+def _run_subsession_bridge(
+    memory: EngramMemory,
+    session_dir: Path,
+    segment_events: list[dict[str, Any]],
+    subtask_idx: int,
+    content_prefix: str,
+) -> tuple[list[str], int]:
+    """Write artifacts for one interactive sub-session segment.
+
+    Returns (list_of_rel_paths, access_entry_count).
+    """
+    sub_dir = session_dir / f"sub-{subtask_idx + 1:03d}"
+    sub_dir.mkdir(parents=True, exist_ok=True)
+
+    stats = _aggregate_stats(segment_events)
+    # Task comes from the sub_session_start event's 'input' field
+    start_ev = next((e for e in segment_events if e.get("kind") == "sub_session_start"), {})
+    if not stats.task:
+        stats.task = str(start_ev.get("input", ""))
+
+    tool_calls = _extract_tool_calls(segment_events)
+
+    summary_path = sub_dir / "summary.md"
+    reflection_path = sub_dir / "reflection.md"
+
+    summary_text = _render_summary(memory, stats, tool_calls)
+    _write_artifact(summary_path, summary_text)
+
+    reflection_text = _render_reflection(memory, stats, tool_calls)
+    _write_artifact(reflection_path, reflection_text)
+
+    access_count = _emit_access_entries(
+        memory, tool_calls, stats, content_prefix=content_prefix
+    )
+
+    written = [
+        _relpath(memory, summary_path),
+        _relpath(memory, reflection_path),
+    ]
+    return written, access_count
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +447,13 @@ def _derive_recall_helpfulness(
 # ---------------------------------------------------------------------------
 
 
-def _render_summary(memory: EngramMemory, stats: _SessionStats, calls: list[_ToolCall]) -> str:
+def _render_summary(
+    memory: EngramMemory,
+    stats: _SessionStats,
+    calls: list[_ToolCall],
+    *,
+    sub_sessions: list[str] | None = None,
+) -> str:
     fm = dict(_AGENT_FM)
     fm["session"] = f"memory/activity/{memory._session_path_fragment()}/{memory.session_id}"
     fm["session_id"] = memory.session_id
@@ -367,6 +462,8 @@ def _render_summary(memory: EngramMemory, stats: _SessionStats, calls: list[_Too
     fm["errors"] = stats.error_count
     fm["total_cost_usd"] = round(stats.total_cost_usd, 4)
     fm["retrievals"] = len(memory.recall_events)
+    if sub_sessions:
+        fm["sub_sessions"] = sub_sessions
 
     body_lines = [
         f"# Session {memory.session_id}",
@@ -381,6 +478,13 @@ def _render_summary(memory: EngramMemory, stats: _SessionStats, calls: list[_Too
     if stats.end_reason:
         body_lines.append(f"- End reason: {stats.end_reason}")
     body_lines.append("")
+
+    if sub_sessions:
+        body_lines.append("## Sub-sessions")
+        body_lines.append("")
+        for sid in sub_sessions:
+            body_lines.append(f"- `{sid}/`")
+        body_lines.append("")
 
     if stats.by_tool:
         body_lines.append("## Tool usage")

@@ -17,6 +17,7 @@ from harness.trace_bridge import (
     _derive_read_helpfulness,
     _emit_access_entries,
     _normalize_for_access,
+    _split_subsessions,
     _ToolCall,
     run_trace_bridge,
     _PLAN_TOOL_ACTIONS,
@@ -406,3 +407,111 @@ def test_recall_dedupe_fetch_phase_skipped_in_access(
     # Only the manifest-phase recall events should produce ACCESS entries.
     manifest_count = sum(1 for ev in memory.recall_events if getattr(ev, "phase", "manifest") == "manifest")
     assert result.access_entries == manifest_count
+
+
+# ---------------------------------------------------------------------------
+# Sub-session splitting
+# ---------------------------------------------------------------------------
+
+
+def _make_subsession_events(task: str, n_subtasks: int) -> list[dict]:
+    """Build a synthetic interactive-mode trace with n_subtasks sub-sessions."""
+    ts = _now_iso()
+    events: list[dict] = [
+        {"ts": ts, "kind": "session_start", "task": task},
+    ]
+    for i in range(n_subtasks):
+        input_text = f"subtask {i + 1}"
+        events += [
+            {"ts": ts, "kind": "sub_session_start", "input": input_text, "subtask_idx": i},
+            {"ts": ts, "kind": "model_response", "turn": i * 2},
+            {
+                "ts": ts,
+                "kind": "session_usage",
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_cost_usd": 0.001,
+            },
+            {
+                "ts": ts,
+                "kind": "sub_session_end",
+                "subtask_idx": i,
+                "final_text": f"done with subtask {i + 1}",
+                "turns": 1,
+            },
+        ]
+    events += [
+        {"ts": ts, "kind": "interactive_turn", "chars": 10},
+        {
+            "ts": ts,
+            "kind": "session_usage",
+            "input_tokens": n_subtasks * 100,
+            "output_tokens": n_subtasks * 50,
+            "total_cost_usd": n_subtasks * 0.001,
+        },
+        {"ts": ts, "kind": "session_end", "turns": n_subtasks, "reason": "interactive_exit"},
+    ]
+    return events
+
+
+def test_split_subsessions_returns_none_for_plain_trace() -> None:
+    events = [
+        {"kind": "session_start", "task": "plain"},
+        {"kind": "session_end", "turns": 1},
+    ]
+    assert _split_subsessions(events) is None
+
+
+def test_split_subsessions_returns_segments() -> None:
+    events = _make_subsession_events("interactive test", n_subtasks=2)
+    segments = _split_subsessions(events)
+    assert segments is not None
+    assert len(segments) == 2
+    assert segments[0][0]["kind"] == "sub_session_start"
+    assert segments[0][-1]["kind"] == "sub_session_end"
+    assert segments[1][0]["subtask_idx"] == 1
+
+
+def test_run_trace_bridge_with_subsessions(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """Interactive trace produces per-subtask summary files under sub-001/, sub-002/."""
+    trace = tmp_path / "trace.jsonl"
+    events = _make_subsession_events("multi-turn task", n_subtasks=2)
+    _write_trace(trace, events)
+
+    result = run_trace_bridge(trace, memory, commit=False)
+
+    session_dir = result.session_dir
+    # Parent summary should list sub-sessions
+    parent_summary = result.summary_path.read_text(encoding="utf-8")
+    assert "sub-001" in parent_summary
+    assert "sub-002" in parent_summary
+
+    # Per-subtask summary files should exist
+    assert (session_dir / "sub-001" / "summary.md").is_file()
+    assert (session_dir / "sub-002" / "summary.md").is_file()
+    assert (session_dir / "sub-001" / "reflection.md").is_file()
+
+    sub1_text = (session_dir / "sub-001" / "summary.md").read_text(encoding="utf-8")
+    assert "subtask 1" in sub1_text.lower()
+
+
+def test_run_trace_bridge_no_markers_unchanged(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """A trace without sub-session markers should behave exactly as before."""
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    events = [
+        {"ts": ts, "kind": "session_start", "task": "plain batch task"},
+        {"ts": ts, "kind": "session_end", "turns": 1, "reason": "idle"},
+    ]
+    _write_trace(trace, events)
+
+    result = run_trace_bridge(trace, memory, commit=False)
+
+    assert result.summary_path.is_file()
+    assert not (result.session_dir / "sub-001").is_dir()
+    summary = result.summary_path.read_text(encoding="utf-8")
+    assert "Sub-sessions" not in summary

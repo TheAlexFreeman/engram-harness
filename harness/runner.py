@@ -30,6 +30,37 @@ def _bridge_enabled(components: "SessionComponents") -> bool:
     return components.engram_memory is not None
 
 
+def _run_subtask(
+    input_text: str,
+    subtask_idx: int,
+    messages: list[dict],
+    components: "SessionComponents",
+    tracer,
+):
+    """Run one interactive sub-task and emit sub_session_start/end markers."""
+    config = components.config
+    tracer.event("sub_session_start", input=input_text, subtask_idx=subtask_idx)
+    r = run_until_idle(
+        messages,
+        components.mode,
+        components.tools,
+        components.memory,
+        tracer,
+        max_turns=config.max_turns,
+        max_parallel_tools=config.max_parallel_tools,
+        stream_sink=components.stream_sink,
+        repeat_guard_threshold=config.repeat_guard_threshold,
+        error_recall_threshold=config.error_recall_threshold,
+    )
+    tracer.event(
+        "sub_session_end",
+        subtask_idx=subtask_idx,
+        final_text=(r.final_text or "")[:500],
+        turns=r.turns_used,
+    )
+    return r
+
+
 def run_interactive(args: "argparse.Namespace", components: "SessionComponents") -> Usage:
     """Run the interactive REPL. Returns total usage."""
     config = components.config
@@ -40,6 +71,7 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
     last_final: str | None = None
     session_started = False
     messages: list[dict] = []
+    subtask_idx = 0
 
     with components.tracer as tracer:
         try:
@@ -52,18 +84,8 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
                 )
                 tracer.event("session_start", task=opener)
                 session_started = True
-                r0 = run_until_idle(
-                    messages,
-                    components.mode,
-                    components.tools,
-                    components.memory,
-                    tracer,
-                    max_turns=config.max_turns,
-                    max_parallel_tools=config.max_parallel_tools,
-                    stream_sink=components.stream_sink,
-                    repeat_guard_threshold=config.repeat_guard_threshold,
-                    error_recall_threshold=config.error_recall_threshold,
-                )
+                r0 = _run_subtask(opener, subtask_idx, messages, components, tracer)
+                subtask_idx += 1
                 total_usage = total_usage + r0.usage
                 total_turns += r0.turns_used
                 last_final = r0.final_text
@@ -95,18 +117,8 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
                         opener=first,
                     )
                     session_started = True
-                    r0 = run_until_idle(
-                        messages,
-                        components.mode,
-                        components.tools,
-                        components.memory,
-                        tracer,
-                        max_turns=config.max_turns,
-                        max_parallel_tools=config.max_parallel_tools,
-                        stream_sink=components.stream_sink,
-                        repeat_guard_threshold=config.repeat_guard_threshold,
-                        error_recall_threshold=config.error_recall_threshold,
-                    )
+                    r0 = _run_subtask(first, subtask_idx, messages, components, tracer)
+                    subtask_idx += 1
                     total_usage = total_usage + r0.usage
                     total_turns += r0.turns_used
                     last_final = r0.final_text
@@ -127,18 +139,8 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
 
                 tracer.event("interactive_turn", chars=len(line))
                 messages.append({"role": "user", "content": line})
-                r = run_until_idle(
-                    messages,
-                    components.mode,
-                    components.tools,
-                    components.memory,
-                    tracer,
-                    max_turns=config.max_turns,
-                    max_parallel_tools=config.max_parallel_tools,
-                    stream_sink=components.stream_sink,
-                    repeat_guard_threshold=config.repeat_guard_threshold,
-                    error_recall_threshold=config.error_recall_threshold,
-                )
+                r = _run_subtask(line, subtask_idx, messages, components, tracer)
+                subtask_idx += 1
                 total_usage = total_usage + r.usage
                 total_turns += r.turns_used
                 last_final = r.final_text
