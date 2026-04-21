@@ -12,9 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VALIDATOR_PATH = REPO_ROOT / "HUMANS" / "tooling" / "scripts" / "validate_memory_repo.py"
-ENGRAM_OVERLAY_FIXTURE = (
-    REPO_ROOT / "core" / "tools" / "tests" / "fixtures" / "engram-overlay"
-)
+ENGRAM_OVERLAY_FIXTURE = REPO_ROOT / "core" / "tools" / "tests" / "fixtures" / "engram-overlay"
 
 SPEC = importlib.util.spec_from_file_location("validate_memory_repo", VALIDATOR_PATH)
 assert SPEC is not None
