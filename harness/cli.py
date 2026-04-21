@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import argparse
 import os
 import sys
@@ -35,35 +36,35 @@ from harness.tools.x_search import XSearch
 from harness.trace import CompositeTracer, ConsoleTracePrinter, Tracer
 
 
-def build_tools(scope: WorkspaceScope) -> dict[str, Tool]:
-    return {
-        t.name: t
-        for t in [
-            ReadFile(scope),
-            ListFiles(scope),
-            PathStat(scope),
-            GlobFiles(scope),
-            Mkdir(scope),
-            EditFile(scope),
-            WriteFile(scope),
-            DeletePath(scope),
-            MovePath(scope),
-            CopyPath(scope),
-            GrepWorkspace(scope),
-            Bash(scope),
-            GitStatus(scope),
-            GitDiff(scope),
-            GitLog(scope),
-            GitCommit(scope),
-            Git(scope),
-            WriteTodos(scope),
-            ReadTodos(scope),
-            UpdateTodo(scope),
-            AnalyzeTodos(scope),
-            WebSearch(),
-            XSearch(),  # Dedicated real-time X (Twitter) search with strong X bias
-        ]
-    }
+def build_tools(scope: WorkspaceScope, *, extra: list[Tool] | None = None) -> dict[str, Tool]:
+    base: list[Tool] = [
+        ReadFile(scope),
+        ListFiles(scope),
+        PathStat(scope),
+        GlobFiles(scope),
+        Mkdir(scope),
+        EditFile(scope),
+        WriteFile(scope),
+        DeletePath(scope),
+        MovePath(scope),
+        CopyPath(scope),
+        GrepWorkspace(scope),
+        Bash(scope),
+        GitStatus(scope),
+        GitDiff(scope),
+        GitLog(scope),
+        GitCommit(scope),
+        Git(scope),
+        WriteTodos(scope),
+        ReadTodos(scope),
+        UpdateTodo(scope),
+        AnalyzeTodos(scope),
+        WebSearch(),
+        XSearch(),  # Dedicated real-time X (Twitter) search with strong X bias
+    ]
+    if extra:
+        base.extend(extra)
+    return {t.name: t for t in base}
 
 
 def _find_git_root(start: Path) -> Path | None:
@@ -94,6 +95,44 @@ def _workspace_gitignore_pattern(workspace: Path, git_root: Path) -> str | None:
     return f"{rel.as_posix().rstrip('/')}/"
 
 
+def _build_memory(args, workspace: Path):
+    """Pick a MemoryBackend based on --memory. Returns (backend, engram_or_none, extra_tools)."""
+    if args.memory == "file":
+        return FileMemory(path=workspace / "progress.md"), None, []
+
+    from harness.engram_memory import EngramMemory, detect_engram_repo
+    from harness.tools.recall import RecallMemory
+
+    repo_path = args.memory_repo
+    if repo_path is None:
+        repo_path = detect_engram_repo(workspace) or detect_engram_repo(Path.cwd())
+    if repo_path is None:
+        bundled = Path(__file__).resolve().parent.parent / "engram"
+        if (bundled / "core" / "memory" / "HOME.md").is_file():
+            repo_path = bundled
+    if repo_path is None:
+        print(
+            "[warning] --memory=engram requested but no Engram repo found. "
+            "Falling back to FileMemory.",
+            file=sys.stderr,
+        )
+        return FileMemory(path=workspace / "progress.md"), None, []
+    try:
+        engram = EngramMemory(Path(repo_path))
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[warning] failed to open Engram repo at {repo_path}: {exc}. "
+            "Falling back to FileMemory.",
+            file=sys.stderr,
+        )
+        return FileMemory(path=workspace / "progress.md"), None, []
+    print(
+        f"[engram] session={engram.session_id} repo={engram.content_root}",
+        file=sys.stderr,
+    )
+    return engram, engram, [RecallMemory(engram)]
+
+
 def _ensure_workspace_in_gitignore(workspace: Path) -> None:
     git_root = _find_git_root(workspace)
     if git_root is None:
@@ -122,9 +161,7 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(prog="harness")
     parser.add_argument("task", help="What you want the agent to do.")
-    parser.add_argument(
-        "--workspace", default=".", help="Directory the agent may read/write."
-    )
+    parser.add_argument("--workspace", default=".", help="Directory the agent may read/write.")
     parser.add_argument("--mode", choices=["native", "text"], default="native")
     parser.add_argument(
         "--model",
@@ -167,15 +204,52 @@ def main() -> None:
         action="store_false",
         help="Disable live streaming; model output only appears after each turn.",
     )
+    parser.add_argument(
+        "--memory",
+        choices=["file", "engram"],
+        default="file",
+        help=(
+            "Memory backend. 'file' (default): naive append-only progress.md. "
+            "'engram': use a git-backed Engram memory repo for cross-session "
+            "context, recall, and trace-fed activity records."
+        ),
+    )
+    parser.add_argument(
+        "--memory-repo",
+        default=None,
+        help=(
+            "Path to the Engram repo root (or its parent) when --memory=engram. "
+            "Defaults to auto-detect: looks for memory/HOME.md, core/memory/HOME.md, "
+            "or engram/core/memory/HOME.md walking up from the workspace and CWD. "
+            "Falls back to the bundled ./engram subdirectory when present."
+        ),
+    )
+    parser.add_argument(
+        "--trace-to-engram",
+        dest="trace_to_engram",
+        action="store_true",
+        default=None,
+        help=(
+            "After the run, translate the trace into Engram artifacts (session "
+            "summary, reflection, ACCESS entries, span jsonl) and commit them. "
+            "Defaults to enabled when --memory=engram, disabled otherwise."
+        ),
+    )
+    parser.add_argument(
+        "--no-trace-to-engram",
+        dest="trace_to_engram",
+        action="store_false",
+        help="Disable post-run trace bridge even when --memory=engram.",
+    )
     args = parser.parse_args()
 
     workspace = Path(args.workspace).resolve()
     workspace.mkdir(parents=True, exist_ok=True)
     _ensure_workspace_in_gitignore(workspace)
     scope = WorkspaceScope(root=workspace)
-    tools = build_tools(scope)
 
-    memory = FileMemory(path=workspace / "progress.md")
+    memory, engram_memory, extra_tools = _build_memory(args, workspace)
+    tools = build_tools(scope, extra=extra_tools)
 
     # Support for Grok/xAI: detect by model name (Responses API + native search tools).
     # Falls back to Anthropic for Claude models. Grok provides strong reasoning capabilities.
@@ -183,9 +257,7 @@ def main() -> None:
     if is_grok_model:
         api_key = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
         if not api_key:
-            raise ValueError(
-                "GROK_API_KEY or XAI_API_KEY must be set in .env for Grok models"
-            )
+            raise ValueError("GROK_API_KEY or XAI_API_KEY must be set in .env for Grok models")
         client = OpenAI(
             api_key=api_key,
             base_url="https://api.x.ai/v1",
@@ -232,6 +304,22 @@ def main() -> None:
             stream_sink=stream_sink,
         )
 
+    bridge_default = engram_memory is not None
+    bridge_enabled = args.trace_to_engram if args.trace_to_engram is not None else bridge_default
+    if bridge_enabled and engram_memory is not None:
+        try:
+            from harness.trace_bridge import run_trace_bridge
+
+            bridge_result = run_trace_bridge(trace_path, engram_memory)
+            print(
+                f"[engram] trace bridge: {len(bridge_result.artifacts)} artifact(s), "
+                f"{bridge_result.access_entries} ACCESS entries"
+                + (f", commit {bridge_result.commit_sha[:8]}" if bridge_result.commit_sha else ""),
+                file=sys.stderr,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warning] trace bridge failed: {exc}", file=sys.stderr)
+
     print("\n" + "=" * 60)
     print(result.final_text)
     print("=" * 60)
@@ -253,4 +341,7 @@ def main() -> None:
         models = ", ".join(u.missing_models) or "(unknown)"
         print(f"[warning] no pricing for model(s): {models}", file=sys.stderr)
     print(f"trace: {trace_path}")
-    print(f"progress: {workspace / 'progress.md'}")
+    if engram_memory is not None:
+        print(f"engram: {engram_memory.content_root / engram_memory.session_dir_rel}")
+    else:
+        print(f"progress: {workspace / 'progress.md'}")

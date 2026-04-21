@@ -86,6 +86,12 @@ target-version = "py310"
 select = ["E", "F", "W", "I"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# This script intentionally splits its imports around a sys.path insertion
+# (the third-party + core.tools.* imports below the path setup), so isort
+# can't reorder them safely.
+"engram/HUMANS/tooling/scripts/validate_memory_repo.py" = ["I001"]
+
 [tool.pytest.ini_options]
 testpaths = ["harness/tests", "engram/core/tools/tests"]
 asyncio_mode = "auto"
