@@ -14,6 +14,15 @@ from harness.usage import Usage
 
 NATIVE_TOOL_NAMES: frozenset[str] = frozenset({"web_search", "x_search"})
 
+# `response.output` may include items that xAI does not accept on the next request's
+# `input` when managing context manually. Plaintext `reasoning` is stream/summary
+# output unless `include=["reasoning.encrypted_content"]` was set on the prior call;
+# native search calls are server-side telemetry. Replaying them yields 422
+# UnprocessableEntityError (ModelInput deserialize failure).
+_GROK_OUTPUT_ONLY_TYPES: frozenset[str] = frozenset(
+    {"reasoning", "web_search_call", "x_search_call"}
+)
+
 
 def _build_tool_schemas(harness_tools: dict[str, Tool]) -> list[dict[str, Any]]:
     """xAI Responses API: built-in `web_search` / `x_search` plus flat `function` tools.
@@ -56,7 +65,13 @@ def _instructions_and_input(messages: list[dict], default_instructions: str) -> 
         elif role == "assistant":
             saved = m.get("grok_saved_output")
             if isinstance(saved, list) and saved:
-                input_items.extend(saved)
+                for item in saved:
+                    if (
+                        isinstance(item, dict)
+                        and item.get("type") in _GROK_OUTPUT_ONLY_TYPES
+                    ):
+                        continue
+                    input_items.append(item)
                 continue
             content = m.get("content")
             if content:
