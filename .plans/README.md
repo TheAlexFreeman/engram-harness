@@ -47,7 +47,7 @@ Plans 01–03 were fixed and archived. 295 harness tests pass at that point.
 | #  | Plan | Key files | Effort | Origin |
 |----|------|-----------|--------|--------|
 | 14 | ~~Pyproject extras + packaging~~ | archived/done (2026-04-21) | — | — |
-| 15 | [Integration test backfill](15-integration-test-backfill.md) | `harness/tests/`, `frontend/` | L | worktree-16 |
+| 15 | ~~Integration test backfill~~ | archived/done (2026-04-21) | — | — |
 
 ## Refactors (non-blocking)
 
