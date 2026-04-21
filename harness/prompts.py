@@ -13,7 +13,8 @@ _RULES = """Rules:
 - delete_path and move_path require confirm: true; never assume destructive calls succeeded without checking tool results.
 - If you don't know, say so. Do not invent file contents.
 - Use web_search for external docs or facts not in the workspace; prefer local file tools for repository code.
-- When multiple independent tool calls are needed, emit them together in a single response; the harness executes them concurrently."""
+- When multiple independent tool calls are needed, emit them together in a single response; the harness executes them concurrently.
+- SELF-CORRECTION: On tool errors (especially "escapes workspace", path errors, or JSON issues), do NOT repeat the same call. Analyze the error, simplify your arguments (use clean relative paths without ANY quotes, backslashes, escapes, or XML), then try a corrected version or fallback to list_files/glob_files first. Break repetitive patterns immediately."""
 
 _OUTPUT_NATIVE = (
     """When you are done, respond with a plain-text summary of what you did."""
