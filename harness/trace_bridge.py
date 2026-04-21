@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -157,6 +158,21 @@ def run_trace_bridge(
     commit_sha: str | None = None
     if commit:
         commit_sha = _commit_artifacts(memory, written + _access_paths(memory, tool_calls))
+
+    if otel_endpoint := os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        try:
+            from harness.otel_export import export_session_spans
+
+            n = export_session_spans(
+                spans_path,
+                endpoint=otel_endpoint.rstrip("/") + "/v1/traces",
+                service_name="engram-harness",
+                session_id=memory.session_id,
+            )
+            if n:
+                _log.info("OTLP export: %d spans → %s", n, otel_endpoint)
+        except Exception:  # noqa: BLE001
+            _log.warning("OTLP export failed", exc_info=True)
 
     return TraceBridgeResult(
         session_dir=session_dir,

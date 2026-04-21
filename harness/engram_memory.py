@@ -187,13 +187,14 @@ class EngramMemory:
 
         return "".join(sections)
 
-    def recall(self, query: str, k: int = 5) -> list[Memory]:
+    def recall(self, query: str, k: int = 5, *, namespace: str | None = None) -> list[Memory]:
         q = (query or "").strip()
         if not q:
             return []
-        hits = self._semantic_recall(q, k=k) if self._embed_enabled else []
+        scopes = (f"memory/{namespace}",) if namespace else _SEARCH_SCOPES
+        hits = self._semantic_recall(q, k=k, scopes=scopes) if self._embed_enabled else []
         if not hits:
-            hits = self._keyword_recall(q, k=k)
+            hits = self._keyword_recall(q, k=k, scopes=scopes)
 
         results: list[Memory] = []
         now = datetime.now()
@@ -399,7 +400,9 @@ class EngramMemory:
 
     # ---- recall backends -------------------------------------------------
 
-    def _semantic_recall(self, query: str, *, k: int) -> list[dict[str, Any]]:
+    def _semantic_recall(
+        self, query: str, *, k: int, scopes: tuple[str, ...] = _SEARCH_SCOPES
+    ) -> list[dict[str, Any]]:
         if not self._embed_enabled:
             return []
         try:
@@ -416,6 +419,8 @@ class EngramMemory:
         for r in results:
             fp = r["file_path"]
             if fp in seen:
+                continue
+            if not any(fp.startswith(s) for s in scopes):
                 continue
             seen.add(fp)
             out.append(
@@ -438,12 +443,14 @@ class EngramMemory:
             self._embed_index = EmbeddingIndex(self.repo.root, self.content_root)
         return self._embed_index
 
-    def _keyword_recall(self, query: str, *, k: int) -> list[dict[str, Any]]:
+    def _keyword_recall(
+        self, query: str, *, k: int, scopes: tuple[str, ...] = _SEARCH_SCOPES
+    ) -> list[dict[str, Any]]:
         tokens = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 2]
         if not tokens:
             return []
         candidates: list[tuple[float, Path, str]] = []
-        for scope in _SEARCH_SCOPES:
+        for scope in scopes:
             scope_dir = self.content_root / scope
             if not scope_dir.is_dir():
                 continue

@@ -25,6 +25,12 @@ server = ["mcp>=1.0"]
 # Semantic search (sentence-transformers for recall quality)
 search = ["sentence-transformers>=2.6", "numpy>=1.24"]
 
+# OpenTelemetry export (set OTEL_EXPORTER_OTLP_ENDPOINT to activate)
+otel = [
+    "opentelemetry-sdk>=1.25",
+    "opentelemetry-exporter-otlp-proto-http>=1.25",
+]
+
 # Full development: all optional deps + test/lint tooling
 dev = [
     "mcp>=1.0",
