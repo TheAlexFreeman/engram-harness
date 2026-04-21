@@ -195,8 +195,8 @@ def main() -> None:
         dest="stream",
         action="store_true",
         default=True,
-        help="Stream model text, reasoning, and tool-call arguments to stderr "
-        "in real time as they arrive (default: enabled).",
+        help="Stream model text, reasoning, tool-call arguments, native search "
+        "status, and citations to stderr in real time (default: enabled).",
     )
     parser.add_argument(
         "--no-stream",
@@ -241,6 +241,26 @@ def main() -> None:
         action="store_false",
         help="Disable post-run trace bridge even when --memory=engram.",
     )
+    parser.add_argument(
+        "--grok-include",
+        action="append",
+        default=None,
+        metavar="STRING",
+        dest="grok_include",
+        help=(
+            "Grok only: extra Responses API `include` values (repeatable). "
+            "Example: --grok-include web_search_call.action.sources. "
+            "Increases payload and may affect billing; unknown values can fail the API."
+        ),
+    )
+    parser.add_argument(
+        "--grok-encrypted-reasoning",
+        action="store_true",
+        help=(
+            "Grok only: request reasoning.encrypted_content in `include` so reasoning "
+            "items can be replayed on later turns (larger requests)."
+        ),
+    )
     args = parser.parse_args()
 
     workspace = Path(args.workspace).resolve()
@@ -264,7 +284,16 @@ def main() -> None:
         )
         from harness.modes.grok import GrokMode
 
-        mode = GrokMode(client=client, model=args.model, tools=tools)
+        grok_include = list(args.grok_include or [])
+        if args.grok_encrypted_reasoning:
+            if "reasoning.encrypted_content" not in grok_include:
+                grok_include.append("reasoning.encrypted_content")
+        mode = GrokMode(
+            client=client,
+            model=args.model,
+            tools=tools,
+            response_include=grok_include or None,
+        )
         print(f"Using Grok mode with model {args.model}", file=sys.stderr)
     else:
         client = anthropic.Anthropic()  # ANTHROPIC_API_KEY from env / .env

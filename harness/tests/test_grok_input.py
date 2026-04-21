@@ -40,3 +40,24 @@ def test_grok_saved_output_drops_reasoning_and_native_search_calls():
         it.get("type") == "function_call_output" and it.get("call_id") == "call_1"
         for it in input_items
     )
+
+
+def test_grok_saved_output_keeps_encrypted_reasoning():
+    system = "sys"
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "grok_saved_output": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [],
+                    "encrypted_content": "blob",
+                },
+            ],
+        },
+    ]
+    _, input_items = _instructions_and_input(messages, system)
+    assert any(it.get("type") == "reasoning" for it in input_items)

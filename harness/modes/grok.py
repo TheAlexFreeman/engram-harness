@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from typing import Any, cast
 
 from openai import OpenAI
@@ -15,13 +17,33 @@ from harness.usage import Usage
 NATIVE_TOOL_NAMES: frozenset[str] = frozenset({"web_search", "x_search"})
 
 # `response.output` may include items that xAI does not accept on the next request's
-# `input` when managing context manually. Plaintext `reasoning` is stream/summary
-# output unless `include=["reasoning.encrypted_content"]` was set on the prior call;
-# native search calls are server-side telemetry. Replaying them yields 422
-# UnprocessableEntityError (ModelInput deserialize failure).
-_GROK_OUTPUT_ONLY_TYPES: frozenset[str] = frozenset(
-    {"reasoning", "web_search_call", "x_search_call"}
-)
+# `input` when managing context manually. Plaintext `reasoning` (no encrypted blob)
+# must be dropped; items with `encrypted_content` (from `include` on the prior call)
+# are replayable. Native search calls are server-side telemetry — drop from input.
+# Stderr streaming of search/reasoning is separate from this replay filter.
+
+
+def _grok_saved_item_skip_for_input(item: dict[str, Any]) -> bool:
+    t = item.get("type")
+    if t == "reasoning":
+        return not bool(item.get("encrypted_content"))
+    return t in {"web_search_call", "x_search_call"}
+
+
+def _grok_native_search_kind_and_phase(etype: str) -> tuple[str, str] | None:
+    """Map stream event type to (kind, phase) for native web/X search lifecycle events."""
+    if not isinstance(etype, str) or not etype.startswith("response."):
+        return None
+    parts = etype.split(".")
+    if len(parts) >= 3 and parts[1] in ("web_search_call", "x_search_call"):
+        return parts[1], parts[2]
+    for p in ("web_search_call", "x_search_call"):
+        if p in parts:
+            i = parts.index(p)
+            if i + 1 < len(parts):
+                return p, parts[i + 1]
+            return p, "unknown"
+    return None
 
 
 def _build_tool_schemas(harness_tools: dict[str, Tool]) -> list[dict[str, Any]]:
@@ -66,10 +88,7 @@ def _instructions_and_input(messages: list[dict], default_instructions: str) -> 
             saved = m.get("grok_saved_output")
             if isinstance(saved, list) and saved:
                 for item in saved:
-                    if (
-                        isinstance(item, dict)
-                        and item.get("type") in _GROK_OUTPUT_ONLY_TYPES
-                    ):
+                    if isinstance(item, dict) and _grok_saved_item_skip_for_input(item):
                         continue
                     input_items.append(item)
                 continue
@@ -113,12 +132,22 @@ class GrokMode:
     plus harness function tools. Chat Completions only accepts `function` / `live_search`
     tool types, so native search must use ``client.responses.create`` (see xAI docs)."""
 
-    def __init__(self, client: OpenAI, model: str, tools: dict[str, Tool]):
+    def __init__(
+        self,
+        client: OpenAI,
+        model: str,
+        tools: dict[str, Tool],
+        *,
+        response_include: list[str] | None = None,
+    ):
         self.client = client
         self.model = model
         self.tools = tools
         self._system = system_prompt_native()
         self._tool_schemas = _build_tool_schemas(tools)
+        self._response_include: list[str] = (
+            list(response_include) if response_include else []
+        )
 
     def initial_messages(
         self, task: str, prior: str, tools: dict[str, Tool]
@@ -140,41 +169,47 @@ class GrokMode:
     ) -> Response:
         """Call Grok via xAI Responses API (native search + function tools)."""
         instructions, input_items = _instructions_and_input(messages, self._system)
+        create_kw = self._responses_api_kwargs(instructions, input_items)
         if stream is None:
-            return self.client.responses.create(
-                model=self.model,
-                instructions=instructions,
-                input=input_items,
-                tools=cast(Any, self._tool_schemas),
-                tool_choice="auto",
-                max_output_tokens=4096,
-                temperature=0.1,
-            )
-        return self._complete_streaming(instructions, input_items, stream)
+            return self.client.responses.create(**create_kw)
+        return self._complete_streaming(create_kw, stream)
+
+    def _responses_api_kwargs(
+        self, instructions: str, input_items: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        kw: dict[str, Any] = {
+            "model": self.model,
+            "instructions": instructions,
+            "input": input_items,
+            "tools": cast(Any, self._tool_schemas),
+            "tool_choice": "auto",
+            "max_output_tokens": 4096,
+            "temperature": 0.1,
+        }
+        if self._response_include:
+            kw["include"] = self._response_include
+        return kw
 
     def _complete_streaming(
         self,
-        instructions: str,
-        input_items: list[dict[str, Any]],
+        create_kw: dict[str, Any],
         sink: StreamSink,
     ) -> Response:
         """Stream via ``client.responses.stream``; forward deltas to ``sink``
-        and return the final ``Response`` so downstream helpers work unchanged."""
+        and return the final ``Response`` so downstream helpers work unchanged.
+
+        Live stderr output is independent of ``grok_saved_output`` filtering used
+        when rebuilding ``input`` for the next turn (API-safe replay)."""
         try:
-            with self.client.responses.stream(
-                model=self.model,
-                instructions=instructions,
-                input=cast(Any, input_items),
-                tools=cast(Any, self._tool_schemas),
-                tool_choice="auto",
-                max_output_tokens=4096,
-                temperature=0.1,
-            ) as s:
+            stream_kw = {**create_kw}
+            with self.client.responses.stream(**stream_kw) as s:
                 # Track open items so we can emit sensible block_end kinds when
                 # output_item.done events arrive without a full item payload.
                 open_items: dict[int, tuple[str, str | None, str | None]] = {}
+                debug_unhandled: set[str] = set()
                 for event in s:
                     etype = getattr(event, "type", None)
+                    handled = False
                     if etype == "response.output_item.added":
                         item = getattr(event, "item", None)
                         idx = getattr(event, "output_index", None)
@@ -187,17 +222,21 @@ class GrokMode:
                         sink.on_block_start(
                             kind, index=idx, name=name, call_id=call_id
                         )
+                        handled = True
                     elif etype == "response.output_item.done":
                         idx = getattr(event, "output_index", None)
                         kind, _, _ = open_items.pop(idx, ("", None, None))
                         sink.on_block_end(kind, index=idx)
+                        handled = True
                     elif etype == "response.output_text.delta":
                         sink.on_text_delta(getattr(event, "delta", "") or "")
+                        handled = True
                     elif etype in (
                         "response.reasoning_text.delta",
                         "response.reasoning_summary_text.delta",
                     ):
                         sink.on_reasoning_delta(getattr(event, "delta", "") or "")
+                        handled = True
                     elif etype == "response.function_call_arguments.delta":
                         idx = getattr(event, "output_index", None)
                         _, name, call_id = open_items.get(
@@ -208,6 +247,40 @@ class GrokMode:
                             index=idx,
                             call_id=call_id,
                             name=name,
+                        )
+                        handled = True
+                    elif etype == "response.output_text.annotation.added":
+                        sink.on_annotation(
+                            getattr(event, "annotation", None),
+                            output_index=getattr(event, "output_index", None),
+                            content_index=getattr(event, "content_index", None),
+                            annotation_index=getattr(event, "annotation_index", None),
+                        )
+                        handled = True
+
+                    if not handled and isinstance(etype, str):
+                        pair = _grok_native_search_kind_and_phase(etype)
+                        if pair is not None:
+                            kind, phase = pair
+                            sink.on_search_status(
+                                phase,
+                                kind=kind,
+                                output_index=getattr(event, "output_index", None),
+                                item_id=getattr(event, "item_id", None),
+                            )
+                            handled = True
+
+                    if (
+                        not handled
+                        and isinstance(etype, str)
+                        and etype.startswith("response.")
+                        and os.environ.get("HARNESS_GROK_STREAM_DEBUG") == "1"
+                        and etype not in debug_unhandled
+                    ):
+                        debug_unhandled.add(etype)
+                        print(
+                            f"[grok stream debug] unhandled: {etype}",
+                            file=sys.stderr,
                         )
                 return s.get_final_response()
         except BaseException as exc:
