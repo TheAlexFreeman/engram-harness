@@ -88,6 +88,7 @@ class _RecallEvent:
     timestamp: datetime
     trust: str = ""
     score: float = 0.0
+    phase: str = "manifest"  # "manifest" (first call) or "fetch" (follow-up by index)
 
 
 class EngramMemory:
@@ -126,6 +127,7 @@ class EngramMemory:
         prefix, content_root = _resolve_content_root(repo_root, content_prefix)
         self.repo_root = repo_root
         self.content_root: Path = content_root
+        self.content_prefix: str = prefix  # git-relative prefix, e.g. "core", "", "engram/core"
 
         # GitRepo derives its own root via `git rev-parse`; we only use the
         # content_prefix to translate paths. Pass the *git-root-relative* prefix.
@@ -328,6 +330,11 @@ class EngramMemory:
     @property
     def buffered_records(self) -> list[_BufferedRecord]:
         return list(self._records)
+
+    def _tag_last_recall_phase(self, n: int, phase: str) -> None:
+        """Tag the last *n* recall events with *phase* ('manifest' or 'fetch')."""
+        for ev in self._recall_events[-n:]:
+            ev.phase = phase
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -124,6 +124,8 @@ def run_trace_bridge(
     session_dir = memory.content_root / session_dir_rel
     session_dir.mkdir(parents=True, exist_ok=True)
 
+    content_prefix = getattr(memory, "content_prefix", "core")
+
     tool_calls = _extract_tool_calls(events)
 
     summary_path = session_dir / "summary.md"
@@ -144,7 +146,7 @@ def run_trace_bridge(
     _write_jsonl(spans_path, spans)
     written.append(_relpath(memory, spans_path))
 
-    access_count = _emit_access_entries(memory, tool_calls, stats)
+    access_count = _emit_access_entries(memory, tool_calls, stats, content_prefix=content_prefix)
 
     if trace_path.is_file():
         try:
@@ -157,7 +159,9 @@ def run_trace_bridge(
 
     commit_sha: str | None = None
     if commit:
-        commit_sha = _commit_artifacts(memory, written + _access_paths(memory, tool_calls))
+        commit_sha = _commit_artifacts(
+            memory, written + _access_paths(memory, tool_calls, content_prefix=content_prefix)
+        )
 
     if otel_endpoint := os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
         try:
@@ -510,18 +514,34 @@ def _build_spans(
 # ---------------------------------------------------------------------------
 
 
-def _access_paths(memory: EngramMemory, tool_calls: list[_ToolCall]) -> list[str]:
+_PLAN_TOOL_ACTIONS: dict[str, str] = {
+    "create_plan": "plan_create",
+    "resume_plan": "plan_resume",
+    "complete_phase": "plan_complete",
+    "record_failure": "plan_failure",
+}
+
+
+def _access_paths(
+    memory: EngramMemory,
+    tool_calls: list[_ToolCall],
+    content_prefix: str = "core",
+) -> list[str]:
     seen: set[str] = set()
     for tc in tool_calls:
         if tc.name == "read_file":
             arg_path = tc.args.get("path") or tc.args.get("file_path")
             if not arg_path:
                 continue
-            namespace = _access_namespace(str(arg_path))
+            namespace = _access_namespace(str(arg_path), content_prefix)
             if namespace:
                 seen.add(f"{namespace}/ACCESS.jsonl")
+        elif tc.name in _PLAN_TOOL_ACTIONS:
+            seen.add("memory/working/projects/ACCESS.jsonl")
     for ev in memory.recall_events:
-        namespace = _access_namespace(ev.file_path)
+        if getattr(ev, "phase", "manifest") == "fetch":
+            continue
+        namespace = _access_namespace(ev.file_path, content_prefix)
         if namespace:
             seen.add(f"{namespace}/ACCESS.jsonl")
     return sorted(seen)
@@ -531,6 +551,8 @@ def _emit_access_entries(
     memory: EngramMemory,
     tool_calls: list[_ToolCall],
     stats: _SessionStats,
+    *,
+    content_prefix: str = "core",
 ) -> int:
     """Append ACCESS entries for every read of a file under an access-tracked root."""
     entries_by_file: dict[Path, list[dict[str, Any]]] = defaultdict(list)
@@ -538,7 +560,10 @@ def _emit_access_entries(
     # match the existing (file, session_id, date) dedupe key.
     access_date = stats.session_date or datetime.now().date().isoformat()
     task_slug = _task_slug(stats.task) or memory.session_id
-    canonical_session_id = f"core/{memory._session_dir_rel()}"
+    _prefix = content_prefix.strip("/")
+    canonical_session_id = (
+        f"{_prefix}/{memory._session_dir_rel()}" if _prefix else memory._session_dir_rel()
+    )
 
     for idx, tc in enumerate(tool_calls):
         if tc.name != "read_file":
@@ -546,12 +571,12 @@ def _emit_access_entries(
         arg_path = tc.args.get("path") or tc.args.get("file_path")
         if not arg_path:
             continue
-        access_dir_rel = _access_namespace(str(arg_path))
+        access_dir_rel = _access_namespace(str(arg_path), content_prefix)
         if not access_dir_rel:
             continue
         helpfulness, note = _derive_read_helpfulness(str(arg_path), idx, tool_calls)
         entry = {
-            "file": _normalize_for_access(str(arg_path)),
+            "file": _normalize_for_access(str(arg_path), content_prefix),
             "date": access_date,
             "task": task_slug,
             "helpfulness": round(helpfulness, 3),
@@ -561,7 +586,29 @@ def _emit_access_entries(
         access_path = memory.content_root / access_dir_rel / "ACCESS.jsonl"
         entries_by_file[access_path].append(entry)
 
+    for tc in tool_calls:
+        action = _PLAN_TOOL_ACTIONS.get(tc.name)
+        if not action:
+            continue
+        plan_id = str(tc.args.get("plan_id") or "").strip()
+        if not plan_id:
+            continue
+        project_id = (str(tc.args.get("project_id") or "").strip()) or "misc-plans"
+        plan_rel = f"memory/working/projects/{project_id}/plans/{plan_id}"
+        entry = {
+            "file": plan_rel,
+            "date": access_date,
+            "task": task_slug,
+            "helpfulness": 0.5,
+            "note": f"plan tool: {action}",
+            "session_id": canonical_session_id,
+        }
+        access_path = memory.content_root / "memory" / "working" / "projects" / "ACCESS.jsonl"
+        entries_by_file[access_path].append(entry)
+
     for ev in memory.recall_events:
+        if getattr(ev, "phase", "manifest") == "fetch":
+            continue  # skip fetch-phase duplicates; manifest already registered this access
         access_dir_rel = _access_namespace(ev.file_path)
         if not access_dir_rel:
             continue
@@ -638,31 +685,34 @@ def _sidecar_dedupe_entries(
 # ---------------------------------------------------------------------------
 
 
-def _access_namespace(file_path: str) -> str | None:
+def _access_namespace(file_path: str, content_prefix: str = "core") -> str | None:
     """Map a file path to its ACCESS-tracked namespace directory.
 
     Accepts:
       - content-root-relative paths (`memory/knowledge/foo.md`)
-      - git-root-relative paths (`core/memory/knowledge/foo.md`)
+      - git-root-relative paths (`{content_prefix}/memory/knowledge/foo.md`)
       - absolute paths under the content root
     """
     norm = _norm(file_path).strip("/")
-    # Strip a leading `core/` if present so we match against memory/...
-    if norm.startswith("core/"):
-        norm = norm[len("core/") :]
+    prefix = content_prefix.strip("/")
+    if prefix and norm.startswith(prefix + "/"):
+        norm = norm[len(prefix) + 1:]
     for root in _ACCESS_ROOTS:
         if norm == root or norm.startswith(root + "/"):
             return root
     return None
 
 
-def _normalize_for_access(file_path: str) -> str:
-    """Always store ACCESS file paths with the `core/` prefix to match engram's convention."""
+def _normalize_for_access(file_path: str, content_prefix: str = "core") -> str:
+    """Store ACCESS file paths with the content_prefix to match the repo's convention."""
     norm = _norm(file_path).strip("/")
-    if norm.startswith("core/"):
+    prefix = content_prefix.strip("/")
+    if not prefix:
         return norm
+    if norm.startswith(prefix + "/"):
+        return norm  # already prefixed
     if norm.startswith("memory/"):
-        return f"core/{norm}"
+        return f"{prefix}/{norm}"
     return norm
 
 

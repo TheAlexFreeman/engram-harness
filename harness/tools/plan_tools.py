@@ -237,6 +237,14 @@ class ResumePlan:
         phases: list[dict] = plan.get("phases", [])
         current_idx = int(state.get("current_phase", 0))
 
+        if state.get("status") == "pending_approval":
+            phase_name = phases[current_idx]["name"] if current_idx < len(phases) else "?"
+            return (
+                f"Plan **{plan_id}** ({plan.get('title', '?')}) is awaiting approval.\n"
+                f"Phase **{phase_name}** requires approval before it can be marked complete.\n"
+                f"Call `complete_phase` with `plan_id='{plan_id}'` and `approved=true` to advance.\n"
+            )
+
         lines = [
             f"# Plan briefing: {plan_id} — {plan.get('title', '?')}",
             "",
@@ -319,7 +327,9 @@ class CompletePlan:
     description = (
         "Mark the current plan phase as done and advance to the next one. "
         "Optionally provide a summary of what was accomplished and the git commit SHA. "
-        "Returns the next phase name, or 'plan complete' if all phases are done."
+        "Returns the next phase name, or 'plan complete' if all phases are done. "
+        "Pass `postconditions_met=false` to review postconditions before advancing. "
+        "Pass `approved=true` to advance past a `requires_approval` gate."
     )
     input_schema = {
         "type": "object",
@@ -329,6 +339,21 @@ class CompletePlan:
             "project_id": {"type": "string"},
             "summary": {"type": "string", "description": "What was accomplished this phase."},
             "commit_sha": {"type": "string", "description": "Git commit sealing the phase output."},
+            "postconditions_met": {
+                "type": "boolean",
+                "description": (
+                    "Set to false to see the postcondition list without advancing. "
+                    "Defaults to true (advance unconditionally). "
+                    "Pass false to review exit criteria before committing."
+                ),
+            },
+            "approved": {
+                "type": "boolean",
+                "description": (
+                    "Set to true to advance past a `requires_approval` gate. "
+                    "Defaults to false; omit unless you have explicit approval to proceed."
+                ),
+            },
         },
     }
 
@@ -357,14 +382,45 @@ class CompletePlan:
             return f"Plan **{plan_id}** is now complete.\n"
 
         current_phase = phases[current_idx]
+        postconditions_met = bool(args.get("postconditions_met", True))
+        approved = bool(args.get("approved", False))
 
-        # Warn about unmet postconditions (heuristic, non-blocking)
-        warnings: list[str] = []
-        summary_text = (args.get("summary") or "").lower()
-        for pc in current_phase.get("postconditions") or []:
-            keyword = re.sub(r"[^a-z0-9 ]", "", pc.lower()).split()[0] if pc.strip() else ""
-            if keyword and keyword not in summary_text:
-                warnings.append(f"Postcondition may be unmet: '{pc}'")
+        # Postcondition gate: if caller explicitly says not met, surface the list
+        # and block advancement so the agent must acknowledge them first.
+        postconds = current_phase.get("postconditions") or []
+        if postconds and not postconditions_met:
+            lines = [
+                f"Phase **{current_phase['name']}** not advanced — postconditions not confirmed.",
+                "",
+                "Review and address each of the following before completing:",
+            ]
+            for pc in postconds:
+                lines.append(f"- {pc}")
+            lines += [
+                "",
+                f"Call `complete_phase` with `postconditions_met=true` when all are satisfied.",
+            ]
+            return "\n".join(lines) + "\n"
+
+        # Approval gate: when the phase requires approval and caller hasn't provided it,
+        # record pending_approval status so ResumePlan can surface this to the next session.
+        if current_phase.get("requires_approval") and not approved:
+            state["status"] = "pending_approval"
+            _save_run_state(plan_dir, state)
+            rel = plan_dir.relative_to(self._memory.content_root).as_posix()
+            self._memory.commit(
+                f"phase {current_idx} of {plan_id} awaiting approval",
+                [f"{rel}/run-state.json"],
+            )
+            return (
+                f"Phase **{current_phase['name']}** requires approval before completion. "
+                f"Plan **{plan_id}** is now in `pending_approval` state.\n"
+                f"Call `complete_phase` with `approved=true` to advance.\n"
+            )
+
+        # Reset pending_approval if caller approved this pass.
+        if state.get("status") == "pending_approval":
+            state["status"] = "active"
 
         session_entry: dict[str, Any] = {
             "phase_index": current_idx,
@@ -404,11 +460,6 @@ class CompletePlan:
                 f"({state['current_phase'] + 1}/{len(phases)}).\n"
                 f"Call `resume_plan` at the start of the next session to continue.\n"
             )
-
-        if warnings:
-            result += "\n⚠️  Postcondition warnings:\n"
-            for w in warnings:
-                result += f"- {w}\n"
 
         return result
 

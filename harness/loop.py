@@ -100,25 +100,72 @@ def run_until_idle(
         # Trace server-side native search calls (Grok web_search / x_search).
         # These run on xAI's infrastructure and never go through harness tool
         # dispatch, so they'd be invisible in the JSONL without this explicit step.
+        native_calls: list[dict] = []
         if hasattr(mode, "extract_native_search_calls"):
-            for nc in mode.extract_native_search_calls(response):
-                tracer.event("native_search_call", turn=turn, seq=tool_seq, **nc)
-                tool_seq += 1
+            native_calls = mode.extract_native_search_calls(response)
 
         tool_calls = mode.extract_tool_calls(response)
-        if not tool_calls:
-            final = mode.final_text(response)
-            return RunResult(
-                final_text=final,
-                usage=total,
-                turns_used=turn + 1,
-                max_turns_reached=False,
-            )
 
-        batch_start_seq = tool_seq
-        for call in tool_calls:
-            tracer.event("tool_call", name=call.name, args=call.args, turn=turn, seq=tool_seq)
-            tool_seq += 1
+        # Interleave native-search and function-call seq values in document order
+        # when the mode exposes output positions for both call types.
+        # `fn_seqs[i]` will hold the seq assigned to the i-th function call so
+        # the matching tool_result events can use the same values.
+        fn_seqs: list[int] = []
+
+        if native_calls and hasattr(mode, "extract_function_call_positions"):
+            fn_positions = mode.extract_function_call_positions(response)
+            # Build combined list: (output_position, kind, index)
+            order: list[tuple[int, str, int]] = []
+            for i, nc in enumerate(native_calls):
+                order.append((nc.get("output_position", -1), "native", i))
+            for j, pos in enumerate(fn_positions):
+                order.append((pos, "fn", j))
+            order.sort(key=lambda x: x[0])
+
+            fn_seq_map: dict[int, int] = {}
+            for _, kind, idx in order:
+                if kind == "native":
+                    nc = native_calls[idx]
+                    ev_kw = {k: v for k, v in nc.items() if k != "output_position"}
+                    tracer.event("native_search_call", turn=turn, seq=tool_seq, **ev_kw)
+                else:
+                    fn_seq_map[idx] = tool_seq
+                tool_seq += 1
+
+            if not tool_calls:
+                final = mode.final_text(response)
+                return RunResult(
+                    final_text=final,
+                    usage=total,
+                    turns_used=turn + 1,
+                    max_turns_reached=False,
+                )
+
+            for j, call in enumerate(tool_calls):
+                seq = fn_seq_map.get(j, tool_seq)
+                fn_seqs.append(seq)
+                tracer.event("tool_call", name=call.name, args=call.args, turn=turn, seq=seq)
+        else:
+            # Fallback path: no position data — emit native searches first, then
+            # function calls (preserves previous behaviour for non-Grok modes).
+            for nc in native_calls:
+                ev_kw = {k: v for k, v in nc.items() if k != "output_position"}
+                tracer.event("native_search_call", turn=turn, seq=tool_seq, **ev_kw)
+                tool_seq += 1
+
+            if not tool_calls:
+                final = mode.final_text(response)
+                return RunResult(
+                    final_text=final,
+                    usage=total,
+                    turns_used=turn + 1,
+                    max_turns_reached=False,
+                )
+
+            for call in tool_calls:
+                fn_seqs.append(tool_seq)
+                tracer.event("tool_call", name=call.name, args=call.args, turn=turn, seq=tool_seq)
+                tool_seq += 1
 
         if max_parallel_tools <= 1 or len(tool_calls) == 1:
             results = [execute(c, tools) for c in tool_calls]
@@ -139,7 +186,7 @@ def run_until_idle(
                 name=result.call.name,
                 is_error=result.is_error,
                 content_preview=result.content[:200],
-                seq=batch_start_seq + i,
+                seq=fn_seqs[i],
             )
             if result.is_error:
                 memory.record(

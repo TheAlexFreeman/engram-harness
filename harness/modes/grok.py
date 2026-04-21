@@ -401,18 +401,18 @@ class GrokMode:
     def extract_native_search_calls(self, response: Response) -> list[dict[str, Any]]:
         """Extract native web_search_call / x_search_call metadata from response.output.
 
-        Returns one dict per server-side search with at minimum a ``kind`` key
-        ("web_search_call" or "x_search_call"). Optional keys included when the
-        xAI API populates them: ``id``, ``status``, ``query``, ``sources_found``.
+        Returns one dict per server-side search. ``output_position`` records the
+        item's index in ``response.output`` so callers can interleave seq values
+        with adjacent function_call items in document order.
         """
         calls: list[dict[str, Any]] = []
-        for item in response.output:
+        for pos, item in enumerate(response.output):
             t = getattr(item, "type", None)
             if t not in {"web_search_call", "x_search_call"}:
                 continue
             # Use "search_type" to avoid colliding with the TraceSink "kind" field
             # that identifies the event type ("native_search_call").
-            call: dict[str, Any] = {"search_type": t}
+            call: dict[str, Any] = {"search_type": t, "output_position": pos}
             item_id = getattr(item, "id", None)
             if item_id:
                 call["id"] = item_id
@@ -427,6 +427,22 @@ class GrokMode:
                 call["sources_found"] = len(results)
             calls.append(call)
         return calls
+
+    def extract_function_call_positions(self, response: Response) -> list[int]:
+        """Return the output_position of each harness function_call in document order.
+
+        Parallel to ``extract_tool_calls`` — entry i gives the position in
+        ``response.output`` of the i-th ToolCall that ``extract_tool_calls``
+        would return.
+        """
+        positions = []
+        for pos, item in enumerate(response.output):
+            if getattr(item, "type", None) != "function_call":
+                continue
+            name = getattr(item, "name", None)
+            if name and name in self.tools:
+                positions.append(pos)
+        return positions
 
     def extract_usage(self, response: Response) -> Usage:
         """xAI Responses usage plus server-side search call counts.

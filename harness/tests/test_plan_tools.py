@@ -447,6 +447,103 @@ def test_resume_plan_does_not_commit(mock_memory: MagicMock, content_root: Path)
 
 
 # ---------------------------------------------------------------------------
+# Postcondition + approval enforcement (plan 06)
+# ---------------------------------------------------------------------------
+
+
+def test_complete_phase_blocked_when_postconditions_not_met(
+    creator: CreatePlan, completer: CompletePlan, content_root: Path
+) -> None:
+    plan_id = _create_plan(creator)
+    result = completer.run({"plan_id": plan_id, "postconditions_met": False})
+    assert "not advanced" in result
+    assert "A done" in result  # postcondition from _create_plan fixture
+
+    state_path = (
+        content_root
+        / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id / "run-state.json"
+    )
+    state = json.loads(state_path.read_text())
+    assert state["current_phase"] == 0  # not advanced
+
+
+def test_complete_phase_advances_when_postconditions_met(
+    creator: CreatePlan, completer: CompletePlan, content_root: Path
+) -> None:
+    plan_id = _create_plan(creator)
+    result = completer.run({"plan_id": plan_id, "postconditions_met": True, "summary": "done"})
+    assert "Phase 2" in result
+
+    state_path = (
+        content_root
+        / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id / "run-state.json"
+    )
+    state = json.loads(state_path.read_text())
+    assert state["current_phase"] == 1
+
+
+def test_complete_phase_approval_gate_blocks_without_approved(
+    creator: CreatePlan, completer: CompletePlan, content_root: Path
+) -> None:
+    plan_id = _create_plan(creator, phases=[
+        {"name": "Gated Phase", "tasks": ["do it"], "requires_approval": True},
+        {"name": "Next Phase", "tasks": ["follow up"]},
+    ])
+    result = completer.run({"plan_id": plan_id, "summary": "done"})
+    assert "pending_approval" in result or "requires approval" in result.lower()
+
+    state_path = (
+        content_root
+        / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id / "run-state.json"
+    )
+    state = json.loads(state_path.read_text())
+    assert state["status"] == "pending_approval"
+    assert state["current_phase"] == 0  # not advanced
+
+
+def test_complete_phase_approval_gate_advances_with_approved(
+    creator: CreatePlan, completer: CompletePlan, content_root: Path
+) -> None:
+    plan_id = _create_plan(creator, phases=[
+        {"name": "Gated Phase", "tasks": ["do it"], "requires_approval": True},
+        {"name": "Next Phase", "tasks": ["follow up"]},
+    ])
+    completer.run({"plan_id": plan_id, "summary": "done"})  # sets pending_approval
+    result = completer.run({"plan_id": plan_id, "approved": True, "summary": "approved"})
+    assert "Next Phase" in result
+
+    state_path = (
+        content_root
+        / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id / "run-state.json"
+    )
+    state = json.loads(state_path.read_text())
+    assert state["current_phase"] == 1
+    assert state["status"] == "active"
+
+
+def test_complete_phase_no_postconditions_advances_normally(
+    creator: CreatePlan, completer: CompletePlan
+) -> None:
+    plan_id = _create_plan(creator, phases=[
+        {"name": "Simple Phase", "tasks": ["just do it"]},
+    ])
+    result = completer.run({"plan_id": plan_id})
+    assert "complete" in result.lower()
+
+
+def test_resume_plan_shows_pending_approval(
+    creator: CreatePlan, completer: CompletePlan, resuming: ResumePlan
+) -> None:
+    plan_id = _create_plan(creator, phases=[
+        {"name": "Approval Required", "tasks": ["t"], "requires_approval": True},
+        {"name": "Phase 2", "tasks": ["t2"]},
+    ])
+    completer.run({"plan_id": plan_id})  # triggers pending_approval
+    result = resuming.run({"plan_id": plan_id})
+    assert "approval" in result.lower() or "pending" in result.lower()
+
+
+# ---------------------------------------------------------------------------
 # Round-trip test
 # ---------------------------------------------------------------------------
 

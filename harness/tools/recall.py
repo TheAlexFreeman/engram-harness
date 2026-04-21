@@ -119,6 +119,11 @@ class RecallMemory:
         except (TypeError, ValueError):
             idx = 0
 
+        # Tag recall events so the trace bridge can skip fetch-phase duplicates.
+        # Manifest calls (idx <= 0) are the first retrieval; fetch calls are follow-ups.
+        if results:
+            self._memory._tag_last_recall_phase(len(results), "fetch" if idx > 0 else "manifest")
+
         if idx <= 0:
             return _format_manifest(results, query)
 

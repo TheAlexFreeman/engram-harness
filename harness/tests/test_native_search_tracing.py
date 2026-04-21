@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from harness.memory import FileMemory
 from harness.modes.grok import GrokMode
 from harness.tests.test_engram_memory import _make_engram_repo
 from harness.trace_bridge import (
@@ -263,6 +264,19 @@ def test_run_trace_bridge_includes_native_search_in_spans(
     assert "web_search_call" in summary
 
 
+def test_extract_native_search_calls_includes_output_position() -> None:
+    mode = _StubGrokMode()
+    resp = _make_response(
+        _function_call_item(),          # pos 0
+        _web_search_item(query="q1"),   # pos 1
+        _x_search_item(query="q2"),     # pos 2
+    )
+    calls = mode.extract_native_search_calls(resp)
+    assert len(calls) == 2
+    assert calls[0]["output_position"] == 1
+    assert calls[1]["output_position"] == 2
+
+
 def test_run_trace_bridge_native_search_counted_in_tool_calls(
     repo: Path, memory: EngramMemory, tmp_path: Path
 ) -> None:
@@ -282,3 +296,122 @@ def test_run_trace_bridge_native_search_counted_in_tool_calls(
     summary = result.summary_path.read_text(encoding="utf-8")
     # summary frontmatter carries tool_calls count
     assert "tool_calls: 2" in summary
+
+
+# ---------------------------------------------------------------------------
+# Plan 10: native search output_position for seq ordering
+# ---------------------------------------------------------------------------
+
+
+def test_extract_function_call_positions() -> None:
+    from harness.modes.grok import GrokMode
+    from unittest.mock import MagicMock
+
+    mock_client = MagicMock()
+    bash_tool = MagicMock()
+    bash_tool.name = "bash"
+    bash_tool.description = "run shell"
+    bash_tool.input_schema = {"type": "object", "properties": {}}
+    tools = {"bash": bash_tool}
+    mode = GrokMode(mock_client, "grok-3", tools)
+
+    resp = _make_response(
+        _web_search_item(),             # pos 0 — native, not a function_call
+        _function_call_item("bash"),    # pos 1 — harness tool
+        _x_search_item(),               # pos 2 — native
+        _function_call_item("bash"),    # pos 3 — second harness tool call
+    )
+    positions = mode.extract_function_call_positions(resp)
+    assert positions == [1, 3]
+
+
+def test_native_search_seq_interleaved_with_function_calls(tmp_path: Path) -> None:
+    """Native search seq values reflect document order when mixed with function calls."""
+    from dataclasses import dataclass, field
+    from typing import Any
+    from harness.loop import run_until_idle
+    from harness.tools import Tool, ToolCall
+    from harness.memory import FileMemory
+    from harness.trace import TraceSink
+    from unittest.mock import MagicMock
+
+    # Build a minimal GrokMode-alike stub that has both extract methods.
+    class _NativeSearchMode:
+        def initial_messages(self, task, prior, tools):
+            return [{"role": "user", "content": task}]
+
+        def complete(self, messages, *, stream=None):
+            return self
+
+        def as_assistant_message(self, resp):
+            return {"role": "assistant", "content": ""}
+
+        def extract_tool_calls(self, resp):
+            return [ToolCall(name="noop", args={}, id="c0")]
+
+        def extract_native_search_calls(self, resp):
+            # Search appears AFTER the function call in document order
+            return [{"search_type": "web_search_call", "output_position": 1}]
+
+        def extract_function_call_positions(self, resp):
+            return [0]  # function call is at position 0
+
+        def as_tool_results_message(self, results):
+            return [{"role": "tool", "tool_call_id": "c0", "content": "ok"}]
+
+        def final_text(self, resp):
+            return "done"
+
+        def extract_usage(self, resp):
+            from harness.usage import Usage
+            return Usage(model="test", input_tokens=1, output_tokens=1)
+
+    @dataclass
+    class _RecordingTracer:
+        events: list[tuple[str, dict]] = field(default_factory=list)
+        def event(self, kind: str, **data: Any) -> None:
+            self.events.append((kind, data))
+        def close(self) -> None:
+            pass
+
+    class _NoopTool:
+        name = "noop"
+        description = "no-op"
+        input_schema = {"type": "object", "properties": {}}
+        def run(self, args: dict) -> str:
+            return "ok"
+
+    noop = _NoopTool()
+    tools = {"noop": noop}
+    mode = _NativeSearchMode()
+
+    # Second response: no tool calls → terminates
+    _done = False
+    _orig_extract = mode.extract_tool_calls
+    call_count = [0]
+    def _extract_tool_calls_stub(resp):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return [ToolCall(name="noop", args={}, id="c0")]
+        return []
+    mode.extract_tool_calls = _extract_tool_calls_stub  # type: ignore
+
+    tracer = _RecordingTracer()
+    msgs = [{"role": "user", "content": "test"}]
+    memory = FileMemory(tmp_path / "mem.json")
+
+    from harness.pricing import load_pricing
+    run_until_idle(msgs, mode, tools, memory, tracer, max_turns=5, pricing=load_pricing())
+
+    # Find native_search_call and tool_call events from the first turn
+    native_evs = [(k, d) for k, d in tracer.events if k == "native_search_call"]
+    tool_evs = [(k, d) for k, d in tracer.events if k == "tool_call"]
+    assert native_evs, "expected at least one native_search_call event"
+    assert tool_evs, "expected at least one tool_call event"
+
+    native_seq = native_evs[0][1]["seq"]
+    tool_seq = tool_evs[0][1]["seq"]
+    # function call is at output_position 0, native search at 1 → fn seq < native seq
+    assert tool_seq < native_seq, (
+        f"function call seq ({tool_seq}) should be < native search seq ({native_seq})"
+    )
