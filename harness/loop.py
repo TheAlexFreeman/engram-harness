@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -50,6 +51,7 @@ def run_until_idle(
     *,
     repeat_guard_threshold: int = 3,
     repeat_guard_message: str | None = None,
+    stop_event: threading.Event | None = None,
 ) -> RunResult:
     """Run model/tool turns until the assistant responds without tool calls or
     ``max_turns`` is hit.
@@ -69,6 +71,13 @@ def run_until_idle(
     nudge_text = repeat_guard_message or _DEFAULT_REPEAT_GUARD_MESSAGE
 
     for turn in range(max_turns):
+        if stop_event is not None and stop_event.is_set():
+            return RunResult(
+                final_text="(stopped by user)",
+                usage=total,
+                turns_used=turn,
+                max_turns_reached=False,
+            )
         response = mode.complete(messages, stream=stream_sink)
         tracer.event("model_response", turn=turn)
 
@@ -171,6 +180,7 @@ def run(
     repeat_guard_threshold: int = 3,
     repeat_guard_message: str | None = None,
     skip_end_session_commit: bool = False,
+    stop_event: threading.Event | None = None,
 ) -> RunResult:
     prior = memory.start_session(task)
     messages = mode.initial_messages(task=task, prior=prior, tools=tools)
@@ -188,6 +198,7 @@ def run(
         stream_sink=stream_sink,
         repeat_guard_threshold=repeat_guard_threshold,
         repeat_guard_message=repeat_guard_message,
+        stop_event=stop_event,
     )
 
     tracer.event("session_usage", **result.usage.as_trace_dict())

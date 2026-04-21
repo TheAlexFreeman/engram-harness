@@ -1,43 +1,38 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
-import anthropic
 from dotenv import load_dotenv
-from openai import OpenAI
 
+from harness.config import SessionComponents, SessionConfig, build_session, config_from_args
 from harness.loop import run, run_until_idle
-from harness.memory import FileMemory
-from harness.stream import NullStreamSink, StderrStreamPrinter
-from harness.tools import Tool
-from harness.tools.bash import Bash
-from harness.tools.fs import (
-    CopyPath,
-    DeletePath,
-    EditFile,
-    GlobFiles,
-    GrepWorkspace,
-    ListFiles,
-    Mkdir,
-    MovePath,
-    PathStat,
-    ReadFile,
-    WorkspaceScope,
-    WriteFile,
-)
-from harness.tools.git import Git, GitCommit, GitDiff, GitLog, GitStatus
-from harness.tools.search import WebSearch
-from harness.tools.todos import AnalyzeTodos, ReadTodos, UpdateTodo, WriteTodos
-from harness.tools.x_search import XSearch
-from harness.trace import CompositeTracer, ConsoleTracePrinter, Tracer
+from harness.tools.fs import WorkspaceScope
 from harness.usage import Usage
 
 
-def build_tools(scope: WorkspaceScope, *, extra: list[Tool] | None = None) -> dict[str, Tool]:
+def build_tools(scope: WorkspaceScope, *, extra: list | None = None) -> dict:
+    from harness.tools import Tool
+    from harness.tools.bash import Bash
+    from harness.tools.fs import (
+        CopyPath,
+        DeletePath,
+        EditFile,
+        GlobFiles,
+        GrepWorkspace,
+        ListFiles,
+        Mkdir,
+        MovePath,
+        PathStat,
+        ReadFile,
+        WriteFile,
+    )
+    from harness.tools.git import Git, GitCommit, GitDiff, GitLog, GitStatus
+    from harness.tools.search import WebSearch
+    from harness.tools.todos import AnalyzeTodos, ReadTodos, UpdateTodo, WriteTodos
+    from harness.tools.x_search import XSearch
+
     base: list[Tool] = [
         ReadFile(scope),
         ListFiles(scope),
@@ -61,7 +56,7 @@ def build_tools(scope: WorkspaceScope, *, extra: list[Tool] | None = None) -> di
         UpdateTodo(scope),
         AnalyzeTodos(scope),
         WebSearch(),
-        XSearch(),  # Dedicated real-time X (Twitter) search with strong X bias
+        XSearch(),
     ]
     if extra:
         base.extend(extra)
@@ -96,58 +91,6 @@ def _workspace_gitignore_pattern(workspace: Path, git_root: Path) -> str | None:
     return f"{rel.as_posix().rstrip('/')}/"
 
 
-def _build_memory(args, workspace: Path):
-    """Pick a MemoryBackend based on --memory. Returns (backend, engram_or_none, extra_tools)."""
-    if args.memory == "file":
-        return FileMemory(path=workspace / "progress.md"), None, []
-
-    from harness.engram_memory import EngramMemory, detect_engram_repo
-    from harness.tools.recall import RecallMemory
-    from harness.tools.plan_tools import CreatePlan, ResumePlan, CompletePlan, RecordFailure
-
-    repo_path = args.memory_repo
-    if repo_path is None:
-        repo_path = detect_engram_repo(workspace) or detect_engram_repo(Path.cwd())
-    if repo_path is None:
-        bundled = Path(__file__).resolve().parent.parent / "engram"
-        if (bundled / "core" / "memory" / "HOME.md").is_file():
-            repo_path = bundled
-    if repo_path is None:
-        print(
-            "[warning] --memory=engram requested but no Engram repo found. "
-            "Falling back to FileMemory.",
-            file=sys.stderr,
-        )
-        return FileMemory(path=workspace / "progress.md"), None, []
-    try:
-        engram = EngramMemory(Path(repo_path))
-    except Exception as exc:  # noqa: BLE001
-        print(
-            f"[warning] failed to open Engram repo at {repo_path}: {exc}. "
-            "Falling back to FileMemory.",
-            file=sys.stderr,
-        )
-        return FileMemory(path=workspace / "progress.md"), None, []
-    print(
-        f"[engram] session={engram.session_id} repo={engram.content_root}",
-        file=sys.stderr,
-    )
-    plan_tools = [CreatePlan(engram), ResumePlan(engram), CompletePlan(engram), RecordFailure(engram)]
-    return engram, engram, [RecallMemory(engram)] + plan_tools
-
-
-_INTERACTIVE_SESSION_LABEL = "Interactive session"
-_INTERACTIVE_EXIT = frozenset({"exit", "quit"})
-
-
-def _read_interactive_line() -> str | None:
-    """Read one line from stdin; return None on EOF."""
-    try:
-        return input()
-    except EOFError:
-        return None
-
-
 def _ensure_workspace_in_gitignore(workspace: Path) -> None:
     git_root = _find_git_root(workspace)
     if git_root is None:
@@ -170,10 +113,7 @@ def _ensure_workspace_in_gitignore(workspace: Path) -> None:
         f.write(f"{pattern}\n")
 
 
-def main() -> None:
-    load_dotenv()
-    load_dotenv(Path(__file__).resolve().parent / ".env")
-
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="harness")
     parser.add_argument(
         "task",
@@ -260,6 +200,7 @@ def main() -> None:
     parser.add_argument(
         "--memory-repo",
         default=None,
+        dest="memory_repo",
         help=(
             "Path to the Engram repo root (or its parent) when --memory=engram. "
             "Defaults to auto-detect: looks for memory/HOME.md, core/memory/HOME.md, "
@@ -304,111 +245,96 @@ def main() -> None:
             "items can be replayed on later turns (larger requests)."
         ),
     )
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    if not args.interactive and (args.task is None or not str(args.task).strip()):
-        parser.error("task is required unless --interactive is set")
 
-    workspace = Path(args.workspace).resolve()
-    workspace.mkdir(parents=True, exist_ok=True)
-    _ensure_workspace_in_gitignore(workspace)
-    scope = WorkspaceScope(root=workspace)
+_INTERACTIVE_EXIT = frozenset({"exit", "quit"})
+_INTERACTIVE_SESSION_LABEL = "Interactive session"
 
-    memory, engram_memory, extra_tools = _build_memory(args, workspace)
-    tools = build_tools(scope, extra=extra_tools)
 
-    # Support for Grok/xAI: detect by model name (Responses API + native search tools).
-    # Falls back to Anthropic for Claude models. Grok provides strong reasoning capabilities.
-    is_grok_model = any(k in args.model.lower() for k in ["grok", "xai", "x.ai"])
-    if is_grok_model:
-        api_key = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
-        if not api_key:
-            raise ValueError("GROK_API_KEY or XAI_API_KEY must be set in .env for Grok models")
-        client = OpenAI(
-            api_key=api_key,
-            base_url="https://api.x.ai/v1",
-        )
-        from harness.modes.grok import GrokMode
+def _read_interactive_line() -> str | None:
+    try:
+        return input()
+    except EOFError:
+        return None
 
-        grok_include = list(args.grok_include or [])
-        if args.grok_encrypted_reasoning:
-            if "reasoning.encrypted_content" not in grok_include:
-                grok_include.append("reasoning.encrypted_content")
-        mode = GrokMode(
-            client=client,
-            model=args.model,
-            tools=tools,
-            response_include=grok_include or None,
-        )
-        print(f"Using Grok mode with model {args.model}", file=sys.stderr)
-    else:
-        client = anthropic.Anthropic()  # ANTHROPIC_API_KEY from env / .env
 
-        if args.mode == "native":
-            from harness.modes.native import NativeMode
-            from harness.prompts import system_prompt_native
+def _run_interactive(args: argparse.Namespace, components: SessionComponents) -> Usage:
+    """Run the interactive REPL. Returns total usage."""
+    config = components.config
+    bridge_enabled = config.trace_to_engram if config.trace_to_engram is not None else (
+        components.engram_memory is not None
+    )
 
-            mode = NativeMode(
-                client=client,
-                model=args.model,
-                tools=tools,
-                system=system_prompt_native(with_plan_tools=engram_memory is not None),
-            )
-        else:
-            from harness.modes.text import TextMode
+    total_usage = Usage.zero()
+    total_turns = 0
+    last_final: str | None = None
+    session_started = False
+    messages: list[dict] = []
 
-            mode = TextMode(client=client, model=args.model, tools=tools)
+    with components.tracer as tracer:
+        try:
+            opener = (args.task or "").strip()
 
-    actions_suffix = "grok" if is_grok_model else args.mode
-    if engram_memory is not None:
-        trace_path = (
-            engram_memory.content_root
-            / engram_memory.session_dir_rel
-            / f"ACTIONS.{actions_suffix}.jsonl"
-        ).resolve()
-        trace_path.parent.mkdir(parents=True, exist_ok=True)
-        trace_path.write_text("", encoding="utf-8")
-    else:
-        trace_path = Path("traces") / f"{datetime.now():%Y%m%d-%H%M%S}-{actions_suffix}.jsonl"
+            if opener:
+                prior = components.memory.start_session(opener)
+                messages = components.mode.initial_messages(
+                    task=opener, prior=prior, tools=components.tools
+                )
+                tracer.event("session_start", task=opener)
+                session_started = True
+                r0 = run_until_idle(
+                    messages,
+                    components.mode,
+                    components.tools,
+                    components.memory,
+                    tracer,
+                    max_turns=config.max_turns,
+                    max_parallel_tools=config.max_parallel_tools,
+                    stream_sink=components.stream_sink,
+                    repeat_guard_threshold=config.repeat_guard_threshold,
+                )
+                total_usage = total_usage + r0.usage
+                total_turns += r0.turns_used
+                last_final = r0.final_text
+                print("\n" + "=" * 60)
+                print(r0.final_text)
+                print("=" * 60)
+            else:
+                first: str | None = None
+                while first is None:
+                    print("harness> ", end="", file=sys.stderr, flush=True)
+                    raw = _read_interactive_line()
+                    if raw is None:
+                        break
+                    s = raw.strip()
+                    if not s:
+                        continue
+                    if s.lower() in _INTERACTIVE_EXIT:
+                        break
+                    first = s
 
-    if args.trace_live:
-        tracer_ctx: CompositeTracer | Tracer = CompositeTracer(
-            [Tracer(trace_path), ConsoleTracePrinter()]
-        )
-    else:
-        tracer_ctx = Tracer(trace_path)
-
-    stream_sink = StderrStreamPrinter() if args.stream else NullStreamSink()
-
-    bridge_default = engram_memory is not None
-    bridge_enabled = args.trace_to_engram if args.trace_to_engram is not None else bridge_default
-
-    if args.interactive:
-        total_usage = Usage.zero()
-        total_turns = 0
-        last_final: str | None = None
-        session_started = False
-        messages: list[dict] = []
-
-        with tracer_ctx as tracer:
-            try:
-                opener = (args.task or "").strip()
-
-                if opener:
-                    prior = memory.start_session(opener)
-                    messages = mode.initial_messages(task=opener, prior=prior, tools=tools)
-                    tracer.event("session_start", task=opener)
+                if first is not None:
+                    prior = components.memory.start_session(_INTERACTIVE_SESSION_LABEL)
+                    messages = components.mode.initial_messages(
+                        task=first, prior=prior, tools=components.tools
+                    )
+                    tracer.event(
+                        "session_start",
+                        task=_INTERACTIVE_SESSION_LABEL,
+                        opener=first,
+                    )
                     session_started = True
                     r0 = run_until_idle(
                         messages,
-                        mode,
-                        tools,
-                        memory,
+                        components.mode,
+                        components.tools,
+                        components.memory,
                         tracer,
-                        max_turns=args.max_turns,
-                        max_parallel_tools=args.max_parallel_tools,
-                        stream_sink=stream_sink,
-                        repeat_guard_threshold=args.repeat_guard_threshold,
+                        max_turns=config.max_turns,
+                        max_parallel_tools=config.max_parallel_tools,
+                        stream_sink=components.stream_sink,
+                        repeat_guard_threshold=config.repeat_guard_threshold,
                     )
                     total_usage = total_usage + r0.usage
                     total_turns += r0.turns_used
@@ -416,136 +342,98 @@ def main() -> None:
                     print("\n" + "=" * 60)
                     print(r0.final_text)
                     print("=" * 60)
-                else:
-                    first: str | None = None
-                    while first is None:
-                        print("harness> ", end="", file=sys.stderr, flush=True)
-                        raw = _read_interactive_line()
-                        if raw is None:
-                            break
-                        s = raw.strip()
-                        if not s:
-                            continue
-                        if s.lower() in _INTERACTIVE_EXIT:
-                            break
-                        first = s
 
-                    if first is None:
-                        pass
-                    else:
-                        prior = memory.start_session(_INTERACTIVE_SESSION_LABEL)
-                        messages = mode.initial_messages(task=first, prior=prior, tools=tools)
-                        tracer.event(
-                            "session_start",
-                            task=_INTERACTIVE_SESSION_LABEL,
-                            opener=first,
-                        )
-                        session_started = True
-                        r0 = run_until_idle(
-                            messages,
-                            mode,
-                            tools,
-                            memory,
-                            tracer,
-                            max_turns=args.max_turns,
-                            max_parallel_tools=args.max_parallel_tools,
-                            stream_sink=stream_sink,
-                            repeat_guard_threshold=args.repeat_guard_threshold,
-                        )
-                        total_usage = total_usage + r0.usage
-                        total_turns += r0.turns_used
-                        last_final = r0.final_text
-                        print("\n" + "=" * 60)
-                        print(r0.final_text)
-                        print("=" * 60)
+            while session_started:
+                print("harness> ", end="", file=sys.stderr, flush=True)
+                raw = _read_interactive_line()
+                if raw is None:
+                    break
+                line = raw.strip()
+                if not line:
+                    continue
+                if line.lower() in _INTERACTIVE_EXIT:
+                    break
 
-                while session_started:
-                    print("harness> ", end="", file=sys.stderr, flush=True)
-                    raw = _read_interactive_line()
-                    if raw is None:
-                        break
-                    line = raw.strip()
-                    if not line:
-                        continue
-                    if line.lower() in _INTERACTIVE_EXIT:
-                        break
-
-                    tracer.event("interactive_turn", chars=len(line))
-                    messages.append({"role": "user", "content": line})
-                    r = run_until_idle(
-                        messages,
-                        mode,
-                        tools,
-                        memory,
-                        tracer,
-                        max_turns=args.max_turns,
-                        max_parallel_tools=args.max_parallel_tools,
-                        stream_sink=stream_sink,
-                        repeat_guard_threshold=args.repeat_guard_threshold,
-                    )
-                    total_usage = total_usage + r.usage
-                    total_turns += r.turns_used
-                    last_final = r.final_text
-                    print("\n" + "=" * 60)
-                    print(r.final_text)
-                    print("=" * 60)
-
-            except KeyboardInterrupt:
-                print("\n[interrupt]", file=sys.stderr)
-
-            if session_started:
-                summary = (
-                    (last_final or "")[:2000]
-                    if last_final
-                    else "(interactive exit before any assistant reply)"
+                tracer.event("interactive_turn", chars=len(line))
+                messages.append({"role": "user", "content": line})
+                r = run_until_idle(
+                    messages,
+                    components.mode,
+                    components.tools,
+                    components.memory,
+                    tracer,
+                    max_turns=config.max_turns,
+                    max_parallel_tools=config.max_parallel_tools,
+                    stream_sink=components.stream_sink,
+                    repeat_guard_threshold=config.repeat_guard_threshold,
                 )
-                memory.end_session(summary=summary, skip_commit=bridge_enabled)
-                tracer.event("session_usage", **total_usage.as_trace_dict())
-                tracer.event(
-                    "session_end",
-                    turns=total_turns,
-                    reason="interactive_exit",
-                )
+                total_usage = total_usage + r.usage
+                total_turns += r.turns_used
+                last_final = r.final_text
+                print("\n" + "=" * 60)
+                print(r.final_text)
+                print("=" * 60)
 
-        interactive_usage = total_usage
-    else:
-        interactive_usage = None
-        with tracer_ctx as tracer:
-            batch_result = run(
-                str(args.task),
-                mode,
-                tools,
-                memory,
-                tracer,
-                max_turns=args.max_turns,
-                max_parallel_tools=args.max_parallel_tools,
-                stream_sink=stream_sink,
-                repeat_guard_threshold=args.repeat_guard_threshold,
-                skip_end_session_commit=bridge_enabled,
+        except KeyboardInterrupt:
+            print("\n[interrupt]", file=sys.stderr)
+
+        if session_started:
+            summary = (
+                (last_final or "")[:2000]
+                if last_final
+                else "(interactive exit before any assistant reply)"
             )
+            components.memory.end_session(summary=summary, skip_commit=bridge_enabled)
+            tracer.event("session_usage", **total_usage.as_trace_dict())
+            tracer.event("session_end", turns=total_turns, reason="interactive_exit")
 
-    if bridge_enabled and engram_memory is not None:
-        try:
-            from harness.trace_bridge import run_trace_bridge
+    return total_usage
 
-            bridge_result = run_trace_bridge(trace_path, engram_memory)
-            print(
-                f"[engram] trace bridge: {len(bridge_result.artifacts)} artifact(s), "
-                f"{bridge_result.access_entries} ACCESS entries"
-                + (f", commit {bridge_result.commit_sha[:8]}" if bridge_result.commit_sha else ""),
-                file=sys.stderr,
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(f"[warning] trace bridge failed: {exc}", file=sys.stderr)
 
-    if args.interactive:
-        assert interactive_usage is not None
-        u = interactive_usage
-    else:
-        print("\n" + "=" * 60)
-        print(batch_result.final_text)
-        print("=" * 60)
-        u = batch_result.usage
+def _run_batch(args: argparse.Namespace, components: SessionComponents):
+    """Run a single batch session. Returns RunResult."""
+    config = components.config
+    bridge_enabled = config.trace_to_engram if config.trace_to_engram is not None else (
+        components.engram_memory is not None
+    )
+    with components.tracer as tracer:
+        return run(
+            str(args.task),
+            components.mode,
+            components.tools,
+            components.memory,
+            tracer,
+            max_turns=config.max_turns,
+            max_parallel_tools=config.max_parallel_tools,
+            stream_sink=components.stream_sink,
+            repeat_guard_threshold=config.repeat_guard_threshold,
+            skip_end_session_commit=bridge_enabled,
+        )
+
+
+def _run_trace_bridge(components: SessionComponents) -> None:
+    """Run the trace bridge if configured."""
+    config = components.config
+    bridge_enabled = config.trace_to_engram if config.trace_to_engram is not None else (
+        components.engram_memory is not None
+    )
+    if not (bridge_enabled and components.engram_memory is not None):
+        return
+    try:
+        from harness.trace_bridge import run_trace_bridge
+
+        bridge_result = run_trace_bridge(components.trace_path, components.engram_memory)
+        print(
+            f"[engram] trace bridge: {len(bridge_result.artifacts)} artifact(s), "
+            f"{bridge_result.access_entries} ACCESS entries"
+            + (f", commit {bridge_result.commit_sha[:8]}" if bridge_result.commit_sha else ""),
+            file=sys.stderr,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warning] trace bridge failed: {exc}", file=sys.stderr)
+
+
+def _print_usage(u: Usage, components: SessionComponents) -> None:
     print(
         f"tokens: in={u.input_tokens:,} out={u.output_tokens:,} "
         f"cache_read={u.cache_read_tokens:,} cache_write={u.cache_write_tokens:,} "
@@ -562,8 +450,60 @@ def main() -> None:
     if u.pricing_missing:
         models = ", ".join(u.missing_models) or "(unknown)"
         print(f"[warning] no pricing for model(s): {models}", file=sys.stderr)
-    print(f"trace: {trace_path}")
-    if engram_memory is not None:
-        print(f"engram: {engram_memory.content_root / engram_memory.session_dir_rel}")
+    print(f"trace: {components.trace_path}")
+    if components.engram_memory is not None:
+        print(
+            f"engram: {components.engram_memory.content_root / components.engram_memory.session_dir_rel}"
+        )
     else:
-        print(f"progress: {workspace / 'progress.md'}")
+        print(f"progress: {components.config.workspace / 'progress.md'}")
+
+
+def _serve_main() -> None:
+    """Entry point for `harness serve` subcommand."""
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="harness serve")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8420)
+    args = parser.parse_args(sys.argv[2:])
+    from harness.server import serve
+
+    serve(host=args.host, port=args.port)
+
+
+def main() -> None:
+    # Dispatch `harness serve` before the main arg parser so it doesn't
+    # conflict with the positional `task` argument.
+    if len(sys.argv) > 1 and sys.argv[1] == "serve":
+        _serve_main()
+        return
+
+    load_dotenv()
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+
+    args = _parse_args()
+
+    if not args.interactive and (args.task is None or not str(args.task).strip()):
+        print("error: task is required unless --interactive is set", file=sys.stderr)
+        sys.exit(2)
+
+    config = config_from_args(args)
+    config.workspace.mkdir(parents=True, exist_ok=True)
+    _ensure_workspace_in_gitignore(config.workspace)
+
+    scope = WorkspaceScope(root=config.workspace)
+    base_tools = build_tools(scope)
+    components = build_session(config, tools=base_tools)
+
+    if args.interactive:
+        usage = _run_interactive(args, components)
+        _run_trace_bridge(components)
+        _print_usage(usage, components)
+    else:
+        batch_result = _run_batch(args, components)
+        _run_trace_bridge(components)
+        print("\n" + "=" * 60)
+        print(batch_result.final_text)
+        print("=" * 60)
+        _print_usage(batch_result.usage, components)
