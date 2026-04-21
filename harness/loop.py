@@ -88,6 +88,14 @@ def run_until_idle(
 
         messages.append(mode.as_assistant_message(response))
 
+        # Trace server-side native search calls (Grok web_search / x_search).
+        # These run on xAI's infrastructure and never go through harness tool
+        # dispatch, so they'd be invisible in the JSONL without this explicit step.
+        if hasattr(mode, "extract_native_search_calls"):
+            for nc in mode.extract_native_search_calls(response):
+                tracer.event("native_search_call", turn=turn, seq=tool_seq, **nc)
+                tool_seq += 1
+
         tool_calls = mode.extract_tool_calls(response)
         if not tool_calls:
             final = mode.final_text(response)

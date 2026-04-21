@@ -218,6 +218,9 @@ def _aggregate_stats(events: list[dict[str, Any]]) -> _SessionStats:
         elif kind == "tool_call":
             s.tool_call_count += 1
             s.by_tool[str(ev.get("name", ""))] += 1
+        elif kind == "native_search_call":
+            s.tool_call_count += 1
+            s.by_tool[str(ev.get("search_type", "native_search"))] += 1
         elif kind == "tool_result":
             if ev.get("is_error"):
                 s.error_count += 1
@@ -267,6 +270,20 @@ def _extract_tool_calls(events: list[dict[str, Any]]) -> list[_ToolCall]:
             seq += 1
             pending_calls.append(tc)
             calls.append(tc)
+        elif kind == "native_search_call":
+            # Server-side Grok search — no separate tool_result event.
+            search_kind = str(ev.get("search_type", "native_search"))
+            query = ev.get("query")
+            tc = _ToolCall(
+                turn=current_turn,
+                seq=seq,
+                name=search_kind,
+                args={"query": query} if query else {},
+                timestamp=str(ev.get("ts", "")),
+                is_error=ev.get("status") == "failed",
+            )
+            seq += 1
+            calls.append(tc)  # no pending_calls entry — result already baked in
         elif kind == "tool_result":
             name = str(ev.get("name", ""))
             for tc in pending_calls:

@@ -398,6 +398,36 @@ class GrokMode:
             return f"[Grok Reasoning]\n{reasoning_block}"
         return "(no text response)"
 
+    def extract_native_search_calls(self, response: Response) -> list[dict[str, Any]]:
+        """Extract native web_search_call / x_search_call metadata from response.output.
+
+        Returns one dict per server-side search with at minimum a ``kind`` key
+        ("web_search_call" or "x_search_call"). Optional keys included when the
+        xAI API populates them: ``id``, ``status``, ``query``, ``sources_found``.
+        """
+        calls: list[dict[str, Any]] = []
+        for item in response.output:
+            t = getattr(item, "type", None)
+            if t not in {"web_search_call", "x_search_call"}:
+                continue
+            # Use "search_type" to avoid colliding with the TraceSink "kind" field
+            # that identifies the event type ("native_search_call").
+            call: dict[str, Any] = {"search_type": t}
+            item_id = getattr(item, "id", None)
+            if item_id:
+                call["id"] = item_id
+            status = getattr(item, "status", None)
+            if status:
+                call["status"] = status
+            query = getattr(item, "query", None)
+            if query:
+                call["query"] = query
+            results = getattr(item, "results", None)
+            if results is not None:
+                call["sources_found"] = len(results)
+            calls.append(call)
+        return calls
+
     def extract_usage(self, response: Response) -> Usage:
         """xAI Responses usage plus server-side search call counts.
 
