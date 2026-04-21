@@ -295,6 +295,17 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # Ensure stdout/stderr can handle any Unicode produced by the model or
+    # tool output. On Windows, stdout defaults to the ANSI code page (often
+    # cp1252) and will crash on emoji/box-drawing chars. Reconfigure to UTF-8
+    # with replacement so one bad byte never tanks a fully successful session.
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
     if len(sys.argv) > 1 and sys.argv[1] == "serve":
         _serve_main()
         return

@@ -544,6 +544,7 @@ def _git_relative_prefix(content_root: Path) -> str:
         cwd=str(content_root if content_root.is_dir() else content_root.parent),
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     if result.returncode != 0:
         raise ValueError(f"Not inside a git repo: {content_root}")
