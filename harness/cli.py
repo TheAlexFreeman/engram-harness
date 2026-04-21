@@ -278,10 +278,20 @@ def main() -> None:
 
             mode = TextMode(client=client, model=args.model, tools=tools)
 
-    trace_path = (
-        Path("traces")
-        / f"{datetime.now():%Y%m%d-%H%M%S}-{'grok' if is_grok_model else args.mode}.jsonl"
-    )
+    actions_suffix = "grok" if is_grok_model else args.mode
+    if engram_memory is not None:
+        trace_path = (
+            engram_memory.content_root
+            / engram_memory.session_dir_rel
+            / f"ACTIONS.{actions_suffix}.jsonl"
+        ).resolve()
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        trace_path.write_text("", encoding="utf-8")
+    else:
+        trace_path = (
+            Path("traces")
+            / f"{datetime.now():%Y%m%d-%H%M%S}-{actions_suffix}.jsonl"
+        )
 
     if args.trace_live:
         tracer_ctx: CompositeTracer | Tracer = CompositeTracer(

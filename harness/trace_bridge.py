@@ -143,6 +143,15 @@ def run_trace_bridge(
 
     access_count = _emit_access_entries(memory, tool_calls, stats)
 
+    if trace_path.is_file():
+        try:
+            raw_rel = _relpath(memory, trace_path)
+        except ValueError:
+            pass
+        else:
+            if raw_rel not in written:
+                written.append(raw_rel)
+
     commit_sha: str | None = None
     if commit:
         commit_sha = _commit_artifacts(memory, written + _access_paths(memory, tool_calls))
