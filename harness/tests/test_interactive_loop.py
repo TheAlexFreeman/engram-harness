@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -121,6 +122,33 @@ def test_run_still_one_start_and_one_end_session():
     assert memory.start_calls == 1
     assert memory.end_calls == 1
     assert memory.summary == "ok"
+
+
+def test_run_stop_event_emits_session_end_with_stopped_reason():
+    memory = RecordingMemory()
+    mode = ScriptedMode(
+        [
+            _ScriptedResponse(tool_calls=[], text="never"),
+        ]
+    )
+    tracer = RecordingTracer()
+    stop = threading.Event()
+    stop.set()
+
+    run(
+        task="hi",
+        mode=mode,
+        tools={},
+        memory=memory,
+        tracer=tracer,
+        max_parallel_tools=1,
+        stop_event=stop,
+    )
+
+    end_events = [e for e in tracer.events if e["kind"] == "session_end"]
+    assert len(end_events) == 1
+    assert end_events[0].get("reason") == "stopped"
+    assert end_events[0].get("turns") == 0
 
 
 # ---------------------------------------------------------------------------

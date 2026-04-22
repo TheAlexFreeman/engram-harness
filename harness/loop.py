@@ -42,6 +42,7 @@ class RunResult:
     usage: Usage
     turns_used: int = 0
     max_turns_reached: bool = False
+    stopped_by_user: bool = False
 
 
 def run_until_idle(
@@ -87,6 +88,7 @@ def run_until_idle(
                 usage=total,
                 turns_used=turn,
                 max_turns_reached=False,
+                stopped_by_user=True,
             )
         response = mode.complete(messages, stream=stream_sink)
         tracer.event("model_response", turn=turn)
@@ -300,6 +302,9 @@ def run(
     if result.max_turns_reached:
         memory.end_session(summary="(max turns reached)", skip_commit=skip_end_session_commit)
         tracer.event("session_end", turns=result.turns_used, reason="max_turns")
+    elif result.stopped_by_user:
+        memory.end_session(summary=result.final_text[:2000], skip_commit=skip_end_session_commit)
+        tracer.event("session_end", turns=result.turns_used, reason="stopped")
     else:
         memory.end_session(summary=result.final_text[:2000], skip_commit=skip_end_session_commit)
         tracer.event("session_end", turns=result.turns_used)

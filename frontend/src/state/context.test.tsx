@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api/client";
 import { connectSSE, type SSEHandler, type SSEPayload } from "../api/sse";
-import { SessionProvider, useSessionContext } from "./context";
+import { SessionProvider, sseToAction, useSessionContext } from "./context";
 
 vi.mock("../api/client", () => ({
   api: {
@@ -68,6 +68,41 @@ function emit(registration: SSERegistration, payload: SSEPayload) {
     registration.handler(payload);
   });
 }
+
+describe("sseToAction", () => {
+  it("maps tool_result content_preview to TOOL_RESULT result", () => {
+    const action = sseToAction({
+      channel: "trace",
+      event: "tool_result",
+      ts: "2026-04-21T10:00:00.000",
+      data: {
+        name: "bash",
+        is_error: false,
+        turn: 2,
+        content_preview: "stdout here",
+        seq: 1,
+      },
+    });
+    expect(action).toEqual({
+      type: "TOOL_RESULT",
+      name: "bash",
+      isError: false,
+      turn: 2,
+      result: "stdout here",
+      seq: 1,
+    });
+  });
+
+  it("falls back to legacy tool_result result when content_preview is absent", () => {
+    const action = sseToAction({
+      channel: "trace",
+      event: "tool_result",
+      ts: "2026-04-21T10:00:00.000",
+      data: { name: "bash", is_error: true, turn: 0, result: "legacy err" },
+    });
+    expect(action).toMatchObject({ type: "TOOL_RESULT", result: "legacy err", isError: true });
+  });
+});
 
 describe("SessionProvider", () => {
   beforeEach(() => {

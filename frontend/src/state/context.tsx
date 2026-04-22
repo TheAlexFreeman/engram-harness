@@ -28,7 +28,7 @@ interface SessionContextValue {
 const SessionContext = createContext<SessionContextValue | null>(null);
 const TERMINAL_STATUSES = new Set(["completed", "stopped", "error"]);
 
-function sseToAction(payload: SSEPayload): SessionAction {
+export function sseToAction(payload: SSEPayload): SessionAction {
   const { channel, event, data } = payload;
 
   if (channel === "stream") {
@@ -66,15 +66,24 @@ function sseToAction(payload: SSEPayload): SessionAction {
           turn: (data.turn as number) ?? 0,
           seq: data.seq as number | undefined,
         };
-      case "tool_result":
+      case "tool_result": {
+        const preview = data.content_preview;
+        const legacy = data.result;
+        const resultText =
+          typeof preview === "string"
+            ? preview
+            : typeof legacy === "string"
+              ? legacy
+              : undefined;
         return {
           type: "TOOL_RESULT",
           name: (data.name as string) ?? "",
           isError: (data.is_error as boolean) ?? false,
           turn: (data.turn as number) ?? 0,
-          result: data.result as string | undefined,
+          result: resultText,
           seq: data.seq as number | undefined,
         };
+      }
       case "usage":
         return {
           type: "USAGE_UPDATE",
