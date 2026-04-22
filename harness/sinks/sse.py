@@ -16,7 +16,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass
@@ -44,6 +44,112 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="milliseconds")
 
 
+def _evict_oldest_non_control(queue: Any) -> bool:
+    """Drop the oldest non-control event from an asyncio.Queue-like object."""
+    items = getattr(queue, "_queue", None)
+    if items is None:
+        return False
+    try:
+        for idx, queued in enumerate(items):
+            if getattr(queued, "channel", None) != "control":
+                del items[idx]
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _evict_oldest_event(queue: Any) -> bool:
+    """Drop the oldest queued event, regardless of channel."""
+    getter = getattr(queue, "get_nowait", None)
+    if callable(getter):
+        try:
+            getter()
+            return True
+        except asyncio.QueueEmpty:
+            return False
+        except Exception:
+            return False
+    items = getattr(queue, "_queue", None)
+    if items is None:
+        return False
+    try:
+        if not items:
+            return False
+        if hasattr(items, "popleft"):
+            items.popleft()
+        else:
+            del items[0]
+        return True
+    except Exception:
+        return False
+
+
+def enqueue_sse_event(
+    queue: Any,
+    event: SSEEvent,
+    *,
+    loop: asyncio.AbstractEventLoop | None = None,
+    on_drop: Callable[[int], None] | None = None,
+) -> None:
+    """Enqueue one SSE event using the harness overflow policy.
+
+    Normal stream / trace events are dropped when the queue is full. Control
+    events are preserved: we first evict the oldest queued non-control item,
+    then, if the queue is still saturated, evict the oldest queued event until
+    the control transition can be enqueued.
+    """
+
+    def _record_drop(count: int) -> None:
+        if on_drop is not None and count > 0:
+            on_drop(count)
+
+    def _enqueue_now() -> None:
+        dropped = 0
+        try:
+            queue.put_nowait(event)
+            return
+        except asyncio.QueueFull:
+            if event.channel != "control":
+                _record_drop(1)
+                return
+        except Exception:
+            _record_drop(1)
+            return
+
+        try:
+            if _evict_oldest_non_control(queue):
+                dropped += 1
+                queue.put_nowait(event)
+                _record_drop(dropped)
+                return
+
+            # If only control events remain, preserve the latest terminal /
+            # lifecycle update by making room for it explicitly.
+            while _evict_oldest_event(queue):
+                dropped += 1
+                try:
+                    queue.put_nowait(event)
+                    _record_drop(dropped)
+                    return
+                except asyncio.QueueFull:
+                    continue
+                except Exception:
+                    _record_drop(dropped + 1)
+                    return
+            _record_drop(dropped + 1)
+        except Exception:
+            _record_drop(max(1, dropped))
+
+    if loop is not None:
+        try:
+            loop.call_soon_threadsafe(_enqueue_now)
+        except RuntimeError:
+            _record_drop(1)
+    else:
+        _enqueue_now()
+
+
 class SSETraceSink:
     """TraceSink that pushes events into an asyncio.Queue as SSEEvents.
 
@@ -65,15 +171,12 @@ class SSETraceSink:
         self._drops = 0
 
     def _push(self, event: SSEEvent) -> None:
-        try:
-            if self._loop is not None:
-                self._loop.call_soon_threadsafe(self._queue.put_nowait, event)
-            else:
-                self._queue.put_nowait(event)
-        except RuntimeError:
-            self._drops += 1  # loop closed during shutdown
-        except Exception:
-            self._drops += 1
+        enqueue_sse_event(
+            self._queue,
+            event,
+            loop=self._loop,
+            on_drop=lambda count: setattr(self, "_drops", self._drops + count),
+        )
 
     def event(self, kind: str, **data: Any) -> None:
         self._push(SSEEvent(channel="trace", event=kind, data=data, ts=_now()))
@@ -101,15 +204,12 @@ class SSEStreamSink:
 
     def _push(self, event: str, **data: Any) -> None:
         ev = SSEEvent(channel="stream", event=event, data=data, ts=_now())
-        try:
-            if self._loop is not None:
-                self._loop.call_soon_threadsafe(self._queue.put_nowait, ev)
-            else:
-                self._queue.put_nowait(ev)
-        except RuntimeError:
-            self._drops += 1  # loop closed during shutdown
-        except Exception:
-            self._drops += 1
+        enqueue_sse_event(
+            self._queue,
+            ev,
+            loop=self._loop,
+            on_drop=lambda count: setattr(self, "_drops", self._drops + count),
+        )
 
     def on_block_start(
         self,

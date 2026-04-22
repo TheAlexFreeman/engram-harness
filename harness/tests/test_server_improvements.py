@@ -15,6 +15,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from harness.config import SessionConfig
+from harness.sinks.sse import SSEEvent
+
 # ---------------------------------------------------------------------------
 # Helpers — import the module-level functions without importing FastAPI app
 # ---------------------------------------------------------------------------
@@ -292,3 +295,122 @@ def test_lifespan_signals_running_sessions_on_shutdown():
     finally:
         with srv._sessions_lock:
             srv._sessions.pop(fake_id, None)
+
+
+def test_emit_control_event_survives_full_queue(tmp_path):
+    srv = _import_server()
+
+    async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        previous_handler = loop.get_exception_handler()
+        q: asyncio.Queue = asyncio.Queue(maxsize=1)
+        q.put_nowait(SSEEvent(channel="stream", event="text_delta", data={"text": "old"}, ts="t0"))
+
+        session = srv.ManagedSession(
+            id="ses_backpressure",
+            config=SessionConfig(workspace=tmp_path),
+            components=SimpleNamespace(),
+            queue=q,
+            task="test",
+            loop=loop,
+        )
+
+        errors: list[object] = []
+        loop.set_exception_handler(
+            lambda _loop, ctx: errors.append(ctx.get("exception") or ctx.get("message"))
+        )
+        try:
+            srv._emit(
+                session,
+                SSEEvent(channel="control", event="done", data={"status": "completed"}, ts="t1"),
+            )
+            await asyncio.sleep(0.05)
+        finally:
+            loop.set_exception_handler(previous_handler)
+
+        queued = q.get_nowait()
+        assert queued.channel == "control"
+        assert queued.event == "done"
+        assert session.sse_drop_count == 1
+        assert errors == []
+
+    asyncio.run(_run())
+
+
+def test_list_sessions_fallback_honors_filters_and_pagination(tmp_path):
+    srv = _import_server()
+
+    async def _run() -> None:
+        old_store = srv._store
+        workspace_one = (tmp_path / "ws1").resolve()
+        workspace_two = (tmp_path / "ws2").resolve()
+        workspace_one.mkdir()
+        workspace_two.mkdir()
+
+        components = SimpleNamespace()
+        try:
+            srv._store = None
+            with srv._sessions_lock:
+                srv._sessions.clear()
+                session_one = srv.ManagedSession(
+                    id="ses_one",
+                    config=SessionConfig(workspace=workspace_one),
+                    components=components,
+                    queue=asyncio.Queue(),
+                    task="alpha task",
+                    created_at="2026-04-21T10:00:00.000",
+                    final_text="alpha final",
+                )
+                session_one.status = "completed"
+
+                session_two = srv.ManagedSession(
+                    id="ses_two",
+                    config=SessionConfig(workspace=workspace_one),
+                    components=components,
+                    queue=asyncio.Queue(),
+                    task="beta task",
+                    created_at="2026-04-21T11:00:00.000",
+                    final_text="other final",
+                )
+                session_two.status = "running"
+
+                session_three = srv.ManagedSession(
+                    id="ses_three",
+                    config=SessionConfig(workspace=workspace_two),
+                    components=components,
+                    queue=asyncio.Queue(),
+                    task="gamma task",
+                    created_at="2026-04-21T12:00:00.000",
+                    final_text="contains beta in final text",
+                )
+                session_three.status = "running"
+
+                srv._sessions.update(
+                    {
+                        session_one.id: session_one,
+                        session_two.id: session_two,
+                        session_three.id: session_three,
+                    }
+                )
+
+            first_page = await srv.list_sessions(status="running", search="beta", limit=1, offset=0)
+            second_page = await srv.list_sessions(
+                status="running", search="beta", limit=1, offset=1
+            )
+            workspace_filtered = await srv.list_sessions(
+                workspace=str(workspace_one),
+                status="running",
+                search="beta",
+                limit=10,
+                offset=0,
+            )
+
+            assert [session.session_id for session in first_page.sessions] == ["ses_three"]
+            assert [session.session_id for session in second_page.sessions] == ["ses_two"]
+            assert [session.session_id for session in workspace_filtered.sessions] == ["ses_two"]
+        finally:
+            srv._store = old_store
+            with srv._sessions_lock:
+                srv._sessions.clear()
+
+    asyncio.run(_run())

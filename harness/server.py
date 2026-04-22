@@ -38,7 +38,7 @@ from harness.server_models import (
 )
 from harness.session_store import SessionRecord, SessionStore
 from harness.sinks.session_tracker import SessionStateTrackerSink
-from harness.sinks.sse import SSEEvent, SSEStreamSink, SSETraceSink
+from harness.sinks.sse import SSEEvent, SSEStreamSink, SSETraceSink, enqueue_sse_event
 from harness.usage import Usage
 
 # Load `.env` when the server module is imported (covers `uvicorn harness.server:app`,
@@ -102,6 +102,7 @@ class ManagedSession:
     messages: list[dict] = field(default_factory=list)
     final_text: str | None = None
     loop: asyncio.AbstractEventLoop | None = None
+    sse_drop_count: int = 0
 
 
 # Session eviction: remove terminal sessions older than this from memory.
@@ -186,14 +187,12 @@ def init_store(db_path: Path) -> SessionStore:
 
 def _emit(session: ManagedSession, event: SSEEvent) -> None:
     """Push an SSEEvent to the session queue from a background thread."""
-    loop = session.loop
-    if loop is not None:
-        try:
-            loop.call_soon_threadsafe(session.queue.put_nowait, event)
-        except RuntimeError:
-            pass  # loop closed during shutdown
-    else:
-        session.queue.put_nowait(event)
+    enqueue_sse_event(
+        session.queue,
+        event,
+        loop=session.loop,
+        on_drop=lambda count: setattr(session, "sse_drop_count", session.sse_drop_count + count),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +540,80 @@ def _get_session(session_id: str) -> ManagedSession:
     return session
 
 
+def _session_summary_from_record(record: SessionRecord) -> SessionSummary:
+    return SessionSummary(
+        session_id=record.session_id,
+        task=record.task,
+        status=record.status,
+        created_at=record.created_at,
+        turns_used=record.turns_used or 0,
+        total_cost_usd=record.total_cost_usd or 0.0,
+        model=record.model,
+        mode=record.mode,
+        ended_at=record.ended_at,
+        tool_count=sum(record.tool_counts.values()) if record.tool_counts else 0,
+        error_count=record.error_count,
+    )
+
+
+def _session_summary_from_managed_session(session: ManagedSession) -> SessionSummary:
+    return SessionSummary(
+        session_id=session.id,
+        task=session.task,
+        status=session.status,
+        created_at=session.created_at,
+        turns_used=session.turns_used,
+        total_cost_usd=session.usage.total_cost_usd,
+        model=session.config.model,
+        mode=session.config.mode,
+        tool_count=len(session.tool_call_log),
+        error_count=sum(1 for tc in session.tool_call_log if tc.get("is_error")),
+    )
+
+
+def _workspace_matches(session: ManagedSession, workspace: str | None) -> bool:
+    if workspace is None:
+        return True
+    try:
+        requested = str(Path(workspace).resolve())
+    except Exception:
+        requested = workspace
+    return str(session.config.workspace) == requested
+
+
+def _search_matches(session: ManagedSession, search: str | None) -> bool:
+    if not search:
+        return True
+    needle = search.casefold()
+    haystacks = [session.task, session.final_text or ""]
+    return any(needle in haystack.casefold() for haystack in haystacks)
+
+
+def _list_in_memory_sessions(
+    *,
+    workspace: str | None = None,
+    status: str | None = None,
+    search: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[SessionSummary]:
+    with _sessions_lock:
+        sessions = list(_sessions.values())
+
+    filtered = [
+        session
+        for session in sessions
+        if _workspace_matches(session, workspace)
+        and (status is None or session.status == status)
+        and _search_matches(session, search)
+    ]
+    filtered.sort(key=lambda item: item.created_at, reverse=True)
+
+    start = max(offset, 0)
+    end = None if limit < 0 else start + limit
+    return [_session_summary_from_managed_session(session) for session in filtered[start:end]]
+
+
 @app.post("/sessions", response_model=CreateSessionResponse)
 async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     from harness.cli import build_tools
@@ -710,42 +783,17 @@ async def list_sessions(
             workspace=workspace, status=status, search=search, limit=limit, offset=offset
         )
         return SessionListResponse(
-            sessions=[
-                SessionSummary(
-                    session_id=r.session_id,
-                    task=r.task,
-                    status=r.status,
-                    created_at=r.created_at,
-                    turns_used=r.turns_used or 0,
-                    total_cost_usd=r.total_cost_usd or 0.0,
-                    model=r.model,
-                    mode=r.mode,
-                    ended_at=r.ended_at,
-                    tool_count=sum(r.tool_counts.values()) if r.tool_counts else 0,
-                    error_count=r.error_count,
-                )
-                for r in records
-            ]
+            sessions=[_session_summary_from_record(record) for record in records]
         )
-    # Fallback to in-memory sessions
-    with _sessions_lock:
-        sessions = list(_sessions.values())
+
     return SessionListResponse(
-        sessions=[
-            SessionSummary(
-                session_id=s.id,
-                task=s.task,
-                status=s.status,
-                created_at=s.created_at,
-                turns_used=s.turns_used,
-                total_cost_usd=s.usage.total_cost_usd,
-                model=s.config.model,
-                mode=s.config.mode,
-                tool_count=len(s.tool_call_log),
-                error_count=sum(1 for tc in s.tool_call_log if tc.get("is_error")),
-            )
-            for s in sorted(sessions, key=lambda x: x.created_at, reverse=True)
-        ]
+        sessions=_list_in_memory_sessions(
+            workspace=workspace,
+            status=status,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
     )
 
 
