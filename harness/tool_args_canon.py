@@ -6,9 +6,7 @@ from typing import Any
 from harness.tools import Tool
 from harness.tools.fs.scope import normalize_workspace_relative
 
-_PATH_KEY_ALLOWLIST: frozenset[str] = frozenset(
-    {"path", "from_path", "to_path", "root"}
-)
+_PATH_KEY_ALLOWLIST: frozenset[str] = frozenset({"path", "from_path", "to_path", "root"})
 
 
 def parse_tool_arguments(raw: str | object) -> dict[str, Any]:

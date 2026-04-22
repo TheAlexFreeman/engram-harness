@@ -3,9 +3,6 @@ from __future__ import annotations
 import os
 from typing import Any
 
-import httpx
-
-from ._http import parse_json, raise_for_status_short
 from .brave import BraveBackend
 from .types import SearchHit
 
@@ -21,6 +18,7 @@ class XSearchBackend:
         if not brave_key:
             # Graceful degradation if no key (for environments where search is optional)
             from .factory import NoOpBackend
+
             self._brave = NoOpBackend()
         else:
             self._brave = BraveBackend(api_key=brave_key)

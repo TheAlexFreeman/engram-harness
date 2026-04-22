@@ -1,6 +1,6 @@
 from __future__ import annotations
-from harness.tools import Tool
 
+from harness.tools import Tool
 
 _IDENTITY = """You are a coding assistant operating on a local workspace via tools. \
 You work one step at a time, verify your changes, and prefer small precise edits over large rewrites."""
@@ -16,9 +16,7 @@ _RULES = """Rules:
 - When multiple independent tool calls are needed, emit them together in a single response; the harness executes them concurrently.
 - SELF-CORRECTION: On tool errors (especially "escapes workspace", path errors, or JSON issues), do NOT repeat the same call. Analyze the error, simplify your arguments (use clean relative paths without ANY quotes, backslashes, escapes, or XML), then try a corrected version or fallback to list_files/glob_files first. Break repetitive patterns immediately."""
 
-_OUTPUT_NATIVE = (
-    """When you are done, respond with a plain-text summary of what you did."""
-)
+_OUTPUT_NATIVE = """When you are done, respond with a plain-text summary of what you did."""
 
 _OUTPUT_TEXT = """To call a tool, emit EXACTLY one line:
     tool: TOOL_NAME({"arg": "value"})
@@ -30,13 +28,23 @@ def _render_tool(tool: Tool) -> str:
     import json
 
     schema = json.dumps(tool.input_schema, indent=2)
-    return (
-        f"### {tool.name}\n{tool.description}\n\nInput schema:\n```json\n{schema}\n```"
-    )
+    return f"### {tool.name}\n{tool.description}\n\nInput schema:\n```json\n{schema}\n```"
 
 
-def system_prompt_native() -> str:
-    return f"{_IDENTITY}\n\n{_RULES}\n\n{_OUTPUT_NATIVE}"
+_PLAN_TOOLS_SECTION = """\
+## Plan tools
+You have access to multi-session plan management tools:
+- `create_plan` — create a structured multi-phase plan
+- `resume_plan` — load and brief a plan's current state
+- `complete_phase` — seal the current phase and advance
+- `record_failure` — log a failed attempt with context
+
+Use plans for tasks that span multiple sessions or have distinct verifiable phases."""
+
+
+def system_prompt_native(*, with_plan_tools: bool = False) -> str:
+    extra = f"\n\n{_PLAN_TOOLS_SECTION}" if with_plan_tools else ""
+    return f"{_IDENTITY}\n\n{_RULES}\n\n{_OUTPUT_NATIVE}{extra}"
 
 
 def system_prompt_text(tools: dict[str, Tool]) -> str:

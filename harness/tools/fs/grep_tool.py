@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
-
-import fnmatch
 
 from .scope import (
     MAX_GREP_BYTES_PER_FILE,
@@ -65,9 +64,7 @@ class GrepWorkspace:
 
         rg = shutil.which("rg")
         if rg:
-            return self._run_rg(
-                rg, pattern, search_root, file_glob, max_matches, context
-            )
+            return self._run_rg(rg, pattern, search_root, file_glob, max_matches, context)
         return self._run_python(pattern, search_root, max_matches, file_glob)
 
     def _run_rg(
@@ -167,9 +164,7 @@ class GrepWorkspace:
 
         matches_out: list[str] = []
         files_seen = 0
-        for dirpath, dirnames, filenames in os.walk(
-            search_root, topdown=True, followlinks=False
-        ):
+        for dirpath, dirnames, filenames in os.walk(search_root, topdown=True, followlinks=False):
             _prune_hidden(dirnames)
             for name in sorted(filenames):
                 if len(matches_out) >= max_matches:
@@ -181,8 +176,10 @@ class GrepWorkspace:
                         f"\n\n[harness: scanned file limit {MAX_GREP_FILES_SCANNED}; "
                         "install ripgrep for full-repo search]"
                     )
-                    return ("\n".join(matches_out) + suffix) if matches_out else (
-                        f"(no matches in first {MAX_GREP_FILES_SCANNED} files)" + suffix
+                    return (
+                        ("\n".join(matches_out) + suffix)
+                        if matches_out
+                        else (f"(no matches in first {MAX_GREP_FILES_SCANNED} files)" + suffix)
                     )
                 try:
                     rel_file = fp.resolve().relative_to(root_r).as_posix()

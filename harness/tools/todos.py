@@ -211,9 +211,7 @@ class ReadTodos:
         status_filter = args.get("status")
         if status_filter is not None:
             if not isinstance(status_filter, str) or status_filter not in _TODO_STATUSES:
-                raise ValueError(
-                    f"status must be one of: {', '.join(sorted(_TODO_STATUSES))}"
-                )
+                raise ValueError(f"status must be one of: {', '.join(sorted(_TODO_STATUSES))}")
             items = [i for i in items if i.get("status") == status_filter]
         if not items:
             return "(no todos)"
@@ -262,9 +260,7 @@ class UpdateTodo:
         has_content = new_content is not None
         if not has_status and not has_content:
             raise ValueError("provide at least one of status or content")
-        if has_status and (
-            not isinstance(new_status, str) or new_status not in _TODO_STATUSES
-        ):
+        if has_status and (not isinstance(new_status, str) or new_status not in _TODO_STATUSES):
             raise ValueError(f"status must be one of: {', '.join(sorted(_TODO_STATUSES))}")
         if has_content:
             if not isinstance(new_content, str):
@@ -340,8 +336,7 @@ class AnalyzeTodos:
         lines = [
             f"file: {_relative_display(args)}",
             f"total (valid rows): {len(valid)}",
-            "counts: "
-            + ", ".join(f"{k}={counts.get(k, 0)}" for k in sorted(_TODO_STATUSES)),
+            "counts: " + ", ".join(f"{k}={counts.get(k, 0)}" for k in sorted(_TODO_STATUSES)),
         ]
         if pending_ids:
             lines.append("pending ids (up to 30): " + ", ".join(pending_ids))

@@ -125,6 +125,17 @@ class ConsoleTracePrinter:
                 line = f"session end: turns={turns} reason={reason}"
             else:
                 line = f"session end: turns={turns}"
+        elif kind == "native_search_call":
+            search_kind = data.get("search_type", "native_search")
+            query = data.get("query", "")
+            seq = data.get("seq", "")
+            status = data.get("status", "")
+            parts = [f"seq={seq}", f"kind={search_kind}"]
+            if query:
+                parts.append(f"query={query!r}")
+            if status:
+                parts.append(f"status={status}")
+            line = "native search: " + " ".join(parts)
         elif kind == "repetition_guard":
             turn = data.get("turn", "")
             th = data.get("threshold", "")

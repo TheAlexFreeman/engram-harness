@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from typing import Any, Protocol, Union
 
 from harness.stream import StreamSink
@@ -7,7 +8,7 @@ from harness.usage import Usage
 
 
 class Mode(Protocol):
-    """Abstracts over tool-call representation. Native uses the API; text parses strings."""
+    """Abstracts over provider-specific response and tool-call handling."""
 
     def initial_messages(self, task: str, prior: str, tools: dict[str, Tool]) -> list[dict]: ...
 

@@ -9,7 +9,7 @@ seam lives in `harness/engram_memory.py` and `harness/trace_bridge.py`.
 ## Where to start
 
 **Working on the agent loop, tools, or CLI.** Entry point: `harness/cli.py`. Run
-loop: `harness/loop.py`. Model adapters (Claude native, Grok, text): `harness/modes/`.
+loop: `harness/loop.py`. Model adapters (Claude native, Grok): `harness/modes/`.
 Agent-callable tools: `harness/tools/`. Cost accounting: `harness/pricing.py` +
 `harness/pricing.json`. Tracing: `harness/trace.py`. The phased integration plan
 is in `ROADMAP.md`.

@@ -25,6 +25,27 @@ harness "Review the code in src/ and fix any bugs" --workspace ~/my-project \
     --memory engram --memory-repo ./engram
 ```
 
+When your `--workspace` is nested inside another git repo, the CLI now stays
+non-mutating by default. Pass `--auto-ignore-workspace` only if you want it to
+append a single ignore entry for that workspace to the surrounding `.gitignore`.
+
+#### Windows contributors
+
+Python on Windows defaults to the ANSI code page (often cp1252) for `sys.stdout`,
+`open()`, and subprocess decoding. This repo handles the CLI's own stdout correctly,
+but you'll get a smoother experience if you enable UTF-8 mode globally:
+
+```powershell
+setx PYTHONUTF8 1
+```
+
+Open a new shell after running this so the variable is picked up. This makes every
+Python process on your machine use UTF-8 for stdout, stderr, and default file I/O.
+PEP 686 makes this the default starting in Python 3.15.
+
+If you'd rather scope it to this project only, add `PYTHONUTF8=1` to a `.env` file
+in the repo root — the harness loads it via `python-dotenv`.
+
 ## Project structure
 
 - `harness/` — Agent loop, tools, modes, tracing, CLI. The integration seam

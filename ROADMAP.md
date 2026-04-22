@@ -244,7 +244,7 @@ engram-harness/
 │   ├── loop.py                     # Run loop (model turns → tool dispatch → memory)
 │   ├── memory.py                   # MemoryBackend protocol + FileMemory
 │   ├── engram_memory.py            # EngramMemory: real MemoryBackend (new)
-│   ├── modes/                      # Model adapters (Claude native, Grok, text)
+│   ├── modes/                      # Model adapters (Claude native, Grok)
 │   ├── tools/                      # Agent-callable tools
 │   │   ├── fs/                     # Filesystem (scoped to workspace)
 │   │   ├── search/                 # Web search backends (Brave, Tavily, etc.)

@@ -1,0 +1,290 @@
+"""Tests for harness/session_store.py — SessionStore and SessionRecord."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from harness.session_store import SessionRecord, SessionStore, _parse_trace_for_backfill
+
+
+def _make_record(session_id: str = "ses_001", **kwargs) -> SessionRecord:
+    defaults = dict(
+        session_id=session_id,
+        task="Test task",
+        status="running",
+        model="claude-sonnet-4-6",
+        mode="native",
+        memory_backend="file",
+        workspace="/tmp/workspace",
+        created_at="2026-04-21T00:00:00.000",
+    )
+    defaults.update(kwargs)
+    return SessionRecord(**defaults)
+
+
+@pytest.fixture
+def store(tmp_path) -> SessionStore:
+    return SessionStore(tmp_path / "sessions.db")
+
+
+# ---------------------------------------------------------------------------
+# Insert and get
+# ---------------------------------------------------------------------------
+
+
+def test_insert_and_get(store):
+    rec = _make_record()
+    store.insert_session(rec)
+    fetched = store.get_session("ses_001")
+    assert fetched is not None
+    assert fetched.session_id == "ses_001"
+    assert fetched.task == "Test task"
+    assert fetched.status == "running"
+
+
+def test_get_nonexistent(store):
+    assert store.get_session("nonexistent") is None
+
+
+def test_insert_idempotent(store):
+    """INSERT OR IGNORE — inserting twice does not raise and does not duplicate."""
+    rec = _make_record()
+    store.insert_session(rec)
+    store.insert_session(rec)  # should be ignored
+    results = store.list_sessions()
+    assert len(results) == 1
+
+
+# ---------------------------------------------------------------------------
+# complete_session
+# ---------------------------------------------------------------------------
+
+
+def test_complete_session(store):
+    rec = _make_record()
+    store.insert_session(rec)
+    store.complete_session(
+        "ses_001",
+        status="completed",
+        ended_at="2026-04-21T00:05:00.000",
+        turns_used=8,
+        input_tokens=1000,
+        output_tokens=500,
+        total_cost_usd=0.05,
+        tool_counts={"read_file": 5, "edit_file": 2},
+        final_text="Done!",
+    )
+    fetched = store.get_session("ses_001")
+    assert fetched.status == "completed"
+    assert fetched.turns_used == 8
+    assert fetched.total_cost_usd == pytest.approx(0.05)
+    assert fetched.tool_counts == {"read_file": 5, "edit_file": 2}
+    assert fetched.final_text == "Done!"
+
+
+# ---------------------------------------------------------------------------
+# list_sessions filters
+# ---------------------------------------------------------------------------
+
+
+def test_list_sessions_all(store):
+    store.insert_session(_make_record("s1", workspace="/a"))
+    store.insert_session(_make_record("s2", workspace="/b"))
+    store.insert_session(_make_record("s3", workspace="/a"))
+    results = store.list_sessions()
+    assert len(results) == 3
+
+
+def test_list_sessions_workspace_filter(store):
+    store.insert_session(_make_record("s1", workspace="/a"))
+    store.insert_session(_make_record("s2", workspace="/b"))
+    store.insert_session(_make_record("s3", workspace="/a"))
+    results = store.list_sessions(workspace="/a")
+    assert len(results) == 2
+    assert all(r.workspace == "/a" for r in results)
+
+
+def test_list_sessions_status_filter(store):
+    store.insert_session(_make_record("s1", status="running"))
+    store.insert_session(_make_record("s2", status="completed"))
+    store.insert_session(_make_record("s3", status="running"))
+    results = store.list_sessions(status="running")
+    assert len(results) == 2
+    assert all(r.status == "running" for r in results)
+
+
+def test_list_sessions_limit_offset(store):
+    for i in range(5):
+        store.insert_session(_make_record(f"s{i}", created_at=f"2026-04-21T00:0{i}:00.000"))
+    page1 = store.list_sessions(limit=2, offset=0)
+    page2 = store.list_sessions(limit=2, offset=2)
+    assert len(page1) == 2
+    assert len(page2) == 2
+    ids_p1 = {r.session_id for r in page1}
+    ids_p2 = {r.session_id for r in page2}
+    assert ids_p1.isdisjoint(ids_p2)
+
+
+# ---------------------------------------------------------------------------
+# FTS search
+# ---------------------------------------------------------------------------
+
+
+def test_fts_search(store):
+    store.insert_session(_make_record("s1", task="Refactor the auth middleware"))
+    store.insert_session(_make_record("s2", task="Fix the payment bug"))
+    store.insert_session(_make_record("s3", task="Refactor the database layer"))
+    results = store.list_sessions(search="refactor")
+    assert len(results) == 2
+    assert all("refactor" in r.task.lower() for r in results)
+
+
+# ---------------------------------------------------------------------------
+# stats
+# ---------------------------------------------------------------------------
+
+
+def test_stats_empty(store):
+    result = store.stats()
+    assert result["total_sessions"] == 0
+    assert result["total_cost_usd"] == pytest.approx(0.0)
+
+
+def test_stats_with_data(store):
+    store.insert_session(_make_record("s1"))
+    store.insert_session(_make_record("s2"))
+    store.complete_session("s1", status="completed", ended_at="", total_cost_usd=0.10)
+    store.complete_session("s2", status="completed", ended_at="", total_cost_usd=0.20)
+    result = store.stats()
+    assert result["total_sessions"] == 2
+    assert result["total_cost_usd"] == pytest.approx(0.30)
+
+
+def test_stats_workspace_filter(store):
+    store.insert_session(_make_record("s1", workspace="/a"))
+    store.insert_session(_make_record("s2", workspace="/b"))
+    store.complete_session("s1", status="completed", ended_at="", total_cost_usd=0.10)
+    store.complete_session("s2", status="completed", ended_at="", total_cost_usd=0.20)
+    result = store.stats(workspace="/a")
+    assert result["total_sessions"] == 1
+    assert result["total_cost_usd"] == pytest.approx(0.10)
+
+
+# ---------------------------------------------------------------------------
+# Missing DB path → auto-create
+# ---------------------------------------------------------------------------
+
+
+def test_missing_db_created(tmp_path):
+    db = tmp_path / "subdir" / "sessions.db"
+    assert not db.exists()
+    store = SessionStore(db)
+    assert db.exists()
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# backfill_from_traces
+# ---------------------------------------------------------------------------
+
+
+def _write_trace(path: Path, events: list[dict]) -> None:
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        for ev in events:
+            f.write(json.dumps(ev) + "\n")
+
+
+def test_backfill_from_trace(tmp_path, store):
+    trace_dir = tmp_path / "traces"
+    trace_path = trace_dir / "20260421-000000-native.jsonl"
+    _write_trace(
+        trace_path,
+        [
+            {"ts": "2026-04-21T00:00:00.000", "kind": "session_start", "task": "Do the thing"},
+            {"ts": "2026-04-21T00:00:01.000", "kind": "tool_call", "name": "read_file"},
+            {"ts": "2026-04-21T00:00:02.000", "kind": "tool_call", "name": "edit_file"},
+            {
+                "ts": "2026-04-21T00:00:03.000",
+                "kind": "session_usage",
+                "input_tokens": 1000,
+                "output_tokens": 200,
+                "total_cost_usd": 0.01,
+            },
+            {"ts": "2026-04-21T00:00:04.000", "kind": "session_end", "turns": 3},
+        ],
+    )
+    count = store.backfill_from_traces(trace_dir)
+    assert count == 1
+    results = store.list_sessions()
+    assert len(results) == 1
+    rec = results[0]
+    assert rec.task == "Do the thing"
+    assert rec.input_tokens == 1000
+    assert rec.total_cost_usd == pytest.approx(0.01)
+    assert rec.tool_counts == {"read_file": 1, "edit_file": 1}
+
+
+def test_backfill_idempotent(tmp_path, store):
+    trace_dir = tmp_path / "traces"
+    trace_path = trace_dir / "20260421-000000-native.jsonl"
+    _write_trace(
+        trace_path,
+        [
+            {"ts": "2026-04-21T00:00:00.000", "kind": "session_start", "task": "Idempotent"},
+            {"ts": "2026-04-21T00:00:01.000", "kind": "session_end", "turns": 1},
+        ],
+    )
+    count1 = store.backfill_from_traces(trace_dir)
+    count2 = store.backfill_from_traces(trace_dir)
+    assert count1 == 1
+    assert count2 == 0
+    assert len(store.list_sessions()) == 1
+
+
+def test_backfill_empty_dir(tmp_path, store):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    count = store.backfill_from_traces(empty)
+    assert count == 0
+
+
+def test_parse_trace_no_session_start(tmp_path):
+    path = tmp_path / "bad.jsonl"
+    _write_trace(path, [{"kind": "tool_call", "name": "read_file"}])
+    result = _parse_trace_for_backfill(path)
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Concurrent write safety
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_writes(tmp_path):
+    """10 threads writing sessions concurrently must all succeed without error."""
+    import threading
+
+    store = SessionStore(tmp_path / "concurrent.db")
+    errors: list[Exception] = []
+
+    def write_session(idx: int) -> None:
+        try:
+            store.insert_session(_make_record(f"ses_{idx:03d}"))
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write_session, args=(i,)) for i in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == [], f"Concurrent writes raised: {errors}"
+    results = store.list_sessions()
+    assert len(results) == 10
+    store.close()

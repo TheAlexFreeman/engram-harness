@@ -22,14 +22,26 @@ def test_aggregate_uses_session_usage_and_counts_tools(tmp_path: Path):
         trace,
         [
             {"kind": "session_start", "task": "do stuff"},
-            {"kind": "usage", "turn": 0, "input_tokens": 100, "output_tokens": 50, "total_cost_usd": 0.01},
+            {
+                "kind": "usage",
+                "turn": 0,
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_cost_usd": 0.01,
+            },
             {"kind": "tool_call", "name": "read_file"},
             {"kind": "tool_result", "name": "read_file", "is_error": False},
             {"kind": "tool_call", "name": "read_file"},
             {"kind": "tool_result", "name": "read_file", "is_error": True},
             {"kind": "tool_call", "name": "bash"},
             {"kind": "tool_result", "name": "bash", "is_error": False},
-            {"kind": "usage", "turn": 1, "input_tokens": 200, "output_tokens": 75, "total_cost_usd": 0.02},
+            {
+                "kind": "usage",
+                "turn": 1,
+                "input_tokens": 200,
+                "output_tokens": 75,
+                "total_cost_usd": 0.02,
+            },
             {
                 "kind": "session_usage",
                 "input_tokens": 300,
@@ -63,8 +75,20 @@ def test_aggregate_falls_back_to_per_turn_when_session_usage_missing(tmp_path: P
         trace,
         [
             {"kind": "session_start", "task": "partial"},
-            {"kind": "usage", "turn": 0, "input_tokens": 10, "output_tokens": 5, "total_cost_usd": 0.001},
-            {"kind": "usage", "turn": 1, "input_tokens": 20, "output_tokens": 7, "total_cost_usd": 0.002},
+            {
+                "kind": "usage",
+                "turn": 0,
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_cost_usd": 0.001,
+            },
+            {
+                "kind": "usage",
+                "turn": 1,
+                "input_tokens": 20,
+                "output_tokens": 7,
+                "total_cost_usd": 0.002,
+            },
         ],
     )
     r = aggregate(trace)

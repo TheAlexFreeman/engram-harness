@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 # Output / scan bounds (single tool call cannot exceed these without truncation).
@@ -44,7 +43,7 @@ def normalize_workspace_relative(relative: str) -> str:
         s = s[1:-1].strip()
 
     # Final cleanup: strip any remaining quotes, backslashes, whitespace
-    s = s.strip('"\'`\\ \t\n')
+    s = s.strip("\"'`\\ \t\n")
 
     # If still contains quotes, extract the first plausible path-like substring
     if '"' in s or "'" in s or "`" in s:
@@ -65,7 +64,7 @@ def normalize_workspace_relative(relative: str) -> str:
     # Basic sanity: if empty or looks like URL/absolute, fallback to something safe
     if not s or s.startswith(("http", "/", "~", "C:")):
         # Return original stripped if it was a simple path, else fallback
-        orig = str(relative).strip().strip('"\'`')
+        orig = str(relative).strip().strip("\"'`")
         if "/" in orig or "." in orig and not any(c in orig for c in '"\\'):
             s = orig.replace("\\", "/").strip("./")
         else:

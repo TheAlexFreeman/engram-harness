@@ -151,10 +151,18 @@ def iter_disk_skill_slugs(skills_dir: Path) -> list[str]:
 
 def generate_catalog(entries: list[dict]) -> str:
     """Generate the SKILL_TREE.md content."""
+    today = date.today()
     lines = [
+        "---",
+        "source: agent-generated",
+        "origin_session: manual",
+        f"created: {today.isoformat()}",
+        "trust: medium",
+        "---",
+        "",
         "# Skill Catalog",
         "",
-        f"_Auto-generated on {date.today()} by `generate_skill_catalog.py`. Do not edit manually._",
+        f"_Auto-generated on {today.isoformat()} by `generate_skill_catalog.py`. Do not edit manually._",
         "",
         "This file is the **tier-1 progressive disclosure surface** — loaded at "
         "session start to route skill activation. Each entry is ~50–100 tokens. "

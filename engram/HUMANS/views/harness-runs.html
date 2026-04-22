@@ -184,10 +184,10 @@
     document.getElementById('error-banner').classList.remove('visible');
   }
 
-  function computeStats(runs) {
-    var s = { total: runs.length, running: 0, done: 0, error: 0, incomplete: 0, cancelled: 0 };
-    for (var i = 0; i < runs.length; i++) {
-      var st = runs[i].status;
+  function computeStats(sessions) {
+    var s = { total: sessions.length, running: 0, completed: 0, error: 0, stopped: 0, cancelled: 0 };
+    for (var i = 0; i < sessions.length; i++) {
+      var st = sessions[i].status;
       if (s[st] === undefined) s[st] = 0;
       s[st]++;
     }
@@ -197,25 +197,25 @@
   function renderStats(s) {
     document.getElementById('stat-total').textContent = s.total;
     document.getElementById('stat-running').textContent = s.running;
-    document.getElementById('stat-done').textContent = s.done;
+    document.getElementById('stat-done').textContent = s.completed;
     document.getElementById('stat-error').textContent = s.error;
-    document.getElementById('stat-incomplete').textContent = s.incomplete;
+    document.getElementById('stat-incomplete').textContent = s.stopped;
   }
 
   function durationFor(run) {
-    if (!run.started_at) return null;
-    var t0 = Date.parse(run.started_at);
+    if (!run.created_at) return null;
+    var t0 = Date.parse(run.created_at);
     if (isNaN(t0)) return null;
     var t1 = run.ended_at ? Date.parse(run.ended_at) : Date.now();
     if (isNaN(t1)) return null;
     return t1 - t0;
   }
 
-  function renderRuns(runs) {
+  function renderRuns(sessions) {
     var container = document.getElementById('main-content');
     container.innerHTML = '';
 
-    if (!runs.length) {
+    if (!sessions.length) {
       var empty = H.el('div', 'No runs yet. Launch one from the New run page.', 'state-msg');
       container.appendChild(empty);
       return;
@@ -231,11 +231,11 @@
     table.appendChild(thead);
 
     var tbody = H.el('tbody');
-    runs.forEach(function (r) {
+    sessions.forEach(function (r) {
       var tr = H.el('tr', null, 'row-link');
-      tr.setAttribute('data-run-id', r.id);
+      tr.setAttribute('data-run-id', r.session_id);
       tr.addEventListener('click', function () {
-        window.location.href = 'harness-run.html?id=' + encodeURIComponent(r.id);
+        window.location.href = 'harness-run.html?id=' + encodeURIComponent(r.session_id);
       });
 
       // Status
@@ -255,9 +255,9 @@
       tr.appendChild(H.el('td', r.mode || '—', 'mono'));
 
       // Started
-      var started = r.started_at ? H.fmtRelative(r.started_at) : '—';
+      var started = r.created_at ? H.fmtRelative(r.created_at) : '—';
       var tdStarted = H.el('td', started);
-      if (r.started_at) tdStarted.title = r.started_at;
+      if (r.created_at) tdStarted.title = r.created_at;
       tr.appendChild(tdStarted);
 
       // Duration
@@ -265,13 +265,13 @@
       tr.appendChild(H.el('td', dur == null ? '—' : H.fmtDuration(dur), 'num'));
 
       // Turns
-      tr.appendChild(H.el('td', String(r.turns || 0), 'num'));
+      tr.appendChild(H.el('td', String(r.turns_used || 0), 'num'));
 
       // Tool calls
-      tr.appendChild(H.el('td', String(r.tool_calls || 0), 'num'));
+      tr.appendChild(H.el('td', String(r.tool_count || 0), 'num'));
 
       // Tool errors
-      var errs = r.tool_errors || 0;
+      var errs = r.error_count || 0;
       tr.appendChild(H.el('td', String(errs), 'num' + (errs > 0 ? ' err' : '')));
 
       tbody.appendChild(tr);
@@ -281,11 +281,11 @@
   }
 
   function refresh() {
-    H.api('/api/runs').then(function (data) {
+    H.api('/sessions').then(function (data) {
       clearError();
       H.setConnStatus(document.getElementById('conn-status'), true, 'connected');
-      renderStats(computeStats(data.runs || []));
-      renderRuns(data.runs || []);
+      renderStats(computeStats(data.sessions || []));
+      renderRuns(data.sessions || []);
     }).catch(function (err) {
       H.setConnStatus(document.getElementById('conn-status'), false, 'server not reachable');
       showError('Failed to load runs: ' + (err.message || err));

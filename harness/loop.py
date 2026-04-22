@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -19,6 +20,12 @@ _DEFAULT_REPEAT_GUARD_MESSAGE = (
     "summarize and finish."
 )
 
+_DEFAULT_ERROR_RECALL_MESSAGE_TEMPLATE = (
+    "[harness] {tool_name} has failed {streak} consecutive times. "
+    "Use recall_memory with a query describing your goal or the error to retrieve "
+    "relevant context from prior sessions that might help resolve this."
+)
+
 
 def _tool_batch_signature(tool_calls: list[ToolCall]) -> tuple[tuple[str, str], ...]:
     """Stable, order-independent signature for a batch of tool calls."""
@@ -35,6 +42,7 @@ class RunResult:
     usage: Usage
     turns_used: int = 0
     max_turns_reached: bool = False
+    stopped_by_user: bool = False
 
 
 def run_until_idle(
@@ -50,6 +58,8 @@ def run_until_idle(
     *,
     repeat_guard_threshold: int = 3,
     repeat_guard_message: str | None = None,
+    error_recall_threshold: int = 0,
+    stop_event: threading.Event | None = None,
 ) -> RunResult:
     """Run model/tool turns until the assistant responds without tool calls or
     ``max_turns`` is hit.
@@ -67,8 +77,19 @@ def run_until_idle(
     prev_batch_sig: tuple[tuple[str, str], ...] | None = None
     repeat_streak = 0
     nudge_text = repeat_guard_message or _DEFAULT_REPEAT_GUARD_MESSAGE
+    tool_seq = 0
+    # Per-tool consecutive-error counts; reset to 0 on a successful call.
+    tool_error_streaks: dict[str, int] = {}
 
     for turn in range(max_turns):
+        if stop_event is not None and stop_event.is_set():
+            return RunResult(
+                final_text="(stopped by user)",
+                usage=total,
+                turns_used=turn,
+                max_turns_reached=False,
+                stopped_by_user=True,
+            )
         response = mode.complete(messages, stream=stream_sink)
         tracer.event("model_response", turn=turn)
 
@@ -78,18 +99,75 @@ def run_until_idle(
 
         messages.append(mode.as_assistant_message(response))
 
-        tool_calls = mode.extract_tool_calls(response)
-        if not tool_calls:
-            final = mode.final_text(response)
-            return RunResult(
-                final_text=final,
-                usage=total,
-                turns_used=turn + 1,
-                max_turns_reached=False,
-            )
+        # Trace server-side native search calls (Grok web_search / x_search).
+        # These run on xAI's infrastructure and never go through harness tool
+        # dispatch, so they'd be invisible in the JSONL without this explicit step.
+        native_calls: list[dict] = []
+        if hasattr(mode, "extract_native_search_calls"):
+            native_calls = mode.extract_native_search_calls(response)
 
-        for call in tool_calls:
-            tracer.event("tool_call", name=call.name, args=call.args)
+        tool_calls = mode.extract_tool_calls(response)
+
+        # Interleave native-search and function-call seq values in document order
+        # when the mode exposes output positions for both call types.
+        # `fn_seqs[i]` will hold the seq assigned to the i-th function call so
+        # the matching tool_result events can use the same values.
+        fn_seqs: list[int] = []
+
+        if native_calls and hasattr(mode, "extract_function_call_positions"):
+            fn_positions = mode.extract_function_call_positions(response)
+            # Build combined list: (output_position, kind, index)
+            order: list[tuple[int, str, int]] = []
+            for i, nc in enumerate(native_calls):
+                order.append((nc.get("output_position", -1), "native", i))
+            for j, pos in enumerate(fn_positions):
+                order.append((pos, "fn", j))
+            order.sort(key=lambda x: x[0])
+
+            fn_seq_map: dict[int, int] = {}
+            for _, kind, idx in order:
+                if kind == "native":
+                    nc = native_calls[idx]
+                    ev_kw = {k: v for k, v in nc.items() if k != "output_position"}
+                    tracer.event("native_search_call", turn=turn, seq=tool_seq, **ev_kw)
+                else:
+                    fn_seq_map[idx] = tool_seq
+                tool_seq += 1
+
+            if not tool_calls:
+                final = mode.final_text(response)
+                return RunResult(
+                    final_text=final,
+                    usage=total,
+                    turns_used=turn + 1,
+                    max_turns_reached=False,
+                )
+
+            for j, call in enumerate(tool_calls):
+                seq = fn_seq_map.get(j, tool_seq)
+                fn_seqs.append(seq)
+                tracer.event("tool_call", name=call.name, args=call.args, turn=turn, seq=seq)
+        else:
+            # Fallback path: no position data — emit native searches first, then
+            # function calls (preserves previous behaviour for non-Grok modes).
+            for nc in native_calls:
+                ev_kw = {k: v for k, v in nc.items() if k != "output_position"}
+                tracer.event("native_search_call", turn=turn, seq=tool_seq, **ev_kw)
+                tool_seq += 1
+
+            if not tool_calls:
+                final = mode.final_text(response)
+                return RunResult(
+                    final_text=final,
+                    usage=total,
+                    turns_used=turn + 1,
+                    max_turns_reached=False,
+                )
+
+            for call in tool_calls:
+                fn_seqs.append(tool_seq)
+                tracer.event("tool_call", name=call.name, args=call.args, turn=turn, seq=tool_seq)
+                tool_seq += 1
 
         if max_parallel_tools <= 1 or len(tool_calls) == 1:
             results = [execute(c, tools) for c in tool_calls]
@@ -104,24 +182,50 @@ def run_until_idle(
                 futures = [pool.submit(execute, c, tools) for c in tool_calls]
                 results = [f.result() for f in futures]
 
-        for result in results:
+        for i, result in enumerate(results):
             tracer.event(
                 "tool_result",
                 name=result.call.name,
                 is_error=result.is_error,
                 content_preview=result.content[:200],
+                seq=fn_seqs[i],
             )
             if result.is_error:
                 memory.record(
                     f"{result.call.name} failed: {result.content[:200]}",
                     kind="error",
                 )
+                tool_error_streaks[result.call.name] = (
+                    tool_error_streaks.get(result.call.name, 0) + 1
+                )
+            else:
+                tool_error_streaks.pop(result.call.name, None)
 
         tool_results_msg = mode.as_tool_results_message(results)
         if isinstance(tool_results_msg, list):
             messages.extend(tool_results_msg)
         else:
             messages.append(tool_results_msg)
+
+        # Adaptive recall: when a tool has failed repeatedly and recall_memory is
+        # available, inject a nudge prompting the agent to query prior context.
+        # Must come AFTER tool_results to satisfy the API contract that tool_result
+        # immediately follows tool_use.
+        if error_recall_threshold > 0 and "recall_memory" in tools:
+            for tool_name, streak in list(tool_error_streaks.items()):
+                if streak >= error_recall_threshold:
+                    tracer.event(
+                        "adaptive_recall_trigger",
+                        turn=turn,
+                        tool=tool_name,
+                        streak=streak,
+                    )
+                    recall_nudge = _DEFAULT_ERROR_RECALL_MESSAGE_TEMPLATE.format(
+                        tool_name=tool_name, streak=streak
+                    )
+                    messages.append({"role": "user", "content": recall_nudge})
+                    tool_error_streaks[tool_name] = 0
+                    break  # one nudge per turn is enough
 
         if repeat_guard_threshold > 0 and tool_calls:
             batch_sig = _tool_batch_signature(tool_calls)
@@ -170,6 +274,9 @@ def run(
     *,
     repeat_guard_threshold: int = 3,
     repeat_guard_message: str | None = None,
+    error_recall_threshold: int = 0,
+    skip_end_session_commit: bool = False,
+    stop_event: threading.Event | None = None,
 ) -> RunResult:
     prior = memory.start_session(task)
     messages = mode.initial_messages(task=task, prior=prior, tools=tools)
@@ -187,14 +294,19 @@ def run(
         stream_sink=stream_sink,
         repeat_guard_threshold=repeat_guard_threshold,
         repeat_guard_message=repeat_guard_message,
+        error_recall_threshold=error_recall_threshold,
+        stop_event=stop_event,
     )
 
     tracer.event("session_usage", **result.usage.as_trace_dict())
     if result.max_turns_reached:
-        memory.end_session(summary="(max turns reached)")
+        memory.end_session(summary="(max turns reached)", skip_commit=skip_end_session_commit)
         tracer.event("session_end", turns=result.turns_used, reason="max_turns")
+    elif result.stopped_by_user:
+        memory.end_session(summary=result.final_text[:2000], skip_commit=skip_end_session_commit)
+        tracer.event("session_end", turns=result.turns_used, reason="stopped")
     else:
-        memory.end_session(summary=result.final_text[:500])
+        memory.end_session(summary=result.final_text[:2000], skip_commit=skip_end_session_commit)
         tracer.event("session_end", turns=result.turns_used)
 
     return result

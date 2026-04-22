@@ -1,5 +1,6 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 
@@ -7,7 +8,7 @@ from typing import Any, Protocol
 class ToolCall:
     name: str
     args: dict[str, Any]
-    id: str | None = None  # native mode sets this; text mode leaves it None
+    id: str | None = None  # Set when the provider exposes a stable call identifier.
 
 
 @dataclass

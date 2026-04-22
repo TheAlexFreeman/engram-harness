@@ -120,9 +120,7 @@ def test_delete_move_copy(tmp_path: Path) -> None:
         DeletePath(s).run({"path": "a.txt", "confirm": False})
     assert DeletePath(s).run({"path": "a.txt", "confirm": True}).startswith("delete")
     (tmp_path / "b.txt").write_text("b", encoding="utf-8")
-    MovePath(s).run(
-        {"from_path": "b.txt", "to_path": "c.txt", "confirm": True}
-    )
+    MovePath(s).run({"from_path": "b.txt", "to_path": "c.txt", "confirm": True})
     assert (tmp_path / "c.txt").read_text() == "b"
     CopyPath(s).run({"from_path": "c.txt", "to_path": "d.txt"})
     assert (tmp_path / "d.txt").read_text() == "b"

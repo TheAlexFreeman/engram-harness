@@ -1,3 +1,10 @@
+---
+source: agent-generated
+origin_session: manual
+created: 2026-03-16
+trust: medium
+---
+
 # Inline Demonstration Menu
 
 Use whichever moments occur naturally during onboarding. Aim for 2–3 across the session.

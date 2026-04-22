@@ -18,7 +18,6 @@ from harness.tool_args_canon import (
 from harness.tools import Tool, ToolCall, ToolResult
 from harness.usage import Usage
 
-
 NATIVE_TOOL_NAMES: frozenset[str] = frozenset({"web_search", "x_search"})
 
 # `response.output` may include items that xAI does not accept on the next request's
@@ -90,9 +89,7 @@ def _instructions_and_input(
     for m in messages[start:]:
         role = m.get("role")
         if role == "user":
-            input_items.append(
-                {"type": "message", "role": "user", "content": m.get("content", "")}
-            )
+            input_items.append({"type": "message", "role": "user", "content": m.get("content", "")})
         elif role == "assistant":
             saved = m.get("grok_saved_output")
             if isinstance(saved, list) and saved:
@@ -105,9 +102,7 @@ def _instructions_and_input(
                 continue
             content = m.get("content")
             if content:
-                input_items.append(
-                    {"type": "message", "role": "assistant", "content": content}
-                )
+                input_items.append({"type": "message", "role": "assistant", "content": content})
             for tc in m.get("tool_calls") or []:
                 fn = tc.get("function") or {}
                 call_id = tc.get("id") or tc.get("call_id")
@@ -116,9 +111,7 @@ def _instructions_and_input(
                 fn_name = fn.get("name", "")
                 raw_args = fn.get("arguments") or "{}"
                 if isinstance(fn_name, str) and tools and fn_name in tools:
-                    raw_args = arguments_json_canonical(
-                        raw_args, fn_name, tools[fn_name]
-                    )
+                    raw_args = arguments_json_canonical(raw_args, fn_name, tools[fn_name])
                 input_items.append(
                     {
                         "type": "function_call",
@@ -162,32 +155,22 @@ class GrokMode:
         self.tools = tools
         self._system = system_prompt_native()
         self._tool_schemas = _build_tool_schemas(tools)
-        self._response_include: list[str] = (
-            list(response_include) if response_include else []
-        )
+        self._response_include: list[str] = list(response_include) if response_include else []
 
-    def initial_messages(
-        self, task: str, prior: str, tools: dict[str, Tool]
-    ) -> list[dict]:
+    def initial_messages(self, task: str, prior: str, tools: dict[str, Tool]) -> list[dict]:
         user = (
             task
             if not prior.strip()
-            else (
-                f"Prior session notes (for context; may be stale):\n\n{prior}\n\n---\n\n{task}"
-            )
+            else (f"Prior session notes (for context; may be stale):\n\n{prior}\n\n---\n\n{task}")
         )
         return [
             {"role": "system", "content": self._system},
             {"role": "user", "content": user},
         ]
 
-    def complete(
-        self, messages: list[dict], *, stream: StreamSink | None = None
-    ) -> Response:
+    def complete(self, messages: list[dict], *, stream: StreamSink | None = None) -> Response:
         """Call Grok via xAI Responses API (native search + function tools)."""
-        instructions, input_items = _instructions_and_input(
-            messages, self._system, self.tools
-        )
+        instructions, input_items = _instructions_and_input(messages, self._system, self.tools)
         create_kw = self._responses_api_kwargs(instructions, input_items)
         if stream is None:
             return self.client.responses.create(**create_kw)
@@ -234,13 +217,9 @@ class GrokMode:
                         idx = getattr(event, "output_index", None)
                         kind = getattr(item, "type", "") or ""
                         name = getattr(item, "name", None)
-                        call_id = getattr(item, "call_id", None) or getattr(
-                            item, "id", None
-                        )
+                        call_id = getattr(item, "call_id", None) or getattr(item, "id", None)
                         open_items[idx] = (kind, name, call_id)
-                        sink.on_block_start(
-                            kind, index=idx, name=name, call_id=call_id
-                        )
+                        sink.on_block_start(kind, index=idx, name=name, call_id=call_id)
                         handled = True
                     elif etype == "response.output_item.done":
                         idx = getattr(event, "output_index", None)
@@ -258,9 +237,7 @@ class GrokMode:
                         handled = True
                     elif etype == "response.function_call_arguments.delta":
                         idx = getattr(event, "output_index", None)
-                        _, name, call_id = open_items.get(
-                            idx, ("", None, None)
-                        )
+                        _, name, call_id = open_items.get(idx, ("", None, None))
                         sink.on_tool_args_delta(
                             getattr(event, "delta", "") or "",
                             index=idx,
@@ -309,9 +286,7 @@ class GrokMode:
     def as_assistant_message(self, response: Response) -> dict:
         """Serialize for chat-style history; `grok_saved_output` preserves Responses state."""
         result: dict[str, Any] = {"role": "assistant"}
-        result["grok_saved_output"] = [
-            it.model_dump(mode="json") for it in response.output
-        ]
+        result["grok_saved_output"] = [it.model_dump(mode="json") for it in response.output]
         for item in result["grok_saved_output"]:
             if isinstance(item, dict):
                 maybe_canonicalize_function_call_item(item, self.tools)
@@ -397,6 +372,52 @@ class GrokMode:
         if reasoning_block:
             return f"[Grok Reasoning]\n{reasoning_block}"
         return "(no text response)"
+
+    def extract_native_search_calls(self, response: Response) -> list[dict[str, Any]]:
+        """Extract native web_search_call / x_search_call metadata from response.output.
+
+        Returns one dict per server-side search. ``output_position`` records the
+        item's index in ``response.output`` so callers can interleave seq values
+        with adjacent function_call items in document order.
+        """
+        calls: list[dict[str, Any]] = []
+        for pos, item in enumerate(response.output):
+            t = getattr(item, "type", None)
+            if t not in {"web_search_call", "x_search_call"}:
+                continue
+            # Use "search_type" to avoid colliding with the TraceSink "kind" field
+            # that identifies the event type ("native_search_call").
+            call: dict[str, Any] = {"search_type": t, "output_position": pos}
+            item_id = getattr(item, "id", None)
+            if item_id:
+                call["id"] = item_id
+            status = getattr(item, "status", None)
+            if status:
+                call["status"] = status
+            query = getattr(item, "query", None)
+            if query:
+                call["query"] = query
+            results = getattr(item, "results", None)
+            if results is not None:
+                call["sources_found"] = len(results)
+            calls.append(call)
+        return calls
+
+    def extract_function_call_positions(self, response: Response) -> list[int]:
+        """Return the output_position of each harness function_call in document order.
+
+        Parallel to ``extract_tool_calls`` — entry i gives the position in
+        ``response.output`` of the i-th ToolCall that ``extract_tool_calls``
+        would return.
+        """
+        positions = []
+        for pos, item in enumerate(response.output):
+            if getattr(item, "type", None) != "function_call":
+                continue
+            name = getattr(item, "name", None)
+            if name and name in self.tools:
+                positions.append(pos)
+        return positions
 
     def extract_usage(self, response: Response) -> Usage:
         """xAI Responses usage plus server-side search call counts.

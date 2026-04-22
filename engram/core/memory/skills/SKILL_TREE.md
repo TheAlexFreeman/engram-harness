@@ -1,6 +1,13 @@
+---
+source: agent-generated
+origin_session: manual
+created: 2026-04-21
+trust: medium
+---
+
 # Skill Catalog
 
-_Auto-generated on 2026-04-09 by `generate_skill_catalog.py`. Do not edit manually._
+_Auto-generated on 2026-04-21 by `generate_skill_catalog.py`. Do not edit manually._
 
 This file is the **tier-1 progressive disclosure surface** — loaded at session start to route skill activation. Each entry is ~50–100 tokens. Full skill instructions are in each directory's `SKILL.md`.
 

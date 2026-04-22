@@ -40,7 +40,7 @@ def _tracked_paths(repo_root: Path) -> list[str]:
         text=True,
     )
     paths = {line.strip() for line in result.stdout.splitlines() if line.strip()}
-    if SCRIPT_PATH.exists():
+    if (repo_root / SCRIPT_PATH).exists():
         paths.add(SCRIPT_PATH.as_posix())
     return sorted(paths)
 

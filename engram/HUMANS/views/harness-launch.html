@@ -134,10 +134,10 @@
     <div class="row2">
       <div class="field">
         <label for="model">Model</label>
-        <input type="text" id="model" name="model" list="model-list" value="claude-sonnet-4-5">
+        <input type="text" id="model" name="model" list="model-list" value="claude-sonnet-4-6">
         <datalist id="model-list">
-          <option value="claude-sonnet-4-5">
-          <option value="claude-opus-4-6">
+          <option value="claude-sonnet-4-6">
+          <option value="claude-opus-4-7">
           <option value="claude-haiku-4-5-20251001">
           <option value="grok-4.20-0309-reasoning">
         </datalist>
@@ -215,9 +215,9 @@
 
     $submit.disabled = true;
     $status.textContent = 'Launching…';
-    H.api('/api/runs', { method: 'POST', body: body }).then(function (res) {
+    H.api('/sessions', { method: 'POST', body: body }).then(function (res) {
       $status.textContent = 'Launched. Redirecting…';
-      window.location.href = 'harness-run.html?id=' + encodeURIComponent(res.run_id);
+      window.location.href = 'harness-run.html?id=' + encodeURIComponent(res.session_id);
     }).catch(function (err) {
       $status.textContent = '';
       $submit.disabled = false;
