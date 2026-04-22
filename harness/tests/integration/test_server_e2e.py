@@ -8,7 +8,6 @@ without network access.
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -20,6 +19,7 @@ pytest.importorskip("sse_starlette")
 @pytest.fixture(scope="module")
 def client(tmp_path_factory):
     from fastapi.testclient import TestClient
+
     import harness.server as srv
 
     srv._sessions.clear()
@@ -59,17 +59,21 @@ def _fast_run_session(session):
     session.usage = result.usage
     session.turns_used = result.turns_used
     session.status = "completed"
-    srv._emit(session, SSEEvent(
-        channel="control",
-        event="done",
-        data={
-            "final_text": result.final_text,
-            "turns_used": result.turns_used,
-            "max_turns_reached": False,
-            "usage": result.usage.as_trace_dict(),
-        },
-        ts="2026-04-21T10:00:00.000",
-    ))
+    srv._emit(
+        session,
+        SSEEvent(
+            channel="control",
+            event="done",
+            data={
+                "status": session.status,
+                "final_text": result.final_text,
+                "turns_used": result.turns_used,
+                "max_turns_reached": False,
+                "usage": result.usage.as_trace_dict(),
+            },
+            ts="2026-04-21T10:00:00.000",
+        ),
+    )
 
 
 def _wait_terminal(client, session_id, timeout=10) -> dict:
@@ -103,6 +107,7 @@ def test_stats_endpoint(client):
 @pytest.mark.integration
 def test_sessions_list(client):
     import harness.server as srv
+
     srv._sessions.clear()
 
     resp = client.get("/sessions")
@@ -151,9 +156,34 @@ def test_create_session_missing_fields_rejected(client, workspace):
 
 
 @pytest.mark.integration
+def test_create_session_rejects_text_mode(client, workspace):
+    resp = client.post(
+        "/sessions",
+        json={
+            "task": "reject text mode",
+            "workspace": str(workspace),
+            "mode": "text",
+            "memory": "file",
+        },
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.integration
+def test_openapi_advertises_native_mode_only(client):
+    resp = client.get("/openapi.json")
+    assert resp.status_code == 200
+
+    mode_schema = resp.json()["components"]["schemas"]["CreateSessionRequest"]["properties"]["mode"]
+    assert mode_schema["const"] == "native"
+    assert "enum" not in mode_schema
+
+
+@pytest.mark.integration
 def test_create_session_appears_in_list(client, workspace):
     """A created session should appear in GET /sessions."""
     import harness.server as srv
+
     srv._sessions.clear()
 
     with patch("harness.server._run_session", side_effect=_fast_run_session):

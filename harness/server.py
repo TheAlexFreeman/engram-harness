@@ -19,26 +19,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 from dotenv import load_dotenv
 
-# Load `.env` when the server module is imported (covers `uvicorn harness.server:app`,
-# which does not go through `harness` CLI's load_dotenv).
-load_dotenv()
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
-try:
-    from fastapi import FastAPI, HTTPException
-    from fastapi.middleware.cors import CORSMiddleware
-    from sse_starlette.sse import EventSourceResponse
-except ImportError as _e:
-    raise ImportError(
-        "The harness API server requires FastAPI and sse-starlette. "
-        "Install with: pip install -e '.[api]'"
-    ) from _e
-
-from harness.config import SessionConfig, SessionComponents, build_session
+from harness.config import SessionComponents, SessionConfig, build_session
 from harness.loop import RunResult, run, run_until_idle
 from harness.server_models import (
     CreateSessionRequest,
@@ -57,14 +41,40 @@ from harness.sinks.session_tracker import SessionStateTrackerSink
 from harness.sinks.sse import SSEEvent, SSEStreamSink, SSETraceSink
 from harness.usage import Usage
 
+# Load `.env` when the server module is imported (covers `uvicorn harness.server:app`,
+# which does not go through `harness` CLI's load_dotenv).
+load_dotenv()
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+try:
+    from fastapi import FastAPI, HTTPException
+    from fastapi.middleware.cors import CORSMiddleware
+    from sse_starlette.sse import EventSourceResponse
+except ImportError as _e:
+    raise ImportError(
+        "The harness API server requires FastAPI and sse-starlette. "
+        "Install with: pip install -e '.[api]'"
+    ) from _e
+
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="milliseconds")
 
 
+def _done_payload(session: "ManagedSession") -> dict[str, object]:
+    return {
+        "status": session.status,
+        "final_text": session.final_text,
+        "turns_used": session.turns_used,
+        "max_turns_reached": session.result.max_turns_reached if session.result else False,
+        "usage": session.usage.as_trace_dict(),
+    }
+
+
 # ---------------------------------------------------------------------------
 # In-memory session registry
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ManagedSession:
@@ -94,7 +104,6 @@ class ManagedSession:
     loop: asyncio.AbstractEventLoop | None = None
 
 
-
 # Session eviction: remove terminal sessions older than this from memory.
 _SESSION_EVICTION_SECS = int(os.environ.get("HARNESS_SESSION_EVICTION_SECS", "7200"))
 
@@ -116,8 +125,20 @@ _WORKSPACE_ROOT: Path | None = (
 
 _FORBIDDEN_PATHS: frozenset[str] = frozenset(
     str(Path(p).resolve())
-    for p in ["/", "/etc", "/usr", "/bin", "/sbin", "/lib", "/proc", "/sys", "/dev",
-              "C:/", "C:/Windows", "C:/Windows/System32"]
+    for p in [
+        "/",
+        "/etc",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/lib",
+        "/proc",
+        "/sys",
+        "/dev",
+        "C:/",
+        "C:/Windows",
+        "C:/Windows/System32",
+    ]
     if Path(p).exists() or p in ("/", "C:/")
 )
 
@@ -202,25 +223,26 @@ def _run_session(session: ManagedSession) -> None:
         session.usage = result.usage
         session.turns_used = result.turns_used
         session.status = "stopped" if session.stop_event.is_set() else "completed"
-        _emit(session, SSEEvent(
-            channel="control",
-            event="done",
-            data={
-                "final_text": result.final_text,
-                "turns_used": result.turns_used,
-                "max_turns_reached": result.max_turns_reached,
-                "usage": result.usage.as_trace_dict(),
-            },
-            ts=_now(),
-        ))
+        _emit(
+            session,
+            SSEEvent(
+                channel="control",
+                event="done",
+                data=_done_payload(session),
+                ts=_now(),
+            ),
+        )
     except Exception as exc:
         session.status = "error"
-        _emit(session, SSEEvent(
-            channel="control",
-            event="error",
-            data={"error_type": type(exc).__name__, "message": str(exc)},
-            ts=_now(),
-        ))
+        _emit(
+            session,
+            SSEEvent(
+                channel="control",
+                event="error",
+                data={"error_type": type(exc).__name__, "message": str(exc)},
+                ts=_now(),
+            ),
+        )
     finally:
         _maybe_run_trace_bridge(session)
         session.components.tracer.close()
@@ -238,13 +260,15 @@ def _run_interactive_session(session: ManagedSession) -> None:
 
     try:
         prior = memory.start_session(session.task)
-        session.messages = mode.initial_messages(
-            task=session.task, prior=prior, tools=tools
-        )
+        session.messages = mode.initial_messages(task=session.task, prior=prior, tools=tools)
         tracer.event("session_start", task=session.task)
 
         result = run_until_idle(
-            session.messages, mode, tools, memory, tracer,
+            session.messages,
+            mode,
+            tools,
+            memory,
+            tracer,
             max_turns=config.max_turns,
             max_parallel_tools=config.max_parallel_tools,
             stream_sink=stream_sink,
@@ -256,12 +280,15 @@ def _run_interactive_session(session: ManagedSession) -> None:
         session.turn_number += 1
         session.final_text = result.final_text
 
-        _emit(session, SSEEvent(
-            channel="control",
-            event="idle",
-            data={"final_text": result.final_text, "turn_number": session.turn_number},
-            ts=_now(),
-        ))
+        _emit(
+            session,
+            SSEEvent(
+                channel="control",
+                event="idle",
+                data={"final_text": result.final_text, "turn_number": session.turn_number},
+                ts=_now(),
+            ),
+        )
         session.status = "idle"
 
         IDLE_TIMEOUT = 3600.0
@@ -281,7 +308,11 @@ def _run_interactive_session(session: ManagedSession) -> None:
             session.messages.append({"role": "user", "content": user_msg})
 
             result = run_until_idle(
-                session.messages, mode, tools, memory, tracer,
+                session.messages,
+                mode,
+                tools,
+                memory,
+                tracer,
                 max_turns=config.max_turns,
                 max_parallel_tools=config.max_parallel_tools,
                 stream_sink=stream_sink,
@@ -293,12 +324,15 @@ def _run_interactive_session(session: ManagedSession) -> None:
             session.turn_number += 1
             session.final_text = result.final_text
 
-            _emit(session, SSEEvent(
-                channel="control",
-                event="idle",
-                data={"final_text": result.final_text, "turn_number": session.turn_number},
-                ts=_now(),
-            ))
+            _emit(
+                session,
+                SSEEvent(
+                    channel="control",
+                    event="idle",
+                    data={"final_text": result.final_text, "turn_number": session.turn_number},
+                    ts=_now(),
+                ),
+            )
             session.status = "idle"
 
         summary = (session.final_text or "")[:2000] or "(interactive exit)"
@@ -311,21 +345,27 @@ def _run_interactive_session(session: ManagedSession) -> None:
             reason="idle_timeout" if not session.stop_event.is_set() else "stopped",
         )
         session.turns_used = session.turn_number
-        session.status = "completed"
-        _emit(session, SSEEvent(
-            channel="control",
-            event="done",
-            data={"usage": session.usage.as_trace_dict(), "turns_used": session.turn_number},
-            ts=_now(),
-        ))
+        session.status = "stopped" if session.stop_event.is_set() else "completed"
+        _emit(
+            session,
+            SSEEvent(
+                channel="control",
+                event="done",
+                data=_done_payload(session),
+                ts=_now(),
+            ),
+        )
     except Exception as exc:
         session.status = "error"
-        _emit(session, SSEEvent(
-            channel="control",
-            event="error",
-            data={"error_type": type(exc).__name__, "message": str(exc)},
-            ts=_now(),
-        ))
+        _emit(
+            session,
+            SSEEvent(
+                channel="control",
+                event="error",
+                data={"error_type": type(exc).__name__, "message": str(exc)},
+                ts=_now(),
+            ),
+        )
     finally:
         _maybe_run_trace_bridge(session)
         tracer.close()
@@ -384,6 +424,7 @@ def _maybe_run_trace_bridge(session: ManagedSession) -> None:
 
 def _monotonic() -> float:
     import time
+
     return time.monotonic()
 
 
@@ -458,7 +499,7 @@ async def _event_generator(queue: asyncio.Queue, session: "ManagedSession"):
                 done_ev = SSEEvent(
                     channel="control",
                     event="done",
-                    data={"usage": session.usage.as_trace_dict(), "turns_used": session.turns_used},
+                    data=_done_payload(session),
                     ts=_now(),
                 )
                 yield {"data": done_ev.to_json(), "event": "done"}
@@ -564,17 +605,19 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     store = _get_store()
     if store is not None:
         try:
-            store.insert_session(SessionRecord(
-                session_id=session_id,
-                task=req.task,
-                status="running",
-                model=req.model,
-                mode=req.mode,
-                memory_backend=req.memory,
-                workspace=req.workspace,
-                created_at=session.created_at,
-                trace_path=str(components.trace_path),
-            ))
+            store.insert_session(
+                SessionRecord(
+                    session_id=session_id,
+                    task=req.task,
+                    status="running",
+                    model=req.model,
+                    mode=req.mode,
+                    memory_backend=req.memory,
+                    workspace=req.workspace,
+                    created_at=session.created_at,
+                    trace_path=str(components.trace_path),
+                )
+            )
         except Exception:
             pass
 
@@ -744,8 +787,7 @@ def serve(
         import uvicorn
     except ImportError:
         raise ImportError(
-            "uvicorn is required to run the server. "
-            "Install with: pip install -e '.[api]'"
+            "uvicorn is required to run the server. Install with: pip install -e '.[api]'"
         )
 
     if db_path is not None:
@@ -759,6 +801,7 @@ def serve(
     frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
     if frontend_dist.is_dir():
         from fastapi.staticfiles import StaticFiles
+
         app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
 
     uvicorn.run(app, host=host, port=port)

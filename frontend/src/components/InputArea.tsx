@@ -7,7 +7,9 @@ export function InputArea() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const canSend = state.status === "idle" && state.interactive && text.trim().length > 0;
-  const canStop = state.status === "running" || state.status === "connecting" || state.status === "idle";
+  const isStopping = state.status === "stopping";
+  const canStop =
+    state.status === "running" || state.status === "connecting" || state.status === "idle";
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -26,10 +28,14 @@ export function InputArea() {
   const placeholder =
     state.status === "idle" && state.interactive
       ? "Follow-up message… (Enter to send, Shift+Enter for newline)"
+      : state.status === "stopping"
+      ? "Stopping session…"
       : state.status === "running" || state.status === "connecting"
       ? "Agent is working…"
-      : state.status === "done"
+      : state.status === "completed"
       ? "Session complete"
+      : state.status === "stopped"
+      ? "Session stopped"
       : state.status === "error"
       ? "Session error"
       : "Non-interactive session";
@@ -46,15 +52,16 @@ export function InputArea() {
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}
-        disabled={!canSend && state.status !== "idle"}
+        disabled={state.status !== "idle" || !state.interactive}
       />
       <div className="flex flex-col gap-1.5">
-        {canStop && (
+        {(canStop || isStopping) && (
           <button
             className="px-3 py-1.5 text-xs rounded bg-red-900 hover:bg-red-800 text-red-200 font-mono"
             onClick={() => stopSession()}
+            disabled={isStopping}
           >
-            Stop
+            {isStopping ? "Stopping…" : "Stop"}
           </button>
         )}
         {state.interactive && (

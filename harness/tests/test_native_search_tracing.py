@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from harness.engram_memory import EngramMemory
 from harness.memory import FileMemory
 from harness.modes.grok import GrokMode
 from harness.tests.test_engram_memory import _make_engram_repo
@@ -24,12 +25,11 @@ from harness.trace_bridge import (
     _extract_tool_calls,
     run_trace_bridge,
 )
-from harness.engram_memory import EngramMemory
-
 
 # ---------------------------------------------------------------------------
 # GrokMode.extract_native_search_calls helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_response(*output_items) -> SimpleNamespace:
     return SimpleNamespace(output=list(output_items))
@@ -137,6 +137,7 @@ def test_extract_multiple_native_searches() -> None:
 # Trace bridge: _aggregate_stats counts native_search_call events
 # ---------------------------------------------------------------------------
 
+
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="milliseconds")
 
@@ -159,7 +160,13 @@ def test_aggregate_stats_native_search_adds_to_combined_count() -> None:
         {"ts": _now_iso(), "kind": "session_start", "task": "t"},
         {"ts": _now_iso(), "kind": "model_response", "turn": 0},
         {"ts": _now_iso(), "kind": "tool_call", "name": "bash", "args": {}},
-        {"ts": _now_iso(), "kind": "tool_result", "name": "bash", "is_error": False, "content_preview": ""},
+        {
+            "ts": _now_iso(),
+            "kind": "tool_result",
+            "name": "bash",
+            "is_error": False,
+            "content_preview": "",
+        },
         _native_search_ev("web_search_call"),
         {"ts": _now_iso(), "kind": "session_end", "turns": 1},
     ]
@@ -170,6 +177,7 @@ def test_aggregate_stats_native_search_adds_to_combined_count() -> None:
 # ---------------------------------------------------------------------------
 # Trace bridge: _extract_tool_calls creates _ToolCall for native searches
 # ---------------------------------------------------------------------------
+
 
 def test_extract_tool_calls_includes_native_search() -> None:
     ts = _now_iso()
@@ -217,6 +225,7 @@ def test_extract_tool_calls_native_search_no_query_gives_empty_args() -> None:
 # run_trace_bridge integration: native searches appear in spans + summary
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     return _make_engram_repo(tmp_path)
@@ -245,7 +254,13 @@ def test_run_trace_bridge_includes_native_search_in_spans(
         {"ts": ts, "kind": "session_start", "task": "grok search task"},
         {"ts": ts, "kind": "model_response", "turn": 0},
         _native_search_ev("web_search_call", query="celery docs", status="completed", seq=0),
-        {"ts": ts, "kind": "session_usage", "input_tokens": 500, "output_tokens": 100, "total_cost_usd": 0.002},
+        {
+            "ts": ts,
+            "kind": "session_usage",
+            "input_tokens": 500,
+            "output_tokens": 100,
+            "total_cost_usd": 0.002,
+        },
         {"ts": ts, "kind": "session_end", "turns": 1},
     ]
     _write_trace(trace, events)
@@ -267,9 +282,9 @@ def test_run_trace_bridge_includes_native_search_in_spans(
 def test_extract_native_search_calls_includes_output_position() -> None:
     mode = _StubGrokMode()
     resp = _make_response(
-        _function_call_item(),          # pos 0
-        _web_search_item(query="q1"),   # pos 1
-        _x_search_item(query="q2"),     # pos 2
+        _function_call_item(),  # pos 0
+        _web_search_item(query="q1"),  # pos 1
+        _x_search_item(query="q2"),  # pos 2
     )
     calls = mode.extract_native_search_calls(resp)
     assert len(calls) == 2
@@ -304,8 +319,9 @@ def test_run_trace_bridge_native_search_counted_in_tool_calls(
 
 
 def test_extract_function_call_positions() -> None:
-    from harness.modes.grok import GrokMode
     from unittest.mock import MagicMock
+
+    from harness.modes.grok import GrokMode
 
     mock_client = MagicMock()
     bash_tool = MagicMock()
@@ -316,10 +332,10 @@ def test_extract_function_call_positions() -> None:
     mode = GrokMode(mock_client, "grok-3", tools)
 
     resp = _make_response(
-        _web_search_item(),             # pos 0 — native, not a function_call
-        _function_call_item("bash"),    # pos 1 — harness tool
-        _x_search_item(),               # pos 2 — native
-        _function_call_item("bash"),    # pos 3 — second harness tool call
+        _web_search_item(),  # pos 0 — native, not a function_call
+        _function_call_item("bash"),  # pos 1 — harness tool
+        _x_search_item(),  # pos 2 — native
+        _function_call_item("bash"),  # pos 3 — second harness tool call
     )
     positions = mode.extract_function_call_positions(resp)
     assert positions == [1, 3]
@@ -329,11 +345,9 @@ def test_native_search_seq_interleaved_with_function_calls(tmp_path: Path) -> No
     """Native search seq values reflect document order when mixed with function calls."""
     from dataclasses import dataclass, field
     from typing import Any
+
     from harness.loop import run_until_idle
-    from harness.tools import Tool, ToolCall
-    from harness.memory import FileMemory
-    from harness.trace import TraceSink
-    from unittest.mock import MagicMock
+    from harness.tools import ToolCall
 
     # Build a minimal GrokMode-alike stub that has both extract methods.
     class _NativeSearchMode:
@@ -364,13 +378,16 @@ def test_native_search_seq_interleaved_with_function_calls(tmp_path: Path) -> No
 
         def extract_usage(self, resp):
             from harness.usage import Usage
+
             return Usage(model="test", input_tokens=1, output_tokens=1)
 
     @dataclass
     class _RecordingTracer:
         events: list[tuple[str, dict]] = field(default_factory=list)
+
         def event(self, kind: str, **data: Any) -> None:
             self.events.append((kind, data))
+
         def close(self) -> None:
             pass
 
@@ -378,6 +395,7 @@ def test_native_search_seq_interleaved_with_function_calls(tmp_path: Path) -> No
         name = "noop"
         description = "no-op"
         input_schema = {"type": "object", "properties": {}}
+
         def run(self, args: dict) -> str:
             return "ok"
 
@@ -389,11 +407,13 @@ def test_native_search_seq_interleaved_with_function_calls(tmp_path: Path) -> No
     _done = False
     _orig_extract = mode.extract_tool_calls
     call_count = [0]
+
     def _extract_tool_calls_stub(resp):
         call_count[0] += 1
         if call_count[0] == 1:
             return [ToolCall(name="noop", args={}, id="c0")]
         return []
+
     mode.extract_tool_calls = _extract_tool_calls_stub  # type: ignore
 
     tracer = _RecordingTracer()
@@ -401,6 +421,7 @@ def test_native_search_seq_interleaved_with_function_calls(tmp_path: Path) -> No
     memory = FileMemory(tmp_path / "mem.json")
 
     from harness.pricing import load_pricing
+
     run_until_idle(msgs, mode, tools, memory, tracer, max_turns=5, pricing=load_pricing())
 
     # Find native_search_call and tool_call events from the first turn

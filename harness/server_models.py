@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -11,8 +11,8 @@ class CreateSessionRequest(BaseModel):
     task: str
     workspace: str
     model: str = "claude-sonnet-4-6"
-    mode: str = "native"
-    memory: str = "file"
+    mode: Literal["native"] = "native"
+    memory: Literal["file", "engram"] = "file"
     memory_repo: str | None = None
     max_turns: int = Field(default=100, ge=1, le=1000)
     max_parallel_tools: int = Field(default=4, ge=1, le=32)
@@ -22,7 +22,7 @@ class CreateSessionRequest(BaseModel):
     trace_live: bool = False  # off by default in API mode (no stderr)
     trace_to_engram: bool | None = None
     interactive: bool = False
-    tool_profile: str = "full"  # "full" | "no_shell" | "read_only"
+    tool_profile: Literal["full", "no_shell", "read_only"] = "full"
 
 
 class CreateSessionResponse(BaseModel):

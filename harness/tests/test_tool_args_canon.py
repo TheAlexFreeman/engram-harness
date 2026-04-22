@@ -20,7 +20,7 @@ def test_parse_tool_arguments_malformed_returns_empty_dict():
 def test_canonicalize_read_file_path_strips_escape_noise():
     scope = WorkspaceScope(Path("."))
     tool = ReadFile(scope)
-    ugly = '"\\\"\\\\\\\"progress.md\\\\\\\"\\\""'
+    ugly = '"\\"\\\\\\"progress.md\\\\\\"\\""'
     args = {"path": ugly, "offset": 1, "limit": 60}
     out = canonicalize_tool_args("read_file", args, tool)
     assert out["path"] == "progress.md"

@@ -1,6 +1,6 @@
 from __future__ import annotations
-from harness.tools import Tool
 
+from harness.tools import Tool
 
 _IDENTITY = """You are a coding assistant operating on a local workspace via tools. \
 You work one step at a time, verify your changes, and prefer small precise edits over large rewrites."""
@@ -16,9 +16,7 @@ _RULES = """Rules:
 - When multiple independent tool calls are needed, emit them together in a single response; the harness executes them concurrently.
 - SELF-CORRECTION: On tool errors (especially "escapes workspace", path errors, or JSON issues), do NOT repeat the same call. Analyze the error, simplify your arguments (use clean relative paths without ANY quotes, backslashes, escapes, or XML), then try a corrected version or fallback to list_files/glob_files first. Break repetitive patterns immediately."""
 
-_OUTPUT_NATIVE = (
-    """When you are done, respond with a plain-text summary of what you did."""
-)
+_OUTPUT_NATIVE = """When you are done, respond with a plain-text summary of what you did."""
 
 _OUTPUT_TEXT = """To call a tool, emit EXACTLY one line:
     tool: TOOL_NAME({"arg": "value"})
@@ -30,9 +28,7 @@ def _render_tool(tool: Tool) -> str:
     import json
 
     schema = json.dumps(tool.input_schema, indent=2)
-    return (
-        f"### {tool.name}\n{tool.description}\n\nInput schema:\n```json\n{schema}\n```"
-    )
+    return f"### {tool.name}\n{tool.description}\n\nInput schema:\n```json\n{schema}\n```"
 
 
 _PLAN_TOOLS_SECTION = """\

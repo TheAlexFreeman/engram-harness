@@ -6,15 +6,18 @@ from harness.modes.grok import _grok_native_search_kind_and_phase
 
 
 def test_native_search_stream_type_maps_kind_and_phase():
-    assert _grok_native_search_kind_and_phase(
-        "response.web_search_call.searching"
-    ) == ("web_search_call", "searching")
-    assert _grok_native_search_kind_and_phase(
-        "response.web_search_call.in_progress"
-    ) == ("web_search_call", "in_progress")
-    assert _grok_native_search_kind_and_phase(
-        "response.x_search_call.completed"
-    ) == ("x_search_call", "completed")
+    assert _grok_native_search_kind_and_phase("response.web_search_call.searching") == (
+        "web_search_call",
+        "searching",
+    )
+    assert _grok_native_search_kind_and_phase("response.web_search_call.in_progress") == (
+        "web_search_call",
+        "in_progress",
+    )
+    assert _grok_native_search_kind_and_phase("response.x_search_call.completed") == (
+        "x_search_call",
+        "completed",
+    )
 
 
 def test_non_search_event_returns_none():

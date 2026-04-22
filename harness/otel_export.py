@@ -98,10 +98,12 @@ def export_session_spans(
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
-    resource = Resource(attributes={
-        "service.name": service_name,
-        "service.version": "0.1.0",
-    })
+    resource = Resource(
+        attributes={
+            "service.name": service_name,
+            "service.version": "0.1.0",
+        }
+    )
     exporter = OTLPSpanExporter(endpoint=resolved_endpoint)
     provider = TracerProvider(resource=resource)
     provider.add_span_processor(SimpleSpanProcessor(exporter))

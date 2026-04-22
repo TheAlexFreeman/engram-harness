@@ -159,9 +159,7 @@ def format_report(report: TraceReport) -> str:
         f"reason={report.reasoning_tokens:,}"
     )
     if report.server_search_calls or report.server_sources:
-        lines.append(
-            f"search: calls={report.server_search_calls} sources={report.server_sources}"
-        )
+        lines.append(f"search: calls={report.server_search_calls} sources={report.server_sources}")
     lines.append(
         f"cost:  ${report.total_cost_usd:.4f} total  "
         f"(in ${report.input_cost_usd:.4f} / out ${report.output_cost_usd:.4f} / "
@@ -173,9 +171,7 @@ def format_report(report: TraceReport) -> str:
         lines.append(f"[warning] no pricing for model(s): {models}")
     if report.tool_counts:
         top = report.tool_counts.most_common(10)
-        tools_line = "tools: " + ", ".join(
-            f"{name}={count}" for name, count in top
-        )
+        tools_line = "tools: " + ", ".join(f"{name}={count}" for name, count in top)
         lines.append(tools_line)
     if report.tool_errors:
         err_line = "errors: " + ", ".join(
@@ -213,9 +209,7 @@ def format_directory_summary(reports: list[TraceReport]) -> str:
             any_missing = True
             missing_models.update(r.missing_models)
     rows.append("-" * len(header))
-    rows.append(
-        f"{'TOTAL':<42} {'':>5} {total_in:>10,} {total_out:>10,} ${total_cost:>9.4f}"
-    )
+    rows.append(f"{'TOTAL':<42} {'':>5} {total_in:>10,} {total_out:>10,} ${total_cost:>9.4f}")
     if any_missing:
         models = ", ".join(sorted(missing_models)) or "(unknown)"
         rows.append(f"[warning] no pricing for model(s): {models}")

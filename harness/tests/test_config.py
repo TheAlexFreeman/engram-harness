@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from harness.config import (
-    SessionComponents,
     SessionConfig,
     ToolProfile,
     build_session,
@@ -191,7 +189,6 @@ def test_build_session_extra_trace_sinks(tmp_path):
 
 def test_build_session_tools_merged(tmp_path):
     """Extra tools from memory backend are merged with provided base tools."""
-    from harness.tools import Tool
 
     class FakeTool:
         name = "fake_tool"

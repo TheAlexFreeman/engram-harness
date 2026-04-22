@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, date
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -76,7 +76,6 @@ def _load_plan_yaml(plan_dir: Path) -> dict[str, Any]:
 
 def _find_active_plans(content_root: Path) -> list[Path]:
     """Return plan dirs with status='active', sorted by most-recently modified."""
-    pattern = content_root / "memory" / "working" / "projects" / "*" / "plans" / "*" / "run-state.json"
     candidates: list[tuple[float, Path]] = []
     for p in content_root.glob("memory/working/projects/*/plans/*/run-state.json"):
         try:
@@ -147,12 +146,14 @@ class CreatePlan:
 
         phases = []
         for ph in phases_raw:
-            phases.append({
-                "name": str(ph.get("name", "")),
-                "tasks": [str(t) for t in (ph.get("tasks") or [])],
-                "postconditions": [str(p) for p in (ph.get("postconditions") or [])],
-                "requires_approval": bool(ph.get("requires_approval", False)),
-            })
+            phases.append(
+                {
+                    "name": str(ph.get("name", "")),
+                    "tasks": [str(t) for t in (ph.get("tasks") or [])],
+                    "postconditions": [str(p) for p in (ph.get("postconditions") or [])],
+                    "requires_approval": bool(ph.get("requires_approval", False)),
+                }
+            )
 
         plan_doc: dict[str, Any] = {
             "plan_id": plan_id,
@@ -214,7 +215,10 @@ class ResumePlan:
         "required": ["plan_id"],
         "properties": {
             "plan_id": {"type": "string", "description": "Plan ID, e.g. 'plan-001'."},
-            "project_id": {"type": "string", "description": "Project folder slug (if not misc-plans)."},
+            "project_id": {
+                "type": "string",
+                "description": "Project folder slug (if not misc-plans).",
+            },
         },
     }
 
@@ -300,8 +304,7 @@ class ResumePlan:
 
         # Failure history for current phase (last 2)
         failures = [
-            f for f in state.get("failure_history", [])
-            if f.get("phase_index") == current_idx
+            f for f in state.get("failure_history", []) if f.get("phase_index") == current_idx
         ]
         if failures:
             lines.append(f"**Previous attempts:** {len(failures)} failure(s) on this phase.")
@@ -398,7 +401,7 @@ class CompletePlan:
                 lines.append(f"- {pc}")
             lines += [
                 "",
-                f"Call `complete_phase` with `postconditions_met=true` when all are satisfied.",
+                "Call `complete_phase` with `postconditions_met=true` when all are satisfied.",
             ]
             return "\n".join(lines) + "\n"
 
@@ -446,7 +449,9 @@ class CompletePlan:
                 f"complete phase {current_idx} of {plan_id}",
                 [f"{rel}/run-state.json"],
             )
-            result = f"Phase **{current_phase['name']}** complete. Plan **{plan_id}** is now finished.\n"
+            result = (
+                f"Phase **{current_phase['name']}** complete. Plan **{plan_id}** is now finished.\n"
+            )
         else:
             next_phase = phases[state["current_phase"]]
             _save_run_state(plan_dir, state)

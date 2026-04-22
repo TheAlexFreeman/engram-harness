@@ -3,22 +3,18 @@
 from __future__ import annotations
 
 import json
-from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-import yaml
 
-from harness.cli import (
+from harness.cmd_status import (
     _print_active_plans,
     _print_recent_sessions,
     _resolve_engram_content_root,
 )
 from harness.session_store import SessionRecord, SessionStore
 from harness.tools.plan_tools import CreatePlan
-from unittest.mock import MagicMock
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -44,10 +40,7 @@ def _create_plan(content_root: Path, title: str, n_phases: int = 2, **kwargs) ->
     """Use CreatePlan tool to write a plan and return its plan_id."""
     mem = _make_mock_memory(content_root)
     tool = CreatePlan(mem)
-    phases = [
-        {"name": f"Phase {i + 1}", "tasks": [f"Task {i + 1}a"]}
-        for i in range(n_phases)
-    ]
+    phases = [{"name": f"Phase {i + 1}", "tasks": [f"Task {i + 1}a"]} for i in range(n_phases)]
     result = tool.run({"title": title, "phases": phases, **kwargs})
     # Extract plan_id from result string
     for word in result.split():
@@ -82,7 +75,7 @@ def test_resolve_content_root_directory_without_engram_returns_none(tmp_path):
 
 
 def test_resolve_content_root_auto_detect_walks_cwd(tmp_path):
-    cr = _make_content_root(tmp_path)
+    _make_content_root(tmp_path)
     subdir = tmp_path / "src" / "module"
     subdir.mkdir(parents=True)
     with patch("harness.cli.Path") as mock_path_cls:
@@ -188,7 +181,7 @@ def _make_record(session_id: str, task: str = "do a thing", **kwargs) -> Session
 
 def test_print_recent_sessions_empty_store(tmp_path, capsys):
     db_path = tmp_path / "sessions.db"
-    store = SessionStore(db_path)
+    SessionStore(db_path)
     _print_recent_sessions(db_path, limit=10)
     out = capsys.readouterr().out
     assert "none recorded" in out
@@ -201,9 +194,15 @@ def test_print_recent_sessions_shows_records(tmp_path, capsys):
     rec = _make_record("ses_abc123", "run tests for auth")
     store.insert_session(rec)
     store.complete_session(
-        "ses_abc123", status="completed", ended_at="2026-04-21T10:01:00.000",
-        turns_used=5, input_tokens=1000, output_tokens=500,
-        cache_read_tokens=0, cache_write_tokens=0, reasoning_tokens=0,
+        "ses_abc123",
+        status="completed",
+        ended_at="2026-04-21T10:01:00.000",
+        turns_used=5,
+        input_tokens=1000,
+        output_tokens=500,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+        reasoning_tokens=0,
         total_cost_usd=0.0123,
     )
     _print_recent_sessions(db_path, limit=10)
@@ -230,9 +229,15 @@ def test_print_recent_sessions_shows_stats(tmp_path, capsys):
     rec = _make_record("ses_001")
     store.insert_session(rec)
     store.complete_session(
-        "ses_001", status="completed", ended_at="2026-04-21T10:05:00.000",
-        turns_used=8, input_tokens=2000, output_tokens=800,
-        cache_read_tokens=0, cache_write_tokens=0, reasoning_tokens=0,
+        "ses_001",
+        status="completed",
+        ended_at="2026-04-21T10:05:00.000",
+        turns_used=8,
+        input_tokens=2000,
+        output_tokens=800,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+        reasoning_tokens=0,
         total_cost_usd=0.05,
     )
     _print_recent_sessions(db_path, limit=10)
@@ -249,6 +254,7 @@ def test_print_recent_sessions_shows_stats(tmp_path, capsys):
 def test_status_dispatch(tmp_path, capsys):
     """`harness status` with no configured store should print header and hints."""
     import sys
+
     from harness.cli import main
 
     with patch.object(sys, "argv", ["harness", "status", "--memory-repo", str(tmp_path)]):

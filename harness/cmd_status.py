@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def _resolve_engram_content_root(memory_repo: str | None) -> "Path | None":
-    from harness.engram_memory import detect_engram_repo, _resolve_content_root
+    from harness.engram_memory import _resolve_content_root, detect_engram_repo
 
     if memory_repo:
         repo_root = Path(memory_repo).expanduser().resolve()
@@ -26,9 +26,9 @@ def _resolve_engram_content_root(memory_repo: str | None) -> "Path | None":
 def _print_active_plans(content_root: Path) -> None:
     try:
         from harness.tools.plan_tools import (
-            find_active_plans,
             _load_plan_yaml,
             _load_run_state,
+            find_active_plans,
         )
     except ImportError:
         return
@@ -107,8 +107,7 @@ def main() -> None:
     parser.add_argument(
         "--db",
         default=None,
-        help="Path to SQLite session database. "
-        "Defaults to $HARNESS_DB_PATH env var.",
+        help="Path to SQLite session database. Defaults to $HARNESS_DB_PATH env var.",
     )
     parser.add_argument(
         "--sessions",

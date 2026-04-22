@@ -10,10 +10,10 @@ import os
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers — import the module-level functions without importing FastAPI app
@@ -25,6 +25,7 @@ def _import_server():
     pytest.importorskip("fastapi")
     pytest.importorskip("sse_starlette")
     import harness.server as srv
+
     return srv
 
 
@@ -36,6 +37,7 @@ def _import_server():
 def test_health_endpoint_returns_ok(tmp_path):
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
+
     srv = _import_server()
 
     client = TestClient(srv.app)
@@ -48,12 +50,12 @@ def test_health_endpoint_returns_ok(tmp_path):
 
 def test_health_active_count_reflects_sessions(tmp_path):
     srv = _import_server()
+
     from fastapi.testclient import TestClient
-    from dataclasses import field as dc_field
-    import queue as stdlib_queue
 
     # Inject a fake "running" session into _sessions
     fake_id = "test_health_ses"
+
     # ManagedSession needs config + components — use a minimal stub dict instead
     # by patching _sessions directly
     class _FakeSession:
@@ -91,9 +93,9 @@ def test_evict_old_sessions_removes_terminal():
     old_running = "evict_old_running"
 
     with srv._sessions_lock:
-        srv._sessions[old_completed] = _FakeSession("completed", 3)   # old + terminal → evict
+        srv._sessions[old_completed] = _FakeSession("completed", 3)  # old + terminal → evict
         srv._sessions[young_completed] = _FakeSession("completed", 0.1)  # young → keep
-        srv._sessions[old_running] = _FakeSession("running", 3)         # running → keep
+        srv._sessions[old_running] = _FakeSession("running", 3)  # running → keep
 
     try:
         # Run the coroutine's inner cleanup logic directly (one iteration).
@@ -172,6 +174,7 @@ def test_validate_workspace_rejects_root():
             srv._validate_workspace(root)
         except Exception as exc:
             from fastapi import HTTPException as FE
+
             assert isinstance(exc, FE)
 
 
@@ -208,6 +211,61 @@ def test_stats_route_reachable():
     assert resp.status_code == 200
     body = resp.json()
     assert "total_sessions" in body
+
+
+def test_run_interactive_session_persists_stopped_status(tmp_path):
+    srv = _import_server()
+    from harness.usage import Usage
+
+    queue: asyncio.Queue = asyncio.Queue()
+    memory = SimpleNamespace(
+        start_session=lambda task: "prior context",
+        end_session=lambda summary, skip_commit: None,
+    )
+    tracer = SimpleNamespace(event=MagicMock(), close=MagicMock())
+    mode = SimpleNamespace(
+        initial_messages=lambda task, prior, tools: [{"role": "user", "content": task}]
+    )
+    components = SimpleNamespace(
+        memory=memory,
+        mode=mode,
+        tools={},
+        tracer=tracer,
+        stream_sink=object(),
+        engram_memory=None,
+    )
+    config = SimpleNamespace(
+        max_turns=5,
+        max_parallel_tools=1,
+        repeat_guard_threshold=3,
+        error_recall_threshold=0,
+        trace_to_engram=None,
+    )
+    session = srv.ManagedSession(
+        id="ses_stop",
+        config=config,
+        components=components,
+        queue=queue,
+        task="interactive stop",
+        interactive=True,
+    )
+    session.stop_event.set()
+    result = SimpleNamespace(usage=Usage.zero(), final_text="stopped early")
+
+    with (
+        patch("harness.server.run_until_idle", return_value=result),
+        patch("harness.server._maybe_run_trace_bridge"),
+        patch("harness.server._store_complete_session"),
+    ):
+        srv._run_interactive_session(session)
+
+    assert session.status == "stopped"
+    done_event = queue.get_nowait()
+    assert done_event.event == "idle"
+    done_event = queue.get_nowait()
+    assert done_event.event == "done"
+    assert done_event.data["status"] == "stopped"
+    tracer.event.assert_any_call("session_end", turns=1, reason="stopped")
 
 
 def test_lifespan_signals_running_sessions_on_shutdown():

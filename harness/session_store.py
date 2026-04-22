@@ -15,10 +15,9 @@ import json
 import sqlite3
 import threading
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 

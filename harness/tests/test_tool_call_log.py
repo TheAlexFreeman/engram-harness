@@ -18,8 +18,7 @@ from harness.tests.test_parallel_tools import (  # noqa: PLC2701
     ScriptedMode,
     _ScriptedResponse,
 )
-from harness.tools import Tool, ToolCall, ToolResult
-
+from harness.tools import Tool, ToolCall
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -136,14 +135,22 @@ def test_loop_tool_call_events_include_turn_and_seq():
     ok = OkTool()
     tools: dict[str, Tool] = {"ok_tool": ok}
     call = ToolCall(name="ok_tool", args={}, id="c0")
-    mode = ScriptedMode([
-        _ScriptedResponse(tool_calls=[call]),
-        _ScriptedResponse(tool_calls=[call]),
-        _ScriptedResponse(tool_calls=[], text="done"),
-    ])
+    mode = ScriptedMode(
+        [
+            _ScriptedResponse(tool_calls=[call]),
+            _ScriptedResponse(tool_calls=[call]),
+            _ScriptedResponse(tool_calls=[], text="done"),
+        ]
+    )
     tracer = CapturingTracer()
-    run(task="go", mode=mode, tools=tools, memory=RecordingMemory(), tracer=tracer,
-        max_parallel_tools=1)
+    run(
+        task="go",
+        mode=mode,
+        tools=tools,
+        memory=RecordingMemory(),
+        tracer=tracer,
+        max_parallel_tools=1,
+    )
 
     tc_events = [(k, d) for k, d in tracer.events if k == "tool_call"]
     assert len(tc_events) == 2
@@ -157,13 +164,21 @@ def test_loop_tool_result_events_include_seq():
     ok = OkTool()
     tools: dict[str, Tool] = {"ok_tool": ok}
     call = ToolCall(name="ok_tool", args={}, id="c0")
-    mode = ScriptedMode([
-        _ScriptedResponse(tool_calls=[call, call]),
-        _ScriptedResponse(tool_calls=[], text="done"),
-    ])
+    mode = ScriptedMode(
+        [
+            _ScriptedResponse(tool_calls=[call, call]),
+            _ScriptedResponse(tool_calls=[], text="done"),
+        ]
+    )
     tracer = CapturingTracer()
-    run(task="go", mode=mode, tools=tools, memory=RecordingMemory(), tracer=tracer,
-        max_parallel_tools=2)
+    run(
+        task="go",
+        mode=mode,
+        tools=tools,
+        memory=RecordingMemory(),
+        tracer=tracer,
+        max_parallel_tools=2,
+    )
 
     tc_events = [d for k, d in tracer.events if k == "tool_call"]
     tr_events = [d for k, d in tracer.events if k == "tool_result"]
@@ -179,14 +194,22 @@ def test_loop_seq_increments_across_turns():
     ok = OkTool()
     tools: dict[str, Tool] = {"ok_tool": ok}
     call = ToolCall(name="ok_tool", args={}, id="c0")
-    mode = ScriptedMode([
-        _ScriptedResponse(tool_calls=[call]),        # seq=0
-        _ScriptedResponse(tool_calls=[call, call]),  # seq=1, 2
-        _ScriptedResponse(tool_calls=[], text="done"),
-    ])
+    mode = ScriptedMode(
+        [
+            _ScriptedResponse(tool_calls=[call]),  # seq=0
+            _ScriptedResponse(tool_calls=[call, call]),  # seq=1, 2
+            _ScriptedResponse(tool_calls=[], text="done"),
+        ]
+    )
     tracer = CapturingTracer()
-    run(task="go", mode=mode, tools=tools, memory=RecordingMemory(), tracer=tracer,
-        max_parallel_tools=2)
+    run(
+        task="go",
+        mode=mode,
+        tools=tools,
+        memory=RecordingMemory(),
+        tracer=tracer,
+        max_parallel_tools=2,
+    )
 
     seqs = [d["seq"] for k, d in tracer.events if k == "tool_call"]
     assert seqs == [0, 1, 2]
@@ -197,13 +220,17 @@ def test_tracker_captures_error_via_loop():
     fail = FailTool()
     ok = OkTool()
     tools: dict[str, Tool] = {"ok_tool": ok, "fail_tool": fail}
-    mode = ScriptedMode([
-        _ScriptedResponse(tool_calls=[
-            ToolCall(name="ok_tool", args={}, id="c0"),
-            ToolCall(name="fail_tool", args={}, id="c1"),
-        ]),
-        _ScriptedResponse(tool_calls=[], text="done"),
-    ])
+    mode = ScriptedMode(
+        [
+            _ScriptedResponse(
+                tool_calls=[
+                    ToolCall(name="ok_tool", args={}, id="c0"),
+                    ToolCall(name="fail_tool", args={}, id="c1"),
+                ]
+            ),
+            _ScriptedResponse(tool_calls=[], text="done"),
+        ]
+    )
     tracer = CapturingTracer()
     log: list[dict] = []
     tracker = SessionStateTrackerSink(log)
@@ -220,8 +247,14 @@ def test_tracker_captures_error_via_loop():
             for s in self._sinks:
                 s.close()
 
-    run(task="go", mode=mode, tools=tools, memory=RecordingMemory(),
-        tracer=CompositeTracer(tracer, tracker), max_parallel_tools=2)
+    run(
+        task="go",
+        mode=mode,
+        tools=tools,
+        memory=RecordingMemory(),
+        tracer=CompositeTracer(tracer, tracker),
+        max_parallel_tools=2,
+    )
 
     names = {e["name"]: e for e in log}
     assert "ok_tool" in names

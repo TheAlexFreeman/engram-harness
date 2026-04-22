@@ -4,8 +4,8 @@ export interface CreateSessionRequest {
   task: string;
   workspace: string;
   model?: string;
-  mode?: string;
-  memory?: string;
+  mode?: "native";
+  memory?: "file" | "engram";
   max_turns?: number;
   max_parallel_tools?: number;
   interactive?: boolean;

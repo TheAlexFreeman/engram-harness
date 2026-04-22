@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from harness.loop import RunResult, run
+from harness.loop import run
 from harness.tests.test_engram_memory import _make_engram_repo
 from harness.tests.test_parallel_tools import (
     ScriptedMode,
@@ -32,9 +32,7 @@ def trace_path(tmp_path):
 
 
 def _make_scripted_mode() -> ScriptedMode:
-    return ScriptedMode(
-        [_ScriptedResponse(tool_calls=[], text="The answer is 42.")]
-    )
+    return ScriptedMode([_ScriptedResponse(tool_calls=[], text="The answer is 42.")])
 
 
 @pytest.mark.integration
@@ -124,13 +122,24 @@ def test_trace_bridge_handles_minimal_trace(engram_repo, tmp_path):
     minimal_trace = tmp_path / "minimal.jsonl"
     events = [
         {"kind": "session_start", "task": "minimal trace test", "ts": "2026-04-21T10:00:00"},
-        {"kind": "session_usage",
-         "input_tokens": 10, "output_tokens": 5, "total_cost_usd": 0.0,
-         "cache_read_tokens": 0, "cache_write_tokens": 0, "reasoning_tokens": 0,
-         "server_search_calls": 0, "server_sources": 0,
-         "input_cost_usd": 0.0, "output_cost_usd": 0.0,
-         "cache_read_cost_usd": 0.0, "cache_write_cost_usd": 0.0,
-         "search_cost_usd": 0.0, "pricing_missing": False, "missing_models": []},
+        {
+            "kind": "session_usage",
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_cost_usd": 0.0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "reasoning_tokens": 0,
+            "server_search_calls": 0,
+            "server_sources": 0,
+            "input_cost_usd": 0.0,
+            "output_cost_usd": 0.0,
+            "cache_read_cost_usd": 0.0,
+            "cache_write_cost_usd": 0.0,
+            "search_cost_usd": 0.0,
+            "pricing_missing": False,
+            "missing_models": [],
+        },
         {"kind": "session_end", "turns": 1, "reason": "idle", "ts": "2026-04-21T10:00:01"},
     ]
     with minimal_trace.open("w", encoding="utf-8") as f:

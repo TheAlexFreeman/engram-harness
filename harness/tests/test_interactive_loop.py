@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from harness.config import SessionComponents, SessionConfig, ToolProfile
+from harness.config import SessionComponents, SessionConfig
 from harness.loop import run, run_until_idle
 from harness.tests.test_parallel_tools import (
     NullTracer,
@@ -22,6 +22,7 @@ from harness.tools import Tool, ToolCall
 @dataclass
 class RecordingTracer:
     """Tracer that records events for inspection in tests."""
+
     events: list[dict] = field(default_factory=list)
 
     def event(self, kind: str, **data: Any) -> None:
@@ -129,8 +130,9 @@ def test_run_still_one_start_and_one_end_session():
 
 def test_run_interactive_emits_sub_session_markers():
     """run_interactive should wrap each run_until_idle call with sub_session_start/end."""
-    from harness.runner import run_interactive
     from unittest.mock import patch
+
+    from harness.runner import run_interactive
 
     mode = ScriptedMode([_ScriptedResponse(tool_calls=[], text="result text")])
     memory = RecordingMemory()
@@ -149,14 +151,17 @@ def test_run_interactive_emits_sub_session_markers():
 
 def test_run_interactive_sub_session_idx_increments():
     """Each run_until_idle call should get an incrementing subtask_idx."""
-    from harness.runner import run_interactive
     from unittest.mock import patch
 
+    from harness.runner import run_interactive
+
     # Two scripted responses: opener + one follow-up
-    mode = ScriptedMode([
-        _ScriptedResponse(tool_calls=[], text="first reply"),
-        _ScriptedResponse(tool_calls=[], text="second reply"),
-    ])
+    mode = ScriptedMode(
+        [
+            _ScriptedResponse(tool_calls=[], text="first reply"),
+            _ScriptedResponse(tool_calls=[], text="second reply"),
+        ]
+    )
     memory = RecordingMemory()
     tracer = RecordingTracer()
     components = _make_components(mode, memory, tracer)
@@ -176,8 +181,9 @@ def test_run_interactive_sub_session_idx_increments():
 
 def test_run_interactive_with_opener_starts_subsession():
     """Opener task triggers a sub_session_start before run_until_idle."""
-    from harness.runner import run_interactive
     from unittest.mock import patch
+
+    from harness.runner import run_interactive
 
     mode = ScriptedMode([_ScriptedResponse(tool_calls=[], text="ok")])
     memory = RecordingMemory()

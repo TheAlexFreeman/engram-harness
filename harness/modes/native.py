@@ -1,9 +1,10 @@
 from __future__ import annotations
+
 import anthropic
 
+from harness.prompts import system_prompt_native
 from harness.stream import StreamSink
 from harness.tools import Tool, ToolCall, ToolResult
-from harness.prompts import system_prompt_native
 from harness.usage import Usage
 
 
@@ -71,9 +72,7 @@ class NativeMode:
                         name = getattr(block, "name", None)
                         call_id = getattr(block, "id", None)
                         open_blocks[idx] = kind
-                        sink.on_block_start(
-                            kind, index=idx, name=name, call_id=call_id
-                        )
+                        sink.on_block_start(kind, index=idx, name=name, call_id=call_id)
                     elif etype == "content_block_delta":
                         delta = getattr(event, "delta", None)
                         idx = getattr(event, "index", None)
@@ -81,9 +80,7 @@ class NativeMode:
                         if dtype == "text_delta":
                             sink.on_text_delta(getattr(delta, "text", "") or "")
                         elif dtype == "thinking_delta":
-                            sink.on_reasoning_delta(
-                                getattr(delta, "thinking", "") or ""
-                            )
+                            sink.on_reasoning_delta(getattr(delta, "thinking", "") or "")
                         elif dtype == "input_json_delta":
                             sink.on_tool_args_delta(
                                 getattr(delta, "partial_json", "") or "",

@@ -160,7 +160,9 @@ def run_trace_bridge(
     written.append(_relpath(memory, spans_path))
 
     if not subsessions:
-        access_count = _emit_access_entries(memory, tool_calls, stats, content_prefix=content_prefix)
+        access_count = _emit_access_entries(
+            memory, tool_calls, stats, content_prefix=content_prefix
+        )
 
     if trace_path.is_file():
         try:
@@ -267,9 +269,7 @@ def _run_subsession_bridge(
     reflection_text = _render_reflection(memory, stats, tool_calls)
     _write_artifact(reflection_path, reflection_text)
 
-    access_count = _emit_access_entries(
-        memory, tool_calls, stats, content_prefix=content_prefix
-    )
+    access_count = _emit_access_entries(memory, tool_calls, stats, content_prefix=content_prefix)
 
     written = [
         _relpath(memory, summary_path),
@@ -800,7 +800,7 @@ def _access_namespace(file_path: str, content_prefix: str = "core") -> str | Non
     norm = _norm(file_path).strip("/")
     prefix = content_prefix.strip("/")
     if prefix and norm.startswith(prefix + "/"):
-        norm = norm[len(prefix) + 1:]
+        norm = norm[len(prefix) + 1 :]
     for root in _ACCESS_ROOTS:
         if norm == root or norm.startswith(root + "/"):
             return root

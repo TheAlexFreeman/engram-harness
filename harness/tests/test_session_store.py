@@ -192,7 +192,6 @@ def test_missing_db_created(tmp_path):
 
 
 def _write_trace(path: Path, events: list[dict]) -> None:
-    import json
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as f:
@@ -209,8 +208,13 @@ def test_backfill_from_trace(tmp_path, store):
             {"ts": "2026-04-21T00:00:00.000", "kind": "session_start", "task": "Do the thing"},
             {"ts": "2026-04-21T00:00:01.000", "kind": "tool_call", "name": "read_file"},
             {"ts": "2026-04-21T00:00:02.000", "kind": "tool_call", "name": "edit_file"},
-            {"ts": "2026-04-21T00:00:03.000", "kind": "session_usage",
-             "input_tokens": 1000, "output_tokens": 200, "total_cost_usd": 0.01},
+            {
+                "ts": "2026-04-21T00:00:03.000",
+                "kind": "session_usage",
+                "input_tokens": 1000,
+                "output_tokens": 200,
+                "total_cost_usd": 0.01,
+            },
             {"ts": "2026-04-21T00:00:04.000", "kind": "session_end", "turns": 3},
         ],
     )

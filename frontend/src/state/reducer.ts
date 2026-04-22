@@ -1,6 +1,13 @@
 import { SessionAction } from "./actions";
 
-export type SessionStatus = "idle" | "connecting" | "running" | "done" | "error";
+export type SessionStatus =
+  | "idle"
+  | "connecting"
+  | "running"
+  | "stopping"
+  | "completed"
+  | "stopped"
+  | "error";
 
 export interface ToolCallEntry {
   id: string;
@@ -142,6 +149,10 @@ export function reducer(state: SessionState, action: SessionAction): SessionStat
     case "SESSION_RESET":
       return initialState;
 
+    case "SESSION_STOPPING":
+      if (!state.sessionId) return state;
+      return { ...state, status: "stopping", errorMessage: null };
+
     case "BLOCK_START": {
       const block: ActiveBlock = {
         kind: action.kind,
@@ -150,8 +161,11 @@ export function reducer(state: SessionState, action: SessionAction): SessionStat
         text: "",
         argsText: "",
       };
-      // Transition to running on first block
-      return { ...state, status: "running", activeBlock: block };
+      return {
+        ...state,
+        status: state.status === "stopping" ? "stopping" : "running",
+        activeBlock: block,
+      };
     }
 
     case "TEXT_DELTA": {
@@ -265,9 +279,25 @@ export function reducer(state: SessionState, action: SessionAction): SessionStat
     case "SESSION_DONE":
       return {
         ...state,
-        status: "done",
+        status: action.finalStatus ?? "completed",
         activeBlock: null,
         turnsUsed: action.turnsUsed ?? state.turnsUsed,
+        usage: action.usage
+          ? {
+              inputTokens: Number(action.usage.input_tokens ?? state.usage.inputTokens),
+              outputTokens: Number(action.usage.output_tokens ?? state.usage.outputTokens),
+              cacheReadTokens: Number(
+                action.usage.cache_read_tokens ?? state.usage.cacheReadTokens
+              ),
+              cacheWriteTokens: Number(
+                action.usage.cache_write_tokens ?? state.usage.cacheWriteTokens
+              ),
+              reasoningTokens: Number(
+                action.usage.reasoning_tokens ?? state.usage.reasoningTokens
+              ),
+              totalCostUsd: Number(action.usage.total_cost_usd ?? state.usage.totalCostUsd),
+            }
+          : state.usage,
       };
 
     case "SESSION_ERROR":

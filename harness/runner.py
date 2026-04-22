@@ -63,7 +63,6 @@ def _run_subtask(
 
 def run_interactive(args: "argparse.Namespace", components: "SessionComponents") -> Usage:
     """Run the interactive REPL. Returns total usage."""
-    config = components.config
     bridge = _bridge_enabled(components)
 
     total_usage = Usage.zero()

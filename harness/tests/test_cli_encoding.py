@@ -6,13 +6,11 @@ UnicodeEncodeError at the ``print(batch_result.final_text)`` call.  Plan 0001
 fixes this by calling ``stream.reconfigure(encoding="utf-8", errors="replace")``
 at the top of main().  This test verifies the fix on all platforms.
 """
+
 from __future__ import annotations
 
 import io
-import sys
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 UNICODE_PROBE = "🧱🗂️← ⚙️"
 
@@ -47,6 +45,7 @@ def test_main_reconfigures_stdout_to_utf8(tmp_path):
         patch("harness.cli.build_tools", return_value={}),
         patch("harness.cli.WorkspaceScope"),
         patch("harness.cli._ensure_workspace_in_gitignore"),
+        patch("harness.cli._maybe_warn_workspace_gitignore"),
         patch("harness.cli.run_batch", return_value=fake_batch_result),
         patch("harness.cli.run_trace_bridge_if_enabled"),
         patch("harness.cli.print_usage"),
@@ -55,11 +54,13 @@ def test_main_reconfigures_stdout_to_utf8(tmp_path):
         cfg.workspace = tmp_path
         cfg.tool_profile = MagicMock()
         cfg.interactive = False
+        cfg.auto_ignore_workspace = False
         mock_cfg.return_value = cfg
         mock_build.return_value = MagicMock()
 
         # Must not raise UnicodeEncodeError
         from harness.cli import main
+
         main()
 
     # After main() the stream should have been reconfigured to UTF-8
@@ -84,6 +85,7 @@ def test_main_handles_non_reconfigurable_stdout(tmp_path, capsys):
         patch("harness.cli.build_tools", return_value={}),
         patch("harness.cli.WorkspaceScope"),
         patch("harness.cli._ensure_workspace_in_gitignore"),
+        patch("harness.cli._maybe_warn_workspace_gitignore"),
         patch("harness.cli.run_batch", return_value=fake_batch_result),
         patch("harness.cli.run_trace_bridge_if_enabled"),
         patch("harness.cli.print_usage"),
@@ -92,12 +94,14 @@ def test_main_handles_non_reconfigurable_stdout(tmp_path, capsys):
         cfg.workspace = tmp_path
         cfg.tool_profile = MagicMock()
         cfg.interactive = False
+        cfg.auto_ignore_workspace = False
         mock_cfg.return_value = cfg
         mock_build.return_value = MagicMock()
 
         # pytest capsys replaces sys.stdout with a non-TextIOWrapper — hasattr
         # guard means reconfigure is silently skipped, not crashed.
         from harness.cli import main
+
         main()
 
     captured = capsys.readouterr()

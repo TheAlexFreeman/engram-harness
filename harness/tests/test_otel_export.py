@@ -21,7 +21,6 @@ from harness.otel_export import (
     export_session_spans,
 )
 
-
 # ---------------------------------------------------------------------------
 # _build_endpoint URL normalization
 # ---------------------------------------------------------------------------
@@ -222,12 +221,8 @@ def test_sampling_always_exports_error_sessions(
                         "opentelemetry.exporter.otlp.proto.http.trace_exporter": mock.MagicMock(
                             OTLPSpanExporter=fake_exporter_cls
                         ),
-                        "opentelemetry.sdk.resources": mock.MagicMock(
-                            Resource=fake_resource_cls
-                        ),
-                        "opentelemetry.sdk.trace": mock.MagicMock(
-                            TracerProvider=fake_provider_cls
-                        ),
+                        "opentelemetry.sdk.resources": mock.MagicMock(Resource=fake_resource_cls),
+                        "opentelemetry.sdk.trace": mock.MagicMock(TracerProvider=fake_provider_cls),
                         "opentelemetry.sdk.trace.export": mock.MagicMock(
                             SimpleSpanProcessor=fake_processor_cls
                         ),

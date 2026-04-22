@@ -7,13 +7,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
-from harness.trace_bridge import _ToolCall, _extract_tool_calls
-
+from harness.trace_bridge import _extract_tool_calls
 
 # ---------------------------------------------------------------------------
 # _extract_tool_calls — seq-based matching
@@ -113,6 +113,7 @@ def _import_server():
     pytest.importorskip("fastapi")
     pytest.importorskip("sse_starlette")
     import harness.server as srv
+
     return srv
 
 
@@ -126,6 +127,8 @@ def _make_session(status: str, usage_dict: dict | None = None):
     s = _FakeSession()
     s.status = status
     s.turns_used = 3
+    s.final_text = "done"
+    s.result = None
     u = MagicMock(spec=Usage)
     u.as_trace_dict.return_value = usage_dict or {"total_cost_usd": 0.0}
     s.usage = u
@@ -134,17 +137,18 @@ def _make_session(status: str, usage_dict: dict | None = None):
 
 def _collect_events(gen) -> list[dict]:
     """Drive an async generator to completion, collecting all yielded items."""
+
     async def _run():
         items = []
         async for item in gen:
             items.append(item)
         return items
+
     return asyncio.run(_run())
 
 
 def test_generator_yields_done_for_completed_session_with_empty_queue():
     srv = _import_server()
-    from harness.sinks.sse import SSEEvent
 
     queue: asyncio.Queue = asyncio.Queue()
     session = _make_session("completed")
@@ -156,6 +160,8 @@ def test_generator_yields_done_for_completed_session_with_empty_queue():
     assert len(events) >= 1
     last = events[-1]
     assert last["event"] == "done"
+    payload = json.loads(last["data"])
+    assert payload["data"]["status"] == "completed"
 
 
 def test_generator_passes_through_queued_done_event():
@@ -223,6 +229,7 @@ def test_generator_does_not_terminate_prematurely_for_running_session():
 def test_create_session_request_rejects_zero_max_turns():
     pytest.importorskip("fastapi")
     from pydantic import ValidationError
+
     from harness.server_models import CreateSessionRequest
 
     with pytest.raises(ValidationError):
@@ -232,6 +239,7 @@ def test_create_session_request_rejects_zero_max_turns():
 def test_create_session_request_rejects_negative_max_parallel():
     pytest.importorskip("fastapi")
     from pydantic import ValidationError
+
     from harness.server_models import CreateSessionRequest
 
     with pytest.raises(ValidationError):
@@ -250,7 +258,18 @@ def test_create_session_request_accepts_valid_values():
 def test_create_session_request_rejects_overlarge_max_turns():
     pytest.importorskip("fastapi")
     from pydantic import ValidationError
+
     from harness.server_models import CreateSessionRequest
 
     with pytest.raises(ValidationError):
         CreateSessionRequest(task="t", workspace="/tmp", max_turns=1001)
+
+
+def test_create_session_request_rejects_text_mode():
+    pytest.importorskip("fastapi")
+    from pydantic import ValidationError
+
+    from harness.server_models import CreateSessionRequest
+
+    with pytest.raises(ValidationError):
+        CreateSessionRequest(task="t", workspace="/tmp", mode="text")

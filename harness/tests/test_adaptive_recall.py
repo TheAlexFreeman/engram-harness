@@ -11,8 +11,7 @@ from harness.tests.test_parallel_tools import (  # noqa: PLC2701
     ScriptedMode,
     _ScriptedResponse,
 )
-from harness.tools import Tool, ToolCall, ToolResult
-
+from harness.tools import Tool, ToolCall
 
 # ---------------------------------------------------------------------------
 # Test helpers
@@ -386,7 +385,7 @@ def test_adaptive_recall_nudge_after_tool_results():
     # the nudge would mean the nudge was injected before tool_results.
     prev = final_msgs[nudge_idx - 1]
     assert prev.get("role") == "user", (
-        f"Message before nudge (idx {nudge_idx-1}) must be role=user (tool_results), "
+        f"Message before nudge (idx {nudge_idx - 1}) must be role=user (tool_results), "
         f"got role={prev.get('role')!r}"
     )
     assert isinstance(prev.get("content"), list), (

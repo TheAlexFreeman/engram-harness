@@ -7,16 +7,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from harness.memory import MemoryBackend
-from harness.stream import NullStreamSink, StderrStreamPrinter, StreamSink
-from harness.trace import CompositeTracer, ConsoleTracePrinter, TraceSink, Tracer
-
-if TYPE_CHECKING:
-    from harness.engram_memory import EngramMemory
-    from harness.modes.base import Mode
-    from harness.tools import Tool
+from harness.stream import NullStreamSink, StderrStreamPrinter
+from harness.trace import CompositeTracer, ConsoleTracePrinter, Tracer
 
 
 class ToolProfile(str, Enum):
@@ -41,10 +35,11 @@ class SessionConfig:
 
     # Model / mode
     model: str = "claude-sonnet-4-6"
-    mode: str = "native"  # "native" | "text"
+    mode: str = "native"
+    auto_ignore_workspace: bool = False
 
     # Memory
-    memory_backend: str = "file"  # "file" | "engram"
+    memory_backend: str = "file"
     memory_repo: Path | None = None
 
     # Run limits
@@ -86,6 +81,7 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         workspace=Path(args.workspace).resolve(),
         model=args.model,
         mode=args.mode,
+        auto_ignore_workspace=getattr(args, "auto_ignore_workspace", False),
         memory_backend=args.memory,
         memory_repo=Path(args.memory_repo) if getattr(args, "memory_repo", None) else None,
         max_turns=args.max_turns,
@@ -145,12 +141,20 @@ def _build_memory(
         f"[engram] session={engram.session_id} repo={engram.content_root}",
         file=sys.stderr,
     )
-    plan_tools = [CreatePlan(engram), ResumePlan(engram), CompletePlan(engram), RecordFailure(engram)]
+    plan_tools = [
+        CreatePlan(engram),
+        ResumePlan(engram),
+        CompletePlan(engram),
+        RecordFailure(engram),
+    ]
     return engram, engram, [RecallMemory(engram)] + plan_tools
 
 
 def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any) -> Any:
     """Build the model mode from config."""
+    if config.mode != "native":
+        raise ValueError(f"Unsupported mode {config.mode!r}; only 'native' is currently available")
+
     is_grok = any(k in config.model.lower() for k in ["grok", "xai", "x.ai"])
     if is_grok:
         from openai import OpenAI
@@ -185,9 +189,7 @@ def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any
             tools=tools,
             system=system_prompt_native(with_plan_tools=engram_memory is not None),
         )
-    from harness.modes.text import TextMode
-
-    return TextMode(client=client, model=config.model, tools=tools)
+    raise AssertionError("unreachable")
 
 
 def _derive_trace_path(config: SessionConfig, engram_memory: Any) -> Path:

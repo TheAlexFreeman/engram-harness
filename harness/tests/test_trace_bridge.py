@@ -20,7 +20,6 @@ from harness.trace_bridge import (
     _split_subsessions,
     _ToolCall,
     run_trace_bridge,
-    _PLAN_TOOL_ACTIONS,
 )
 
 
@@ -68,8 +67,13 @@ def test_access_namespace_empty_prefix() -> None:
 
 
 def test_normalize_for_access_with_prefix() -> None:
-    assert _normalize_for_access("memory/knowledge/foo.md", "core") == "core/memory/knowledge/foo.md"
-    assert _normalize_for_access("core/memory/knowledge/foo.md", "core") == "core/memory/knowledge/foo.md"
+    assert (
+        _normalize_for_access("memory/knowledge/foo.md", "core") == "core/memory/knowledge/foo.md"
+    )
+    assert (
+        _normalize_for_access("core/memory/knowledge/foo.md", "core")
+        == "core/memory/knowledge/foo.md"
+    )
 
 
 def test_normalize_for_access_empty_prefix() -> None:
@@ -336,12 +340,16 @@ def test_plan_tool_access_entries_emitted(memory: EngramMemory) -> None:
     # Use two different plans so deduplication doesn't merge them into one entry.
     tool_calls = [
         _ToolCall(
-            turn=0, seq=0, name="create_plan",
+            turn=0,
+            seq=0,
+            name="create_plan",
             args={"plan_id": "plan-001", "project_id": "my-proj"},
             timestamp=_now_iso(),
         ),
         _ToolCall(
-            turn=1, seq=1, name="complete_phase",
+            turn=1,
+            seq=1,
+            name="complete_phase",
             args={"plan_id": "plan-002", "project_id": "my-proj"},
             timestamp=_now_iso(),
         ),
@@ -354,7 +362,7 @@ def test_plan_tool_access_entries_emitted(memory: EngramMemory) -> None:
 
     access_path = memory.content_root / "memory" / "working" / "projects" / "ACCESS.jsonl"
     assert access_path.is_file()
-    lines = [json.loads(l) for l in access_path.read_text().splitlines() if l]
+    lines = [json.loads(line) for line in access_path.read_text().splitlines() if line]
     notes = {r["note"] for r in lines}
     assert "plan tool: plan_create" in notes
     assert "plan tool: plan_complete" in notes
@@ -367,7 +375,9 @@ def test_plan_tool_access_skips_missing_plan_id(memory: EngramMemory) -> None:
 
     tool_calls = [
         _ToolCall(
-            turn=0, seq=0, name="create_plan",
+            turn=0,
+            seq=0,
+            name="create_plan",
             args={"project_id": "my-proj"},  # no plan_id
             timestamp=_now_iso(),
         ),
@@ -389,7 +399,7 @@ def test_recall_dedupe_fetch_phase_skipped_in_access(
     from harness.tools.recall import RecallMemory
 
     tool = RecallMemory(memory)
-    tool.run({"query": "celery"})          # manifest call
+    tool.run({"query": "celery"})  # manifest call
     tool.run({"query": "celery", "result_index": 1})  # fetch call
 
     events = memory.recall_events
@@ -398,14 +408,19 @@ def test_recall_dedupe_fetch_phase_skipped_in_access(
     assert "fetch" in phases
 
     trace = tmp_path / "trace.jsonl"
-    _write_trace(trace, [
-        {"ts": _now_iso(), "kind": "session_start", "task": "dedupe test"},
-        {"ts": _now_iso(), "kind": "session_end", "turns": 1},
-    ])
+    _write_trace(
+        trace,
+        [
+            {"ts": _now_iso(), "kind": "session_start", "task": "dedupe test"},
+            {"ts": _now_iso(), "kind": "session_end", "turns": 1},
+        ],
+    )
     result = run_trace_bridge(trace, memory, commit=False)
 
     # Only the manifest-phase recall events should produce ACCESS entries.
-    manifest_count = sum(1 for ev in memory.recall_events if getattr(ev, "phase", "manifest") == "manifest")
+    manifest_count = sum(
+        1 for ev in memory.recall_events if getattr(ev, "phase", "manifest") == "manifest"
+    )
     assert result.access_entries == manifest_count
 
 

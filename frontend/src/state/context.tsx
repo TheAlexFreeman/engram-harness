@@ -1,4 +1,11 @@
-import { createContext, useContext, useReducer, useCallback, useRef, ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useReducer,
+  useRef,
+  type ReactNode,
+} from "react";
 import { reducer, initialState, SessionState } from "./reducer";
 import { SessionAction } from "./actions";
 import { SSEPayload, connectSSE } from "../api/sse";
@@ -19,6 +26,7 @@ interface SessionContextValue {
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
+const TERMINAL_STATUSES = new Set(["completed", "stopped", "error"]);
 
 function sseToAction(payload: SSEPayload): SessionAction {
   const { channel, event, data } = payload;
@@ -94,6 +102,7 @@ function sseToAction(payload: SSEPayload): SessionAction {
           finalText: data.final_text as string | undefined,
           turnsUsed: data.turns_used as number | undefined,
           usage: data.usage as Record<string, number> | undefined,
+          finalStatus: data.status as "completed" | "stopped" | undefined,
         };
       case "error":
         return {
@@ -110,11 +119,46 @@ function sseToAction(payload: SSEPayload): SessionAction {
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const abortRef = useRef<AbortController | null>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  const attachSSE = useCallback((sessionId: string, controller: AbortController) => {
+    connectSSE(
+      `/sessions/${sessionId}/events`,
+      (payload) => {
+        dispatch(sseToAction(payload));
+        if (
+          payload.channel === "control" &&
+          (payload.event === "done" || payload.event === "error") &&
+          abortRef.current === controller
+        ) {
+          abortRef.current = null;
+        }
+      },
+      controller.signal
+    ).catch((err) => {
+      if (err.name !== "AbortError") {
+        dispatch({ type: "SESSION_ERROR", errorType: "SSEError", message: String(err) });
+      }
+    });
+  }, []);
 
   const startSession = useCallback(
     async (req: { task: string; workspace: string; model: string; interactive: boolean; maxTurns: number }) => {
-      // Abort any existing SSE connection
-      abortRef.current?.abort();
+      const previousSessionId = stateRef.current.sessionId;
+      const previousStatus = stateRef.current.status;
+      const previousController = abortRef.current;
+
+      if (previousSessionId && !TERMINAL_STATUSES.has(previousStatus)) {
+        if (previousStatus !== "stopping") {
+          await api.stopSession(previousSessionId).catch(() => undefined);
+        }
+        previousController?.abort();
+        if (abortRef.current === previousController) {
+          abortRef.current = null;
+        }
+      }
+
       const controller = new AbortController();
       abortRef.current = controller;
 
@@ -135,16 +179,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         createdAt: res.created_at,
       });
 
-      // Start SSE in background
-      connectSSE(`/sessions/${res.session_id}/events`, (payload) => {
-        dispatch(sseToAction(payload));
-      }, controller.signal).catch((err) => {
-        if (err.name !== "AbortError") {
-          dispatch({ type: "SESSION_ERROR", errorType: "SSEError", message: String(err) });
-        }
-      });
+      attachSSE(res.session_id, controller);
     },
-    []
+    [attachSSE]
   );
 
   const sendMessage = useCallback(async (content: string) => {
@@ -158,10 +195,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [state.sessionId]);
 
   const stopSession = useCallback(async () => {
-    if (!state.sessionId) return;
-    abortRef.current?.abort();
-    await api.stopSession(state.sessionId);
-  }, [state.sessionId]);
+    const sessionId = stateRef.current.sessionId;
+    const status = stateRef.current.status;
+    if (!sessionId || TERMINAL_STATUSES.has(status) || status === "stopping") {
+      return;
+    }
+    dispatch({ type: "SESSION_STOPPING" });
+    try {
+      await api.stopSession(sessionId);
+    } catch (err) {
+      dispatch({ type: "SESSION_ERROR", errorType: "StopError", message: String(err) });
+    }
+  }, []);
 
   return (
     <SessionContext.Provider value={{ state, dispatch, startSession, sendMessage, stopSession }}>

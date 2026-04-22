@@ -4,8 +4,10 @@ import { CostTicker } from "./CostTicker";
 const STATUS_COLORS: Record<string, string> = {
   connecting: "text-yellow-400",
   running: "text-blue-400",
+  stopping: "text-orange-400",
   idle: "text-green-400",
-  done: "text-gray-400",
+  completed: "text-gray-400",
+  stopped: "text-orange-300",
   error: "text-red-400",
 };
 

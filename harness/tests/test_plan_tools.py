@@ -18,7 +18,6 @@ from harness.tools.plan_tools import (
     find_active_plans,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -80,6 +79,7 @@ def recorder(mock_memory: MagicMock) -> RecordFailure:
 
 def _create_plan(creator: CreatePlan, title: str = "Test Plan", phases: list | None = None) -> str:
     import re
+
     if phases is None:
         phases = [
             {"name": "Phase 1", "tasks": ["task A", "task B"], "postconditions": ["A done"]},
@@ -98,25 +98,40 @@ def _create_plan(creator: CreatePlan, title: str = "Test Plan", phases: list | N
 
 
 def test_create_plan_writes_files(creator: CreatePlan, content_root: Path) -> None:
-    result = creator.run({
-        "title": "My Plan",
-        "phases": [{"name": "Phase A", "tasks": ["do something"]}],
-    })
+    result = creator.run(
+        {
+            "title": "My Plan",
+            "phases": [{"name": "Phase A", "tasks": ["do something"]}],
+        }
+    )
     assert "plan-001" in result
 
-    plan_dir = content_root / "memory" / "working" / "projects" / "misc-plans" / "plans" / "plan-001"
+    plan_dir = (
+        content_root / "memory" / "working" / "projects" / "misc-plans" / "plans" / "plan-001"
+    )
     assert (plan_dir / "plan.yaml").is_file()
     assert (plan_dir / "run-state.json").is_file()
 
 
 def test_create_plan_yaml_content(creator: CreatePlan, content_root: Path) -> None:
-    creator.run({
-        "title": "YAML test",
-        "phases": [{"name": "Phase 1", "tasks": ["A"], "postconditions": ["B done"]}],
-        "max_sessions": 5,
-        "deadline": "2026-12-31",
-    })
-    plan_path = content_root / "memory" / "working" / "projects" / "misc-plans" / "plans" / "plan-001" / "plan.yaml"
+    creator.run(
+        {
+            "title": "YAML test",
+            "phases": [{"name": "Phase 1", "tasks": ["A"], "postconditions": ["B done"]}],
+            "max_sessions": 5,
+            "deadline": "2026-12-31",
+        }
+    )
+    plan_path = (
+        content_root
+        / "memory"
+        / "working"
+        / "projects"
+        / "misc-plans"
+        / "plans"
+        / "plan-001"
+        / "plan.yaml"
+    )
     doc = yaml.safe_load(plan_path.read_text())
     assert doc["title"] == "YAML test"
     assert doc["max_sessions"] == 5
@@ -127,7 +142,16 @@ def test_create_plan_yaml_content(creator: CreatePlan, content_root: Path) -> No
 
 def test_create_plan_run_state_initial_values(creator: CreatePlan, content_root: Path) -> None:
     creator.run({"title": "RS test", "phases": [{"name": "P", "tasks": ["t"]}]})
-    state_path = content_root / "memory" / "working" / "projects" / "misc-plans" / "plans" / "plan-001" / "run-state.json"
+    state_path = (
+        content_root
+        / "memory"
+        / "working"
+        / "projects"
+        / "misc-plans"
+        / "plans"
+        / "plan-001"
+        / "run-state.json"
+    )
     state = json.loads(state_path.read_text())
     assert state["plan_id"] == "plan-001"
     assert state["current_phase"] == 0
@@ -138,12 +162,16 @@ def test_create_plan_run_state_initial_values(creator: CreatePlan, content_root:
 
 
 def test_create_plan_project_id(creator: CreatePlan, content_root: Path) -> None:
-    creator.run({
-        "title": "Project Plan",
-        "phases": [{"name": "P", "tasks": ["t"]}],
-        "project_id": "my-project",
-    })
-    assert (content_root / "memory" / "working" / "projects" / "my-project" / "plans" / "plan-001").is_dir()
+    creator.run(
+        {
+            "title": "Project Plan",
+            "phases": [{"name": "P", "tasks": ["t"]}],
+            "project_id": "my-project",
+        }
+    )
+    assert (
+        content_root / "memory" / "working" / "projects" / "my-project" / "plans" / "plan-001"
+    ).is_dir()
 
 
 def test_create_plan_sequential_ids(creator: CreatePlan, content_root: Path) -> None:
@@ -169,31 +197,30 @@ def test_create_plan_empty_phases_raises(creator: CreatePlan) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_resume_plan_returns_briefing(
-    creator: CreatePlan, resuming: ResumePlan
-) -> None:
+def test_resume_plan_returns_briefing(creator: CreatePlan, resuming: ResumePlan) -> None:
     plan_id = _create_plan(creator)
     result = resuming.run({"plan_id": plan_id})
     assert "Phase 1" in result
     assert "task A" in result
 
 
-def test_resume_plan_shows_postconditions(
-    creator: CreatePlan, resuming: ResumePlan
-) -> None:
+def test_resume_plan_shows_postconditions(creator: CreatePlan, resuming: ResumePlan) -> None:
     plan_id = _create_plan(creator)
     result = resuming.run({"plan_id": plan_id})
     assert "A done" in result
 
 
 def test_resume_plan_budget(creator: CreatePlan, resuming: ResumePlan) -> None:
-    result = creator.run({
-        "title": "Budget Plan",
-        "phases": [{"name": "P", "tasks": ["t"]}],
-        "max_sessions": 3,
-        "deadline": "2027-01-01",
-    })
+    result = creator.run(
+        {
+            "title": "Budget Plan",
+            "phases": [{"name": "P", "tasks": ["t"]}],
+            "max_sessions": 3,
+            "deadline": "2027-01-01",
+        }
+    )
     import re as _re
+
     plan_id = _re.search(r"plan-\d+", result).group()
     briefing = resuming.run({"plan_id": plan_id})
     assert "0/3" in briefing
@@ -227,7 +254,13 @@ def test_complete_phase_advances_state(
 
     state_path = (
         content_root
-        / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id / "run-state.json"
+        / "memory"
+        / "working"
+        / "projects"
+        / "misc-plans"
+        / "plans"
+        / plan_id
+        / "run-state.json"
     )
     state = json.loads(state_path.read_text())
     assert state["current_phase"] == 1
@@ -243,7 +276,13 @@ def test_complete_phase_records_commit_sha(
     completer.run({"plan_id": plan_id, "commit_sha": "abc123"})
     state_path = (
         content_root
-        / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id / "run-state.json"
+        / "memory"
+        / "working"
+        / "projects"
+        / "misc-plans"
+        / "plans"
+        / plan_id
+        / "run-state.json"
     )
     state = json.loads(state_path.read_text())
     assert state["sessions"][0]["commit_sha"] == "abc123"
@@ -258,15 +297,19 @@ def test_complete_final_phase_marks_complete(
 
     state_path = (
         content_root
-        / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id / "run-state.json"
+        / "memory"
+        / "working"
+        / "projects"
+        / "misc-plans"
+        / "plans"
+        / plan_id
+        / "run-state.json"
     )
     state = json.loads(state_path.read_text())
     assert state["status"] == "complete"
 
 
-def test_complete_already_complete_plan(
-    creator: CreatePlan, completer: CompletePlan
-) -> None:
+def test_complete_already_complete_plan(creator: CreatePlan, completer: CompletePlan) -> None:
     plan_id = _create_plan(creator, phases=[{"name": "P", "tasks": ["t"]}])
     completer.run({"plan_id": plan_id})
     result = completer.run({"plan_id": plan_id})
@@ -294,7 +337,13 @@ def test_record_failure_appends_to_history(
 
     state_path = (
         content_root
-        / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id / "run-state.json"
+        / "memory"
+        / "working"
+        / "projects"
+        / "misc-plans"
+        / "plans"
+        / plan_id
+        / "run-state.json"
     )
     state = json.loads(state_path.read_text())
     assert len(state["failure_history"]) == 1
@@ -312,7 +361,13 @@ def test_record_failure_suggest_revision_after_three(
 
     state_path = (
         content_root
-        / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id / "run-state.json"
+        / "memory"
+        / "working"
+        / "projects"
+        / "misc-plans"
+        / "plans"
+        / plan_id
+        / "run-state.json"
     )
     state = json.loads(state_path.read_text())
     assert state.get("suggest_revision") is True
@@ -322,14 +377,22 @@ def test_record_failure_includes_verification_results(
     creator: CreatePlan, recorder: RecordFailure, content_root: Path
 ) -> None:
     plan_id = _create_plan(creator)
-    recorder.run({
-        "plan_id": plan_id,
-        "description": "fail",
-        "verification_results": ["tried A", "tried B"],
-    })
+    recorder.run(
+        {
+            "plan_id": plan_id,
+            "description": "fail",
+            "verification_results": ["tried A", "tried B"],
+        }
+    )
     state_path = (
         content_root
-        / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id / "run-state.json"
+        / "memory"
+        / "working"
+        / "projects"
+        / "misc-plans"
+        / "plans"
+        / plan_id
+        / "run-state.json"
     )
     state = json.loads(state_path.read_text())
     assert state["failure_history"][0]["verification_results"] == ["tried A", "tried B"]
@@ -381,7 +444,13 @@ def test_find_active_plans_sorts_by_mtime(content_root: Path) -> None:
     # Set plan-002's run-state to a clearly later mtime
     state_path = (
         content_root
-        / "memory" / "working" / "projects" / "misc-plans" / "plans" / id2 / "run-state.json"
+        / "memory"
+        / "working"
+        / "projects"
+        / "misc-plans"
+        / "plans"
+        / id2
+        / "run-state.json"
     )
     future_mtime = time.time() + 100
     os.utime(state_path, (future_mtime, future_mtime))
@@ -461,7 +530,13 @@ def test_complete_phase_blocked_when_postconditions_not_met(
 
     state_path = (
         content_root
-        / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id / "run-state.json"
+        / "memory"
+        / "working"
+        / "projects"
+        / "misc-plans"
+        / "plans"
+        / plan_id
+        / "run-state.json"
     )
     state = json.loads(state_path.read_text())
     assert state["current_phase"] == 0  # not advanced
@@ -476,7 +551,13 @@ def test_complete_phase_advances_when_postconditions_met(
 
     state_path = (
         content_root
-        / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id / "run-state.json"
+        / "memory"
+        / "working"
+        / "projects"
+        / "misc-plans"
+        / "plans"
+        / plan_id
+        / "run-state.json"
     )
     state = json.loads(state_path.read_text())
     assert state["current_phase"] == 1
@@ -485,16 +566,25 @@ def test_complete_phase_advances_when_postconditions_met(
 def test_complete_phase_approval_gate_blocks_without_approved(
     creator: CreatePlan, completer: CompletePlan, content_root: Path
 ) -> None:
-    plan_id = _create_plan(creator, phases=[
-        {"name": "Gated Phase", "tasks": ["do it"], "requires_approval": True},
-        {"name": "Next Phase", "tasks": ["follow up"]},
-    ])
+    plan_id = _create_plan(
+        creator,
+        phases=[
+            {"name": "Gated Phase", "tasks": ["do it"], "requires_approval": True},
+            {"name": "Next Phase", "tasks": ["follow up"]},
+        ],
+    )
     result = completer.run({"plan_id": plan_id, "summary": "done"})
     assert "pending_approval" in result or "requires approval" in result.lower()
 
     state_path = (
         content_root
-        / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id / "run-state.json"
+        / "memory"
+        / "working"
+        / "projects"
+        / "misc-plans"
+        / "plans"
+        / plan_id
+        / "run-state.json"
     )
     state = json.loads(state_path.read_text())
     assert state["status"] == "pending_approval"
@@ -504,17 +594,26 @@ def test_complete_phase_approval_gate_blocks_without_approved(
 def test_complete_phase_approval_gate_advances_with_approved(
     creator: CreatePlan, completer: CompletePlan, content_root: Path
 ) -> None:
-    plan_id = _create_plan(creator, phases=[
-        {"name": "Gated Phase", "tasks": ["do it"], "requires_approval": True},
-        {"name": "Next Phase", "tasks": ["follow up"]},
-    ])
+    plan_id = _create_plan(
+        creator,
+        phases=[
+            {"name": "Gated Phase", "tasks": ["do it"], "requires_approval": True},
+            {"name": "Next Phase", "tasks": ["follow up"]},
+        ],
+    )
     completer.run({"plan_id": plan_id, "summary": "done"})  # sets pending_approval
     result = completer.run({"plan_id": plan_id, "approved": True, "summary": "approved"})
     assert "Next Phase" in result
 
     state_path = (
         content_root
-        / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id / "run-state.json"
+        / "memory"
+        / "working"
+        / "projects"
+        / "misc-plans"
+        / "plans"
+        / plan_id
+        / "run-state.json"
     )
     state = json.loads(state_path.read_text())
     assert state["current_phase"] == 1
@@ -524,9 +623,12 @@ def test_complete_phase_approval_gate_advances_with_approved(
 def test_complete_phase_no_postconditions_advances_normally(
     creator: CreatePlan, completer: CompletePlan
 ) -> None:
-    plan_id = _create_plan(creator, phases=[
-        {"name": "Simple Phase", "tasks": ["just do it"]},
-    ])
+    plan_id = _create_plan(
+        creator,
+        phases=[
+            {"name": "Simple Phase", "tasks": ["just do it"]},
+        ],
+    )
     result = completer.run({"plan_id": plan_id})
     assert "complete" in result.lower()
 
@@ -534,10 +636,13 @@ def test_complete_phase_no_postconditions_advances_normally(
 def test_resume_plan_shows_pending_approval(
     creator: CreatePlan, completer: CompletePlan, resuming: ResumePlan
 ) -> None:
-    plan_id = _create_plan(creator, phases=[
-        {"name": "Approval Required", "tasks": ["t"], "requires_approval": True},
-        {"name": "Phase 2", "tasks": ["t2"]},
-    ])
+    plan_id = _create_plan(
+        creator,
+        phases=[
+            {"name": "Approval Required", "tasks": ["t"], "requires_approval": True},
+            {"name": "Phase 2", "tasks": ["t2"]},
+        ],
+    )
     completer.run({"plan_id": plan_id})  # triggers pending_approval
     result = resuming.run({"plan_id": plan_id})
     assert "approval" in result.lower() or "pending" in result.lower()

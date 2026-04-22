@@ -90,5 +90,8 @@ class WebSearch:
         if not text.strip():
             return "(no results)\n"
         if len(text) > _MAX_OUTPUT_CHARS:
-            text = text[:_MAX_OUTPUT_CHARS] + f"\n\n[output truncated to {_MAX_OUTPUT_CHARS} characters]\n"
+            text = (
+                text[:_MAX_OUTPUT_CHARS]
+                + f"\n\n[output truncated to {_MAX_OUTPUT_CHARS} characters]\n"
+            )
         return text

@@ -8,16 +8,16 @@ from dotenv import load_dotenv
 
 from harness.cmd_serve import main as _serve_main
 from harness.cmd_status import (
-    _print_active_plans,
-    _print_recent_sessions,
-    _resolve_engram_content_root,
     main as _status_main,
 )
-from harness.config import SessionComponents, SessionConfig, ToolProfile, build_session, config_from_args
+from harness.config import (
+    ToolProfile,
+    build_session,
+    config_from_args,
+)
 from harness.report import print_usage
 from harness.runner import run_batch, run_interactive, run_trace_bridge_if_enabled
 from harness.tools.fs import WorkspaceScope
-from harness.usage import Usage
 
 
 def build_tools(
@@ -25,7 +25,7 @@ def build_tools(
     *,
     profile: ToolProfile = ToolProfile.FULL,
     extra: list | None = None,
-) -> dict:
+) -> dict[str, object]:
     """Build the tool registry for a session."""
     from harness.tools import Tool
     from harness.tools.bash import Bash
@@ -137,6 +137,36 @@ def _ensure_workspace_in_gitignore(workspace: Path) -> None:
         f.write(f"{pattern}\n")
 
 
+def _workspace_gitignore_missing_pattern(workspace: Path) -> str | None:
+    git_root = _find_git_root(workspace)
+    if git_root is None:
+        return None
+    pattern = _workspace_gitignore_pattern(workspace, git_root)
+    if pattern is None:
+        return None
+    ignore_path = git_root / ".gitignore"
+    existing = ignore_path.read_text(encoding="utf-8") if ignore_path.exists() else ""
+    canon = _normalize_gitignore_line(pattern)
+    if canon is None:
+        return None
+    for line in existing.splitlines():
+        token = _normalize_gitignore_line(line)
+        if token is not None and token == canon:
+            return None
+    return pattern
+
+
+def _maybe_warn_workspace_gitignore(workspace: Path) -> None:
+    pattern = _workspace_gitignore_missing_pattern(workspace)
+    if pattern is None:
+        return
+    print(
+        "[hint] workspace is inside a git repo and is not ignored yet. "
+        f"Pass --auto-ignore-workspace to append '{pattern}' to .gitignore automatically.",
+        file=sys.stderr,
+    )
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="harness")
     parser.add_argument(
@@ -159,7 +189,15 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--workspace", default=".", help="Directory the agent may read/write.")
-    parser.add_argument("--mode", choices=["native", "text"], default="native")
+    parser.add_argument(
+        "--auto-ignore-workspace",
+        action="store_true",
+        help=(
+            "Append the workspace path to the surrounding git repo's .gitignore "
+            "when the workspace is a nested directory."
+        ),
+    )
+    parser.add_argument("--mode", choices=["native"], default="native")
     parser.add_argument(
         "--model",
         default="claude-sonnet-4-6",
@@ -325,7 +363,10 @@ def main() -> None:
 
     config = config_from_args(args)
     config.workspace.mkdir(parents=True, exist_ok=True)
-    _ensure_workspace_in_gitignore(config.workspace)
+    if config.auto_ignore_workspace:
+        _ensure_workspace_in_gitignore(config.workspace)
+    else:
+        _maybe_warn_workspace_gitignore(config.workspace)
 
     scope = WorkspaceScope(root=config.workspace)
     base_tools = build_tools(scope, profile=config.tool_profile)

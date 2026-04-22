@@ -46,8 +46,7 @@ def _format_output(returncode: int, stdout: str, stderr: str) -> str:
     text = "\n".join(parts).rstrip() + "\n"
     if len(text) > _MAX_OUTPUT_CHARS:
         text = (
-            text[:_MAX_OUTPUT_CHARS]
-            + f"\n\n[output truncated to {_MAX_OUTPUT_CHARS} characters]\n"
+            text[:_MAX_OUTPUT_CHARS] + f"\n\n[output truncated to {_MAX_OUTPUT_CHARS} characters]\n"
         )
     return text
 
@@ -71,12 +70,8 @@ def _run_git(scope: WorkspaceScope, argv: list[str], *, cwd: str = ".") -> str:
             check=False,
         )
     except subprocess.TimeoutExpired as e:
-        raise TimeoutError(
-            f"git {' '.join(argv[:2])} timed out after {_TIMEOUT}s"
-        ) from e
-    return _format_output(
-        completed.returncode, completed.stdout or "", completed.stderr or ""
-    )
+        raise TimeoutError(f"git {' '.join(argv[:2])} timed out after {_TIMEOUT}s") from e
+    return _format_output(completed.returncode, completed.stdout or "", completed.stderr or "")
 
 
 def _optional_str(args: dict, key: str) -> str | None:
@@ -180,8 +175,7 @@ class GitDiff:
         out = _run_git(self.scope, argv)
         if "[output truncated" in out:
             out += (
-                "hint: output was truncated; narrow with `path` or set `stat=true` "
-                "for a summary.\n"
+                "hint: output was truncated; narrow with `path` or set `stat=true` for a summary.\n"
             )
         return out
 

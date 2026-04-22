@@ -371,7 +371,7 @@ class EngramMemory:
     def _active_plan_briefing(self, max_chars: int = 2000) -> str:
         """Return a brief briefing for the most recently active plan, if any."""
         try:
-            from harness.tools.plan_tools import find_active_plans, _load_run_state, _load_plan_yaml
+            from harness.tools.plan_tools import _load_plan_yaml, _load_run_state, find_active_plans
         except ImportError:
             return ""
         active = find_active_plans(self.content_root)

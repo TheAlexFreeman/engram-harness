@@ -1,3 +1,10 @@
+---
+source: agent-generated
+origin_session: manual
+created: 2026-03-16
+trust: medium
+---
+
 # Discovery Audit Checklist
 
 Use this after Phase B of onboarding, not as a scripted questionnaire. Interpret each category for the user's domain — "languages and frameworks" becomes "tools and platforms" for a non-technical user; "editor/IDE" becomes "productivity tools" for someone outside software engineering.

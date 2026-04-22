@@ -50,7 +50,9 @@ def test_usage_addition_sums_all_fields():
 
 def test_usage_addition_flags_missing_across_runs():
     a = Usage(model="claude-sonnet-4-6", input_tokens=10)
-    b = Usage(model="unknown-foo", input_tokens=5, pricing_missing=True, missing_models=("unknown-foo",))
+    b = Usage(
+        model="unknown-foo", input_tokens=5, pricing_missing=True, missing_models=("unknown-foo",)
+    )
     c = a + b
     assert c.pricing_missing is True
     assert "unknown-foo" in c.missing_models

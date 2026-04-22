@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import MagicMock
-
-import pytest
 
 from harness.sinks.sse import SSEEvent, SSEStreamSink, SSETraceSink
-
 
 # ---------------------------------------------------------------------------
 # Minimal synchronous queue shim for tests (avoids asyncio event loop)
 # ---------------------------------------------------------------------------
+
 
 class _SimpleQueue:
     """Thread-safe queue that mimics asyncio.Queue's put_nowait / get interface."""
@@ -60,7 +57,9 @@ class _SimpleQueue:
 
 
 def test_sse_event_serialization():
-    ev = SSEEvent(channel="trace", event="tool_call", data={"name": "read_file"}, ts="2026-04-21T00:00:00.000")
+    ev = SSEEvent(
+        channel="trace", event="tool_call", data={"name": "read_file"}, ts="2026-04-21T00:00:00.000"
+    )
     payload = json.loads(ev.to_json())
     assert payload["channel"] == "trace"
     assert payload["event"] == "tool_call"

@@ -16,7 +16,7 @@ export function MessageList({ messages, activeBlock, status, turnNumber }: Props
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, activeBlock?.text]);
 
-  const isStreaming = status === "running" || status === "connecting";
+  const isStreaming = status === "running" || status === "connecting" || status === "stopping";
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">

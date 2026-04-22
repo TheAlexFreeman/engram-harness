@@ -40,7 +40,9 @@ def _format_manifest(results: list, query: str) -> str:
 def _format_single(result, idx: int, total: int) -> str:
     content = result.content or ""
     if len(content) > _MAX_OUTPUT_CHARS:
-        content = content[:_MAX_OUTPUT_CHARS] + f"\n\n[output truncated to {_MAX_OUTPUT_CHARS} chars]\n"
+        content = (
+            content[:_MAX_OUTPUT_CHARS] + f"\n\n[output truncated to {_MAX_OUTPUT_CHARS} chars]\n"
+        )
     return f"# Memory result {idx}/{total}\n\n{content}\n"
 
 

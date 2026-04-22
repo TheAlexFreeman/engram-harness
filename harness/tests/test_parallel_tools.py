@@ -109,8 +109,7 @@ def _build_run(
     tool = SleepingTool(tool_name)
     tools: dict[str, Tool] = {tool_name: tool}
     calls = [
-        ToolCall(name=tool_name, args=args, id=f"call_{i}")
-        for i, args in enumerate(tool_call_args)
+        ToolCall(name=tool_name, args=args, id=f"call_{i}") for i, args in enumerate(tool_call_args)
     ]
     mode = ScriptedMode(
         [
@@ -122,9 +121,7 @@ def _build_run(
 
 
 def test_parallel_execution_is_concurrent():
-    tools, mode, memory = _build_run(
-        [{"duration": 0.3, "tag": str(i)} for i in range(4)]
-    )
+    tools, mode, memory = _build_run([{"duration": 0.3, "tag": str(i)} for i in range(4)])
 
     start = time.monotonic()
     result = run(
@@ -172,9 +169,7 @@ def test_parallel_preserves_order_with_mixed_latencies():
 
 
 def test_max_parallel_tools_one_is_sequential():
-    tools, mode, memory = _build_run(
-        [{"duration": 0.3, "tag": str(i)} for i in range(4)]
-    )
+    tools, mode, memory = _build_run([{"duration": 0.3, "tag": str(i)} for i in range(4)])
 
     start = time.monotonic()
     run(

@@ -1,8 +1,15 @@
 export type SessionAction =
   // Session lifecycle
   | { type: "SESSION_CREATED"; sessionId: string; task: string; model: string; interactive: boolean; createdAt: string }
+  | { type: "SESSION_STOPPING" }
   | { type: "SESSION_IDLE"; finalText: string; turnNumber: number }
-  | { type: "SESSION_DONE"; finalText?: string; turnsUsed?: number; usage?: Record<string, number> }
+  | {
+      type: "SESSION_DONE";
+      finalText?: string;
+      turnsUsed?: number;
+      usage?: Record<string, number>;
+      finalStatus?: "completed" | "stopped";
+    }
   | { type: "SESSION_ERROR"; errorType: string; message: string }
   | { type: "SESSION_RESET" }
 

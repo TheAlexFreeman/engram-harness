@@ -25,6 +25,10 @@ harness "Review the code in src/ and fix any bugs" --workspace ~/my-project \
     --memory engram --memory-repo ./engram
 ```
 
+When your `--workspace` is nested inside another git repo, the CLI now stays
+non-mutating by default. Pass `--auto-ignore-workspace` only if you want it to
+append a single ignore entry for that workspace to the surrounding `.gitignore`.
+
 #### Windows contributors
 
 Python on Windows defaults to the ANSI code page (often cp1252) for `sys.stdout`,
