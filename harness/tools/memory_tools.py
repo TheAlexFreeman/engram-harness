@@ -212,10 +212,8 @@ class MemoryRemember:
             )
         kind = (args.get("kind") or "note").strip().lower()
         if kind not in _ALLOWED_REMEMBER_KINDS:
-            raise ValueError(
-                f"kind must be one of {_ALLOWED_REMEMBER_KINDS}; got {kind!r}"
-            )
-        self._memory.record(content, kind=kind)
+            raise ValueError(f"kind must be one of {_ALLOWED_REMEMBER_KINDS}; got {kind!r}")
+        self._memory.remember(content, kind=kind)
         preview = content if len(content) <= 120 else content[:117] + "..."
         return (
             f"Buffered [{kind}] for end-of-session commit: {preview}\n"
@@ -326,10 +324,7 @@ class MemoryContext:
             },
             "refresh": {
                 "type": "boolean",
-                "description": (
-                    "Force a fresh fetch, bypassing the session cache. "
-                    "Default false."
-                ),
+                "description": ("Force a fresh fetch, bypassing the session cache. Default false."),
             },
         },
         "required": ["needs"],

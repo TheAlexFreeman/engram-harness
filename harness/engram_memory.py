@@ -271,10 +271,25 @@ class EngramMemory:
         return results
 
     def record(self, content: str, kind: str = "note") -> None:
+        """Buffer a record for the session's activity log.
+
+        This is internal plumbing — the harness loop calls it on tool errors
+        and other events that the agent didn't explicitly trigger. Such
+        records do not represent new agent-visible state, so they do *not*
+        invalidate the context cache. Explicit ``memory: remember`` calls
+        go through ``remember()`` which does invalidate.
+        """
         self._records.append(_BufferedRecord(timestamp=datetime.now(), kind=kind, content=content))
-        # A remember event may have buffered content that would change the
-        # result of an equivalent context() query — drop cached results so
-        # the next call re-evaluates.
+
+    def remember(self, content: str, kind: str = "note") -> None:
+        """Agent-facing buffered-record call.
+
+        Equivalent to ``record()`` but additionally clears the
+        ``memory_context`` session cache, since an agent-initiated remember
+        may have buffered content that would change the result of an
+        equivalent ``context()`` query on the next turn.
+        """
+        self.record(content, kind=kind)
         self._context_cache.clear()
 
     # ------------------------------------------------------------------
@@ -295,9 +310,7 @@ class EngramMemory:
         try:
             abs_path.relative_to(memory_root)
         except ValueError as exc:
-            raise ValueError(
-                f"path must resolve under memory/: {path!r}"
-            ) from exc
+            raise ValueError(f"path must resolve under memory/: {path!r}") from exc
         if not abs_path.is_file():
             raise FileNotFoundError(rel)
         return abs_path.read_text(encoding="utf-8")
@@ -336,12 +349,10 @@ class EngramMemory:
             header.append(f"Purpose: {purpose_str}")
         header.append(f"Budget: {budget_tier} (~{chars_per_need} chars/need)")
         header.append("")
-        sections: list[str] = [ "\n".join(header) ]
+        sections: list[str] = ["\n".join(header)]
 
         for need in cleaned_needs:
-            body = self._resolve_need(
-                need, purpose=purpose_str, char_budget=chars_per_need
-            )
+            body = self._resolve_need(need, purpose=purpose_str, char_budget=chars_per_need)
             sections.append(f"## need: {need}\n\n{body.rstrip()}\n")
 
         result = "\n".join(sections)
@@ -557,13 +568,13 @@ class EngramMemory:
             kind = kind.strip().lower()
             arg = arg.strip()
             if kind == "domain" and arg:
-                return self._need_search(arg, purpose=purpose, scope="knowledge",
-                                         char_budget=char_budget)
+                return self._need_search(
+                    arg, purpose=purpose, scope="knowledge", char_budget=char_budget
+                )
             if kind == "skill" and arg:
                 return self._need_skill(arg, char_budget=char_budget)
         # Free-form descriptor — semantic/keyword search across all scopes.
-        return self._need_search(need, purpose=purpose, scope=None,
-                                 char_budget=char_budget)
+        return self._need_search(need, purpose=purpose, scope=None, char_budget=char_budget)
 
     def _need_user_preferences(self, char_budget: int) -> str:
         rels = [
@@ -619,19 +630,26 @@ class EngramMemory:
         return "\n\n".join(pieces) or "(no recent sessions)"
 
     def _need_skill(self, name: str, *, char_budget: int) -> str:
-        # Try direct file first — skills are often stored as skills/<name>.md.
+        # Reject anything that could escape memory/skills/ before building
+        # candidate paths. `_read_optional` doesn't sandbox its input, so a
+        # descriptor like ``skill:../../../README`` would otherwise resolve
+        # to a file outside the skills namespace.
+        safe_name = _sanitize_skill_name(name)
+        if not safe_name:
+            # Fall through to scoped search for anything we won't probe directly.
+            return self._need_search(name, purpose="", scope="skills", char_budget=char_budget)
         direct_candidates = [
-            f"memory/skills/{name}.md",
-            f"memory/skills/{name}/README.md",
-            f"memory/skills/{name}/SKILL.md",
+            f"memory/skills/{safe_name}.md",
+            f"memory/skills/{safe_name}/README.md",
+            f"memory/skills/{safe_name}/SKILL.md",
         ]
         for rel in direct_candidates:
             text = self._read_optional(rel)
             if text:
                 return f"[{rel}]\n{_truncate_head(text.strip(), char_budget)}"
-        # Fall back to a scoped search.
-        return self._need_search(name, purpose="", scope="skills",
-                                 char_budget=char_budget)
+        # Fall back to a scoped search using the original descriptor, which
+        # still goes through the scope-filtered recall path.
+        return self._need_search(name, purpose="", scope="skills", char_budget=char_budget)
 
     def _need_search(
         self,
@@ -645,11 +663,7 @@ class EngramMemory:
         # Weight purpose into the embedding query when provided — the
         # sentence-transformer relevance adapts naturally to longer queries.
         blended = f"{query} — {purpose}" if purpose else query
-        hits = (
-            self._semantic_recall(blended, k=4, scopes=scopes)
-            if self._embed_enabled
-            else []
-        )
+        hits = self._semantic_recall(blended, k=4, scopes=scopes) if self._embed_enabled else []
         if not hits:
             hits = self._keyword_recall(blended, k=4, scopes=scopes)
         if not hits:
@@ -761,6 +775,31 @@ class EngramMemory:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def _sanitize_skill_name(raw: str) -> str:
+    """Return *raw* if it is safe to interpolate into ``memory/skills/<raw>``.
+
+    A skill name must resolve inside ``memory/skills/`` — no traversal
+    segments, no absolute paths, no drive letters, no NUL bytes. Slashes
+    are permitted so that nested skill folders (``skills/foo/bar``) work,
+    but ``..`` segments, empty segments, and leading ``/`` are rejected.
+    Returns an empty string if anything looks unsafe; callers should
+    interpret that as "don't probe directly, fall back to search".
+    """
+    if not isinstance(raw, str):
+        return ""
+    s = raw.strip().replace("\\", "/")
+    if not s:
+        return ""
+    if "\x00" in s:
+        return ""
+    if s.startswith("/") or (len(s) > 1 and s[1] == ":"):
+        return ""
+    parts = s.split("/")
+    if any(p in ("", "..", ".") for p in parts):
+        return ""
+    return "/".join(parts)
 
 
 def _normalize_memory_path(raw: str) -> str:

@@ -121,6 +121,28 @@ def test_remember_invalidates_context_cache(engram: EngramMemory) -> None:
     assert engram._context_cache == {}, "remember must wipe context cache"
 
 
+def test_internal_record_does_not_invalidate_context_cache(engram: EngramMemory) -> None:
+    """Error records (internal plumbing) must not wipe the agent's context cache.
+
+    The harness loop calls ``memory.record()`` when a tool fails, which
+    happens often during exploratory sessions. If that were treated the
+    same as an agent-initiated ``memory_remember``, a single transient
+    error would force every subsequent ``memory_context`` call to re-fetch
+    — expensive and not what the design doc promises.
+    """
+    ctx_tool = MemoryContext(engram)
+    ctx_tool.run({"needs": ["user_preferences"], "budget": "S"})
+    assert len(engram._context_cache) == 1
+
+    # Simulate the harness loop recording a tool error.
+    engram.record("read_file failed: missing.md", kind="error")
+    assert len(engram._context_cache) == 1, "internal record() must not drop cached context entries"
+
+    # But the agent-facing remember() still does.
+    engram.remember("user confirmed: use M4 macbook for benchmarks", kind="note")
+    assert engram._context_cache == {}
+
+
 # ---------------------------------------------------------------------------
 # memory_review — direct file access
 # ---------------------------------------------------------------------------
@@ -203,6 +225,45 @@ def test_context_resolves_domain_descriptor(engram: EngramMemory) -> None:
     assert "## need: domain:celery" in out
     # celery.md should surface in the knowledge-scoped search
     assert "celery" in out.lower()
+
+
+def test_context_skill_descriptor_rejects_traversal(engram: EngramMemory, tmp_path: Path) -> None:
+    """A ``skill:../../../secret`` descriptor must not escape memory/skills/.
+
+    Plant a file well outside ``memory/skills/`` and try to reach it. The
+    skill probe must sanitize the name before building candidate paths;
+    if traversal segments slipped through, ``_read_optional`` would happily
+    read the planted file and the content would leak into the context
+    output.
+    """
+    # Drop a file where a naive path interpolation would land.
+    outside = engram.content_root / "secret-outside-memory.md"
+    outside.write_text("TOP SECRET — should never appear", encoding="utf-8")
+    try:
+        tool = MemoryContext(engram)
+        out = tool.run({"needs": ["skill:../../secret-outside-memory"], "budget": "S"})
+        assert "TOP SECRET" not in out
+        # The descriptor still rendered a header — we want the fallback
+        # scoped search, not an error.
+        assert "## need: skill:../../secret-outside-memory" in out
+    finally:
+        outside.unlink(missing_ok=True)
+
+
+def test_context_skill_descriptor_resolves_plain_name(engram: EngramMemory, tmp_path: Path) -> None:
+    """Regression guard: a well-formed skill name still reads the direct file."""
+    skill_path = engram.content_root / "memory" / "skills" / "debug-cli.md"
+    skill_path.write_text(
+        "---\ntrust: high\n---\n\n# Debug CLI\n\nSteps: 1. Inspect env.\n",
+        encoding="utf-8",
+    )
+    try:
+        tool = MemoryContext(engram)
+        out = tool.run({"needs": ["skill:debug-cli"], "budget": "S"})
+        assert "Debug CLI" in out
+        assert "memory/skills/debug-cli.md" in out
+    finally:
+        skill_path.unlink(missing_ok=True)
 
 
 def test_context_freeform_descriptor_searches_all_scopes(engram: EngramMemory) -> None:
