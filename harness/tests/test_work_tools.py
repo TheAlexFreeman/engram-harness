@@ -512,6 +512,75 @@ def test_search_skips_summary_md(ws: Workspace) -> None:
     assert "SUMMARY.md" not in out
 
 
+def test_search_matches_two_char_acronyms(ws: Workspace) -> None:
+    """Acronyms like UI, DB, CI must be searchable (Codex P2 regression).
+
+    The prior ``len(t) > 2`` filter silently dropped 2-char tokens from
+    the query, so a search for ``UI`` returned nothing even when
+    matching files existed. Make sure the common acronym case works.
+    """
+    ws.project_create(
+        "alpha",
+        goal="explore the UI and the DB interactions end-to-end",
+    )
+    ws.write_note(
+        "ui-notes",
+        content="UI components: header, sidebar, content panel",
+        project="alpha",
+    )
+    ws.write_note(
+        "db-notes",
+        content="DB schema design for the session tables",
+        project="alpha",
+    )
+    # 2-char single-token query.
+    out_ui = WorkSearch(ws).run({"query": "UI"})
+    assert "ui-notes.md" in out_ui
+    out_db = WorkSearch(ws).run({"query": "DB"})
+    assert "db-notes.md" in out_db
+
+
+def test_promote_preserves_leading_thematic_break(ws: Workspace, engram: EngramMemory) -> None:
+    """A note starting with a Markdown thematic break must not be stripped.
+
+    ``---`` can open frontmatter or mark a thematic break. Under the
+    naive strip rule ("first two ``---`` lines delimit frontmatter"),
+    any note that uses a thematic break at the top would have real
+    content silently deleted when promoted. The stricter rule only
+    strips when the YAML between delimiters parses to a non-empty
+    dict.
+    """
+    ws.write_note(
+        "with-break",
+        content=(
+            "---\n\n# Real Title\n\nThis is important content.\n\n---\n\nMore content follows.\n"
+        ),
+    )
+    WorkPromote(ws, engram).run({"path": "notes/with-break.md", "dest": "knowledge/preserved.md"})
+    dest_abs = engram.content_root / "memory" / "knowledge" / "preserved.md"
+    body = dest_abs.read_text(encoding="utf-8")
+    # Title and content must survive the promote.
+    assert "# Real Title" in body
+    assert "This is important content." in body
+    assert "More content follows." in body
+
+
+def test_promote_ignores_non_dict_yaml_block(ws: Workspace, engram: EngramMemory) -> None:
+    """A `---...---` block whose content isn't a YAML mapping is preserved."""
+    ws.write_note(
+        "plain-text-block",
+        content=(
+            "---\njust a plain paragraph\nnot a key-value map\n---\n\nBody after the break.\n"
+        ),
+    )
+    WorkPromote(ws, engram).run({"path": "notes/plain-text-block.md", "dest": "knowledge/plain.md"})
+    body = (engram.content_root / "memory" / "knowledge" / "plain.md").read_text(encoding="utf-8")
+    # The fresh frontmatter block is there, but the thematic break and
+    # its content inside the body are preserved.
+    assert "just a plain paragraph" in body
+    assert "Body after the break." in body
+
+
 # ---------------------------------------------------------------------------
 # work_promote
 # ---------------------------------------------------------------------------

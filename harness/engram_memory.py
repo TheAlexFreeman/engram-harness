@@ -795,7 +795,10 @@ class EngramMemory:
     def _keyword_recall(
         self, query: str, *, k: int, scopes: tuple[str, ...] = _SEARCH_SCOPES
     ) -> list[dict[str, Any]]:
-        tokens = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 2]
+        # Keep 2-char tokens — software vocab has common acronyms (UI, DB,
+        # CI, QA) that would otherwise produce deterministic empty results.
+        # Only single-char tokens are filtered out (too noisy to score).
+        tokens = [t.lower() for t in re.findall(r"\w+", query) if len(t) >= 2]
         if not tokens:
             return []
         candidates: list[tuple[float, Path, str]] = []

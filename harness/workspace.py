@@ -668,7 +668,12 @@ class Workspace:
         uses. Notes are intentionally small and project-scoped, so the
         keyword approach is sufficient.
         """
-        tokens = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 2]
+        # Keep 2-char tokens: software vocab is acronym-heavy (UI, DB, CI,
+        # QA, API as split pieces, etc.) and filtering them out makes the
+        # search deterministically useless for common queries
+        # (Codex-flagged P2 on PR #7). Single-char tokens are still
+        # dropped — too noisy to score meaningfully.
+        tokens = [t.lower() for t in re.findall(r"\w+", query) if len(t) >= 2]
         if not tokens:
             return []
         if project is not None:

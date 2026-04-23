@@ -586,13 +586,44 @@ class WorkPromote:
 
 
 def _strip_frontmatter(raw: str) -> str:
-    """Strip a leading ``---`` frontmatter block if present."""
-    if not raw.startswith("---\n"):
+    """Strip a leading YAML frontmatter block if present.
+
+    A file only counts as having frontmatter when the content between
+    the opening ``---`` and the matching closing ``---`` parses as a
+    YAML mapping (i.e. a dict with at least one key). A Markdown
+    thematic break at the start of the file, or any other
+    ``---``…``---`` pair that doesn't contain valid YAML metadata, is
+    left in place — otherwise a note like::
+
+        ---
+
+        # Title
+
+        Content
+
+        ---
+
+        Rest
+
+    would have its title and content silently dropped when promoted
+    into memory (Codex-flagged P2 on PR #7).
+    """
+    import re
+
+    import yaml
+
+    if not raw.startswith("---"):
         return raw
-    end = raw.find("\n---", 4)
-    if end == -1:
+    m = re.match(r"---\r?\n(.*?)\r?\n---\r?\n?", raw, re.DOTALL)
+    if not m:
         return raw
-    return raw[end + 4 :].lstrip("\n")
+    try:
+        parsed = yaml.safe_load(m.group(1))
+    except yaml.YAMLError:
+        return raw
+    if not isinstance(parsed, dict) or not parsed:
+        return raw
+    return raw[m.end() :].lstrip("\n")
 
 
 # ---------------------------------------------------------------------------
