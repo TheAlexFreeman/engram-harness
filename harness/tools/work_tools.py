@@ -92,6 +92,7 @@ class WorkStatus:
     """``work_status`` — read the agent's orientation document."""
 
     name = "work_status"
+    mutates = False  # reads CURRENT.md; only regenerates derived SUMMARY.md
     description = (
         "Read your current orientation: CURRENT.md (active threads, their "
         "status, and the freeform notes section). Pass `project` to also "
@@ -116,18 +117,25 @@ class WorkStatus:
         self._workspace = workspace
 
     def run(self, args: dict) -> str:
-        self._workspace.ensure_layout()
-        parts = [
-            "# workspace/CURRENT.md",
-            "",
-            self._workspace.current_path.read_text(encoding="utf-8").rstrip(),
-        ]
+        # Don't force-create the workspace. Read-only profiles run without
+        # ensure_layout(); this tool must succeed against a missing
+        # workspace by reporting it as uninitialized.
+        parts = ["# workspace/CURRENT.md", ""]
+        if self._workspace.current_path.is_file():
+            parts.append(self._workspace.current_path.read_text(encoding="utf-8").rstrip())
+        else:
+            parts.append("(workspace not initialized)")
         project = args.get("project")
         if project:
             p = self._workspace.project(project)
             if not p.exists():
                 parts.extend(["", f"(project {project!r} does not exist)"])
             else:
+                # Regenerate SUMMARY.md before reading so the output is
+                # fresh. This is a derived-content write — it rebuilds
+                # from GOAL.md / questions.md / file listing, never
+                # invents user content. Read-only profiles deliberately
+                # accept this to keep SUMMARY truthful.
                 self._workspace.regenerate_summary(p)
                 parts.extend(
                     [
@@ -150,6 +158,7 @@ class WorkThread:
     """``work_thread`` — manage a named thread in CURRENT.md."""
 
     name = "work_thread"
+    mutates = True
     description = (
         "Manage a named thread in CURRENT.md. Threads track active lines of "
         "work with a status (active | blocked | paused — conventional; free-form) "
@@ -260,6 +269,7 @@ class WorkJot:
     """``work_jot`` — append a timestamped line to the freeform Notes section."""
 
     name = "work_jot"
+    mutates = True
     description = (
         "Append a line to the freeform Notes section of CURRENT.md. Use for "
         "observations, reminders, or anything that doesn't belong to a "
@@ -303,6 +313,7 @@ class WorkNote:
     """``work_note`` — create or update a persistent working document."""
 
     name = "work_note"
+    mutates = True
     description = (
         "Create or update a persistent working document. Writes to "
         "`notes/<title>.md` or `projects/<project>/notes/<title>.md` when "
@@ -376,6 +387,7 @@ class WorkRead:
     """``work_read`` — read any workspace file by relative path."""
 
     name = "work_read"
+    mutates = False
     description = (
         "Read any workspace file by path (relative to the workspace root). "
         "Examples: CURRENT.md, notes/auth-redesign.md, "
@@ -415,6 +427,7 @@ class WorkScratch:
     """``work_scratch`` — append to the session-scoped scratch file."""
 
     name = "work_scratch"
+    mutates = True
     description = (
         "Append to the session's scratch file (`scratch/<session-id>.md`). "
         "Scratch is gitignored and cleaned up at session end. Use for "
@@ -459,6 +472,7 @@ class WorkProjectCreate:
     """``work_project_create`` — scaffold a new project."""
 
     name = "work_project_create"
+    mutates = True
     description = (
         "Create a new project with a goal and optional initial questions. "
         "Scaffolds the project directory with GOAL.md (timestamped), "
@@ -510,6 +524,9 @@ class WorkProjectGoal:
     """``work_project_goal`` — read or update a project's goal."""
 
     name = "work_project_goal"
+    # Can mutate: with `goal` provided, updates GOAL.md. Read-only profile
+    # excludes the tool entirely to avoid half-usable registration.
+    mutates = True
     description = (
         "Read a project's goal (omit `goal`) or update it (provide `goal`). "
         "Updates preserve creation timestamp, refresh modified timestamp, "
@@ -554,6 +571,7 @@ class WorkProjectAsk:
     """``work_project_ask`` — add a question to a project."""
 
     name = "work_project_ask"
+    mutates = True
     description = (
         "Add a question to a project. Questions capture what isn't yet "
         "known. They're numbered automatically and appear in SUMMARY.md "
@@ -586,6 +604,7 @@ class WorkProjectResolve:
     """``work_project_resolve`` — resolve an open question."""
 
     name = "work_project_resolve"
+    mutates = True
     description = (
         "Resolve an open question with an answer. The question moves from "
         "Open to Resolved (with a resolution date); open questions "
@@ -637,6 +656,7 @@ class WorkProjectList:
     """``work_project_list`` — list all projects."""
 
     name = "work_project_list"
+    mutates = False
     description = (
         "List all projects with their goals and open question counts. "
         "Archived projects are excluded unless `include_archived` is true."
@@ -676,6 +696,7 @@ class WorkProjectStatus:
     """``work_project_status`` — return a project's auto-generated SUMMARY.md."""
 
     name = "work_project_status"
+    mutates = False  # regenerates derived SUMMARY.md; no user content
     description = (
         "Read a project's full context via its auto-generated SUMMARY.md "
         "(goal with dates, open questions, resolved questions, file "
@@ -709,6 +730,7 @@ class WorkProjectArchive:
     """``work_project_archive`` — archive a completed or abandoned project."""
 
     name = "work_project_archive"
+    mutates = True
     description = (
         "Archive a project. Moves it to projects/_archive/<name>/, "
         "prepends the archival summary to SUMMARY.md, and auto-closes "

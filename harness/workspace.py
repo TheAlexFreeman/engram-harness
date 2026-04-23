@@ -125,11 +125,48 @@ class Note:
 
 @dataclass
 class CurrentDoc:
-    """Structured representation of CURRENT.md."""
+    """Structured representation of CURRENT.md.
+
+    The Notes section is stored as ``notes_lines`` — a list of raw lines
+    captured verbatim from the file. This preserves freeform content
+    (paragraphs, sub-headings, migrated text) that doesn't match the
+    ``- `ts` body`` jot format; otherwise thread/jot operations would
+    silently drop anything they didn't recognize on each rewrite.
+    A ``notes`` property parses out the timestamped entries for
+    structured access.
+    """
 
     threads: list[Thread] = field(default_factory=list)
     closed: list[ClosedThread] = field(default_factory=list)
-    notes: list[Note] = field(default_factory=list)
+    notes_lines: list[str] = field(default_factory=list)
+
+    @property
+    def notes(self) -> list[Note]:
+        """Timestamped notes parsed out of ``notes_lines``.
+
+        This is a *view* computed on each access, not the canonical
+        storage. Writes should go through ``append_note`` so that
+        freeform content stays intact.
+        """
+        out: list[Note] = []
+        for raw in self.notes_lines:
+            m = _NOTE_LINE_RE.match(raw.strip())
+            if m:
+                out.append(Note(timestamp=m.group("ts"), content=m.group("body")))
+        return out
+
+    def append_note(self, timestamp: str, content: str) -> Note:
+        """Append a structured jot. Does not disturb existing freeform content."""
+        # Separate adjacent blocks with a blank line when the last
+        # non-blank line isn't already a jot bullet — keeps paragraphs
+        # readable when interleaved with structured entries.
+        if self.notes_lines:
+            last_nonblank = next((ln for ln in reversed(self.notes_lines) if ln.strip()), "")
+            if last_nonblank and not last_nonblank.lstrip().startswith("- `"):
+                self.notes_lines.append("")
+        line = f"- `{timestamp}` {content}"
+        self.notes_lines.append(line)
+        return Note(timestamp=timestamp, content=content)
 
     def render(self) -> str:
         """Render back to markdown with stable section order."""
@@ -151,10 +188,10 @@ class CurrentDoc:
             lines.append("")
         lines.append("## Notes")
         lines.append("")
-        for n in self.notes:
-            lines.append(f"- `{n.timestamp}` {n.content}")
-        if self.notes:
-            lines.append("")
+        # Emit notes_lines verbatim. Trailing blank lines are trimmed by
+        # the final rstrip() so we keep the section compact.
+        for raw in self.notes_lines:
+            lines.append(raw)
         # Ensure a single trailing newline.
         body = "\n".join(lines).rstrip() + "\n"
         return body
@@ -287,12 +324,20 @@ def parse_current(text: str) -> CurrentDoc:
             i += 1
             continue
         if section == _SECTION_NOTES:
-            m = _NOTE_LINE_RE.match(stripped)
-            if m:
-                doc.notes.append(Note(timestamp=m.group("ts"), content=m.group("body")))
+            # Capture every line verbatim — the Notes section is freeform
+            # (per the design doc), so anything that isn't a structured
+            # jot must still survive a round-trip. ``CurrentDoc.notes``
+            # parses the timestamped entries back out as a view.
+            doc.notes_lines.append(raw)
             i += 1
             continue
         i += 1
+    # Trim leading/trailing blank lines from the captured Notes section
+    # so renders don't accumulate whitespace over time.
+    while doc.notes_lines and not doc.notes_lines[0].strip():
+        doc.notes_lines.pop(0)
+    while doc.notes_lines and not doc.notes_lines[-1].strip():
+        doc.notes_lines.pop()
     return doc
 
 
@@ -401,10 +446,20 @@ class Workspace:
     # ------------------------------------------------------------------
 
     def read_current(self) -> CurrentDoc:
-        self.ensure_layout()
+        """Parse CURRENT.md. Returns an empty doc if the workspace doesn't exist.
+
+        Pure read — does not create the workspace layout. Read-only tool
+        profiles rely on this: in ``--tool-profile=read_only`` the config
+        layer skips ``ensure_layout()``, so a workspace that has never
+        been mutated must still be readable without side effects.
+        """
+        if not self.current_path.is_file():
+            return CurrentDoc()
         return parse_current(self.current_path.read_text(encoding="utf-8"))
 
     def write_current(self, doc: CurrentDoc) -> None:
+        """Write CURRENT.md. Ensures the workspace layout exists first."""
+        self.ensure_layout()
         self.current_path.write_text(doc.render(), encoding="utf-8")
 
     # Threads ----------------------------------------------------------
@@ -469,8 +524,7 @@ class Workspace:
             raise ValueError("jot content must be non-empty")
         doc = self.read_current()
         stamp = datetime.now().isoformat(timespec="seconds")
-        note = Note(timestamp=stamp, content=body)
-        doc.notes.append(note)
+        note = doc.append_note(stamp, body)
         self._rotate_expired_closed(doc)
         self.write_current(doc)
         return note

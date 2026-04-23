@@ -298,3 +298,137 @@ def test_project_archive_requires_summary(ws: Workspace) -> None:
     WorkProjectCreate(ws).run({"name": "alpha", "goal": "explore"})
     with pytest.raises(ValueError):
         WorkProjectArchive(ws).run({"name": "alpha", "summary": ""})
+
+
+# ---------------------------------------------------------------------------
+# Tool-profile classification and read-only behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_work_tools_declare_mutates_flag() -> None:
+    """Every work tool must self-classify so config can filter read_only sessions.
+
+    The --tool-profile=read_only contract advertises "no writes". Config
+    relies on each tool's ``mutates`` attribute to decide whether to
+    register it in that profile. Missing the attribute would silently
+    re-register a mutating tool as read-only.
+    """
+    expected_read_only = {
+        "work_status",
+        "work_read",
+        "work_project_list",
+        "work_project_status",
+    }
+    expected_mutating = {
+        "work_thread",
+        "work_jot",
+        "work_note",
+        "work_scratch",
+        "work_project_create",
+        "work_project_goal",
+        "work_project_ask",
+        "work_project_resolve",
+        "work_project_archive",
+    }
+    all_tools = (
+        WorkStatus,
+        WorkThread,
+        WorkJot,
+        WorkNote,
+        WorkRead,
+        WorkScratch,
+        WorkProjectCreate,
+        WorkProjectGoal,
+        WorkProjectAsk,
+        WorkProjectResolve,
+        WorkProjectList,
+        WorkProjectStatus,
+        WorkProjectArchive,
+    )
+    read_only_names = {cls.name for cls in all_tools if not cls.mutates}
+    mutating_names = {cls.name for cls in all_tools if cls.mutates}
+    assert read_only_names == expected_read_only
+    assert mutating_names == expected_mutating
+
+
+def test_status_tolerates_missing_workspace(tmp_path: Path) -> None:
+    """With read_only profile we skip ensure_layout; work_status must still work.
+
+    The tool reports the workspace as uninitialized rather than creating
+    it — otherwise the read-only contract would be broken by the very
+    first read.
+    """
+    from harness.workspace import Workspace as _Workspace
+
+    ws = _Workspace(tmp_path, session_id="act-001")
+    # Intentionally no ensure_layout() — mimic read_only mode.
+    assert not ws.current_path.is_file()
+    out = WorkStatus(ws).run({})
+    assert "workspace not initialized" in out
+    # And the tool did not secretly create it.
+    assert not ws.current_path.is_file()
+
+
+def test_build_memory_filters_work_tools_under_read_only(tmp_path: Path) -> None:
+    """_build_memory must drop mutating work tools when tool_profile=read_only."""
+    from harness.config import SessionConfig, ToolProfile, _build_memory
+    from harness.tests.test_engram_memory import _make_engram_repo
+
+    repo = _make_engram_repo(tmp_path)
+    config = SessionConfig(
+        workspace=tmp_path / "scratch-ws",
+        memory_backend="engram",
+        memory_repo=repo,
+        tool_profile=ToolProfile.READ_ONLY,
+    )
+    memory, _engram, extras = _build_memory(config)
+    names = {t.name for t in extras}
+    # Mutating work tools must not be registered.
+    assert "work_thread" not in names
+    assert "work_jot" not in names
+    assert "work_note" not in names
+    assert "work_scratch" not in names
+    assert "work_project_create" not in names
+    assert "work_project_archive" not in names
+    # Read-only ones stay.
+    assert "work_status" in names
+    assert "work_read" in names
+    assert "work_project_list" in names
+    assert "work_project_status" in names
+    # And the workspace layout wasn't eagerly created.
+    workspace_root = memory.content_root / "workspace"
+    assert not workspace_root.is_dir()
+
+
+def test_build_memory_registers_all_work_tools_under_full(tmp_path: Path) -> None:
+    """Regression guard: non-read_only profiles keep every work tool."""
+    from harness.config import SessionConfig, ToolProfile, _build_memory
+    from harness.tests.test_engram_memory import _make_engram_repo
+
+    repo = _make_engram_repo(tmp_path)
+    config = SessionConfig(
+        workspace=tmp_path / "scratch-ws",
+        memory_backend="engram",
+        memory_repo=repo,
+        tool_profile=ToolProfile.FULL,
+    )
+    memory, _engram, extras = _build_memory(config)
+    names = {t.name for t in extras}
+    for expected in (
+        "work_status",
+        "work_thread",
+        "work_jot",
+        "work_note",
+        "work_read",
+        "work_scratch",
+        "work_project_create",
+        "work_project_goal",
+        "work_project_ask",
+        "work_project_resolve",
+        "work_project_list",
+        "work_project_status",
+        "work_project_archive",
+    ):
+        assert expected in names, f"missing in full profile: {expected}"
+    # Full profile creates the workspace up-front.
+    assert (memory.content_root / "workspace").is_dir()

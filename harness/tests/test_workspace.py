@@ -104,6 +104,53 @@ def test_parse_current_empty_doc() -> None:
     assert doc.notes == []
 
 
+def test_notes_section_preserves_freeform_content_across_mutations(
+    tmp_path: Path,
+) -> None:
+    """Freeform content under ## Notes must survive a thread/jot round-trip.
+
+    The Notes section is documented as freeform — jots are one valid shape,
+    but migrated content, paragraphs, and sub-headings can live here too.
+    Earlier iterations of the parser discarded anything that didn't match
+    the ``- `ts` body`` jot regex, so every thread_update or jot silently
+    truncated the Notes section. This regression guard plants freeform
+    content, performs a mutation, and verifies the content survived.
+    """
+    w = Workspace(tmp_path, session_id="act-001")
+    w.ensure_layout()
+    # Hand-write a CURRENT.md with a mix of structured and freeform Notes.
+    w.current_path.write_text(
+        "## Threads\n\n"
+        "## Closed\n\n"
+        "## Notes\n\n"
+        "### Sub-heading under Notes\n\n"
+        "A paragraph describing something important.\n"
+        "It spans two lines.\n\n"
+        "- `2026-04-23T08:00:00` an existing structured jot\n",
+        encoding="utf-8",
+    )
+    # A thread op triggers read+rewrite of CURRENT.md. The freeform Notes
+    # content must not be clobbered.
+    w.open_thread("t1", status="active", next_action="first step")
+    body_after_thread = w.current_path.read_text(encoding="utf-8")
+    for needle in (
+        "Sub-heading under Notes",
+        "A paragraph describing something important.",
+        "It spans two lines.",
+        "an existing structured jot",
+    ):
+        assert needle in body_after_thread, f"missing after thread op: {needle!r}"
+    # A subsequent jot interleaves cleanly without swallowing freeform content.
+    w.jot("another observation")
+    body_after_jot = w.current_path.read_text(encoding="utf-8")
+    assert "Sub-heading under Notes" in body_after_jot
+    assert "another observation" in body_after_jot
+    # The structured ``.notes`` view still surfaces the timestamped entries.
+    doc = w.read_current()
+    assert any(n.content == "an existing structured jot" for n in doc.notes)
+    assert any(n.content == "another observation" for n in doc.notes)
+
+
 def test_current_doc_find_and_close() -> None:
     doc = CurrentDoc(
         threads=[Thread(name="t1", status="active"), Thread(name="t2", status="blocked")],

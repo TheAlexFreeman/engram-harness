@@ -178,15 +178,21 @@ def _build_memory(
     ]
 
     # Workspace lives alongside memory inside the Engram content root.
-    # Creating it lazily is cheap and idempotent; no warning if absent.
+    # For non-read_only profiles we create the layout upfront so that the
+    # first mutation doesn't pay an extra directory-scaffold cost. In
+    # read_only we skip layout creation — the read-only work tools
+    # tolerate a missing workspace and return an uninitialized state
+    # message instead.
     workspace = Workspace(engram.content_root, session_id=engram.session_id)
-    try:
-        workspace.ensure_layout()
-    except OSError as exc:
-        print(
-            f"[warning] could not scaffold workspace dir at {workspace.dir}: {exc}",
-            file=sys.stderr,
-        )
+    read_only = config.tool_profile == ToolProfile.READ_ONLY
+    if not read_only:
+        try:
+            workspace.ensure_layout()
+        except OSError as exc:
+            print(
+                f"[warning] could not scaffold workspace dir at {workspace.dir}: {exc}",
+                file=sys.stderr,
+            )
     work_tools = [
         WorkStatus(workspace),
         WorkThread(workspace, engram=engram),
@@ -202,6 +208,13 @@ def _build_memory(
         WorkProjectStatus(workspace),
         WorkProjectArchive(workspace, engram=engram),
     ]
+    if read_only:
+        # Honour the --tool-profile=read_only contract: drop every work
+        # tool that can write to disk. Read-only tools (status, read,
+        # list, project_status) are kept — project_status regenerates
+        # derived SUMMARY.md but never invents user content, so it
+        # respects the "no user writes" intent.
+        work_tools = [t for t in work_tools if not getattr(t, "mutates", True)]
     return engram, engram, memory_tools + plan_tools + work_tools
 
 
