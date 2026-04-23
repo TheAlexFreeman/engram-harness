@@ -115,6 +115,8 @@ semantic_extensions = [
   "memory_demote_knowledge",
   "memory_archive_knowledge",
   "memory_reset_session_state",
+  "memory_session_flush",
+  "memory_record_reflection",
   "memory_append_scratchpad",
   "memory_update_skill",
   "memory_skill_manifest_read",
@@ -330,6 +332,7 @@ summary_updates = "Summary Updates"
 identity_updates_this_session = "Identity Updates This Session"
 session_id = "Chat Session"
 checkpoint_path = "Checkpoint Path"
+captured = "Captured"
 trigger = "Trigger"
 flagged_path = "Flagged Path"
 priority = "Review Priority"
@@ -761,6 +764,13 @@ preview_argument = "preview"
 [desktop_operations.append_access_entry]
 status = "implemented"
 tool = "memory_log_access"
+tier = "semantic"
+operation_group = "chat"
+change_class = "automatic"
+
+[desktop_operations.record_session_reflection]
+status = "implemented"
+tool = "memory_record_reflection"
 tier = "semantic"
 operation_group = "chat"
 change_class = "automatic"
@@ -1489,6 +1499,38 @@ result_fields = ["reset", "identity_updates_this_session"]
 fallback_tools = []
 error_kinds = []
 notes = "Resets in-process session counters for long-running MCP server processes; no repo files are modified."
+
+[operations.memory_session_flush]
+group = "chat"
+tier = "semantic"
+change_class = "automatic"
+commit_model = "none"
+commit_category_hint = "chat"
+writes = []
+owns_frontmatter = []
+owns_summaries = []
+owns_access_logs = []
+owns_review_queue = []
+result_fields = ["session_id", "checkpoint_path", "entry_count", "trigger"]
+fallback_tools = []
+error_kinds = []
+notes = "Mid-session context checkpoint; invoked most often from the optional proxy on context-pressure."
+
+[operations.memory_record_reflection]
+group = "chat"
+tier = "semantic"
+change_class = "automatic"
+commit_model = "none"
+commit_category_hint = "chat"
+writes = []
+owns_frontmatter = []
+owns_summaries = []
+owns_access_logs = []
+owns_review_queue = []
+result_fields = ["session_id", "reflection_path", "captured"]
+fallback_tools = []
+error_kinds = []
+notes = "Structured end-of-session reflection; pairs with the sidecar and proxy session wrap-up flows."
 
 [operations.memory_append_scratchpad]
 group = "scratchpad"

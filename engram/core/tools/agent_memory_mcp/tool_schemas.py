@@ -476,6 +476,66 @@ def reset_session_state_input_schema() -> dict[str, Any]:
     )
 
 
+def record_reflection_input_schema() -> dict[str, Any]:
+    return _base_schema(
+        tool_name="memory_record_reflection",
+        title="memory_record_reflection input schema",
+        notes=[
+            "End-of-session reflection for the active chat. title is reserved for a future display hint.",
+        ],
+        properties={
+            "session_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Canonical memory session id for the active chat (memory/activity/...).",
+            },
+            "reflection": {
+                "type": "string",
+                "description": "Session reflection or wrap-up text to record.",
+            },
+            "title": {
+                "type": "string",
+                "default": "",
+                "description": "Optional short heading for the reflection (reserved for future use).",
+            },
+        },
+        required=["session_id", "reflection"],
+    )
+
+
+def session_flush_input_schema() -> dict[str, Any]:
+    return _base_schema(
+        tool_name="memory_session_flush",
+        title="memory_session_flush input schema",
+        notes=[
+            "summary carries recoverable state for a mid-session checkpoint; optional label is for UIs and logs.",
+        ],
+        properties={
+            "summary": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Checkpoint text captured near the model context limit.",
+            },
+            "label": {
+                "type": "string",
+                "default": "Session flush",
+                "description": "Short display label (for example, Context-pressure flush).",
+            },
+            "trigger": {
+                "type": "string",
+                "default": "manual",
+                "description": "How the flush was requested (e.g. context_pressure, manual).",
+            },
+            "session_id": {
+                "type": ["string", "null"],
+                "default": None,
+                "description": "Optional memory session id when the proxy knows it.",
+            },
+        },
+        required=["summary"],
+    )
+
+
 def analyze_graph_input_schema() -> dict[str, Any]:
     return _base_schema(
         tool_name="memory_analyze_graph",
@@ -3344,6 +3404,7 @@ TOOL_INPUT_SCHEMAS: dict[str, ToolSchemaBuilder] = {
     "memory_reindex": reindex_input_schema,
     "memory_record_chat_summary": record_chat_summary_input_schema,
     "memory_record_periodic_review": record_periodic_review_input_schema,
+    "memory_record_reflection": record_reflection_input_schema,
     "memory_record_trace": record_trace_input_schema,
     "memory_register_tool": register_tool_input_schema,
     "memory_reset_session_state": reset_session_state_input_schema,
@@ -3357,6 +3418,7 @@ TOOL_INPUT_SCHEMAS: dict[str, ToolSchemaBuilder] = {
     "memory_scan_drop_zone": scan_drop_zone_input_schema,
     "memory_search": grep_search_input_schema,
     "memory_semantic_search": semantic_search_input_schema,
+    "memory_session_flush": session_flush_input_schema,
     "memory_skill_add": skill_add_input_schema,
     "memory_skill_install": skill_install_input_schema,
     "memory_skill_list": skill_list_input_schema,
@@ -3443,6 +3505,7 @@ __all__ = [
     "request_approval_input_schema",
     "record_chat_summary_input_schema",
     "record_periodic_review_input_schema",
+    "record_reflection_input_schema",
     "record_trace_input_schema",
     "register_tool_input_schema",
     "reset_session_state_input_schema",
@@ -3454,6 +3517,7 @@ __all__ = [
     "run_eval_input_schema",
     "scan_drop_zone_input_schema",
     "semantic_search_input_schema",
+    "session_flush_input_schema",
     "skill_install_input_schema",
     "skill_list_input_schema",
     "skill_route_input_schema",
