@@ -382,9 +382,7 @@ def test_context_project_validates_type(engram: EngramMemory) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_context_project_bundle_includes_summary(
-    engram: EngramMemory, tmp_path: Path
-) -> None:
+def test_context_project_bundle_includes_summary(engram: EngramMemory, tmp_path: Path) -> None:
     """SUMMARY.md content is prepended to the returned text when project= is passed."""
     from harness.workspace import Workspace
 
@@ -403,16 +401,12 @@ def test_context_project_bundle_includes_summary(
     )
 
     tool = MemoryContext(engram, workspace=ws)
-    out = tool.run(
-        {"needs": ["domain:payments"], "project": "billing-overhaul", "budget": "M"}
-    )
+    out = tool.run({"needs": ["domain:payments"], "project": "billing-overhaul", "budget": "M"})
     assert "## Project SUMMARY — billing-overhaul" in out
     assert "TaxJar deprecation" in out
 
 
-def test_context_project_bundle_includes_active_plans(
-    engram: EngramMemory, tmp_path: Path
-) -> None:
+def test_context_project_bundle_includes_active_plans(engram: EngramMemory, tmp_path: Path) -> None:
     """Active plan names + phase titles appear in the bundle."""
     from harness.workspace import Workspace
 
@@ -434,9 +428,7 @@ def test_context_project_bundle_includes_active_plans(
     )
 
     tool = MemoryContext(engram, workspace=ws)
-    out = tool.run(
-        {"needs": ["domain:payments"], "project": "billing-overhaul", "budget": "M"}
-    )
+    out = tool.run({"needs": ["domain:payments"], "project": "billing-overhaul", "budget": "M"})
     assert "## Active plans — billing-overhaul" in out
     assert "migrate-adapter" in out
     assert "Port the billing adapter to v3" in out
@@ -488,9 +480,7 @@ def test_context_project_bundle_truncates_large_summary(
     project.summary_path.write_text(big_body, encoding="utf-8")
 
     tool = MemoryContext(engram, workspace=ws)
-    out = tool.run(
-        {"needs": ["domain:x"], "project": "huge-project", "budget": "S"}
-    )
+    out = tool.run({"needs": ["domain:x"], "project": "huge-project", "budget": "S"})
     assert "## Project SUMMARY" in out
     assert "[…summary truncated]" in out
 

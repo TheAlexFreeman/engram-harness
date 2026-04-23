@@ -220,53 +220,58 @@ generate better traces. The loop compounds.
 
 ```
 engram-harness/
-├── engram/                         # Engram memory system (subdir, not submodule)
+├── engram/                         # Memory data + historical docs only
 │   ├── core/
-│   │   ├── INIT.md                 # Live operational router, thresholds
+│   │   ├── INIT.md                 # Historical reference (operational router)
 │   │   ├── memory/                 # Structured memory repo (markdown + frontmatter)
-│   │   │   ├── HOME.md             # Session entry point
+│   │   │   ├── HOME.md             # Session entry point — read by the harness
 │   │   │   ├── users/              # User identity and preferences
 │   │   │   ├── knowledge/          # Factual content, organized by domain
 │   │   │   ├── skills/             # Agent capabilities and workflows
 │   │   │   ├── activity/           # Episodic memory (session records)
 │   │   │   └── working/            # Active work: scratchpads, projects, plans
-│   │   ├── governance/             # Curation policies, trust decay, security
-│   │   └── tools/
-│   │       └── agent_memory_mcp/   # MCP server + format layer
-│   │           ├── core/           # Format layer: frontmatter, git, validation
-│   │           ├── tools/          # Tier 0/1/2 tool implementations
-│   │           ├── sidecar/        # Transcript watcher (for other platforms)
-│   │           └── server.py       # FastMCP runtime bootstrap
-│   ├── HUMANS/                     # Human-facing docs, views, templates
-│   └── pyproject.toml              # engram_mcp package definition
+│   │   └── governance/             # Curation policies, trust decay, security
+│   └── HUMANS/                     # Human-facing docs, views, templates
+│                                    # (historical; authoritative copies live
+│                                    # in the standalone Engram repo)
 │
 ├── harness/                        # Agent loop + tools
+│   ├── _engram_fs/                 # Harness-owned format-layer primitives
+│   │   ├── frontmatter_utils.py    # Frontmatter read/write
+│   │   ├── git_repo.py             # Subprocess-backed git wrapper
+│   │   ├── path_policy.py          # Write-safety + path normalization
+│   │   ├── frontmatter_policy.py   # Trust / source constants + validators
+│   │   ├── errors.py               # Format-layer error taxonomy
+│   │   └── embedding_index.py      # Optional semantic index (lazy deps)
 │   ├── loop.py                     # Run loop (model turns → tool dispatch → memory)
 │   ├── memory.py                   # MemoryBackend protocol + FileMemory
-│   ├── engram_memory.py            # EngramMemory: real MemoryBackend (new)
+│   ├── engram_memory.py            # EngramMemory: real MemoryBackend
+│   ├── workspace.py                # Workspace state + work tools backend
 │   ├── modes/                      # Model adapters (Claude native, Grok)
 │   ├── tools/                      # Agent-callable tools
 │   │   ├── fs/                     # Filesystem (scoped to workspace)
 │   │   ├── search/                 # Web search backends (Brave, Tavily, etc.)
 │   │   ├── git.py, bash.py         # Shell and git access
 │   │   ├── todos.py                # Simple markdown task lists
-│   │   └── recall.py              # RecallMemory: agent queries Engram (new)
+│   │   ├── memory_tools.py         # memory_* affordances (recall/remember/…)
+│   │   └── work_tools.py           # work_* affordances (threads/projects/plans)
 │   ├── stream.py                   # Real-time streaming sinks
 │   ├── trace.py                    # TraceSink protocol, JSONL tracer
-│   ├── trace_bridge.py            # Post-run trace→Engram pipeline (new)
+│   ├── trace_bridge.py             # Post-run trace→Engram pipeline
 │   ├── pricing.py / pricing.json   # Token cost accounting
 │   └── report.py                   # Post-run trace summaries
 │
 ├── cli.py                          # Unified CLI entry point
-├── pyproject.toml                  # Merged package: engram-harness
+├── pyproject.toml                  # Package: engram-harness
 ├── ROADMAP.md                      # This file
 └── CLAUDE.md                       # Agent bootstrap for the merged project
 ```
 
-**Key structural principle:** Engram and harness remain independently coherent.
-Engram's MCP server runs standalone for other clients. The harness runs with
-`--memory=file` for throwaway sessions. The integration layer (`engram_memory.py`,
-`trace_bridge.py`, `recall.py`) is the seam — not a dependency.
+**Key structural principle:** The harness is the only runtime this repo
+ships. Authoritative Engram code — MCP server, CLI, proxy, sidecar — lives
+in a separate standalone repo. Here, `harness/_engram_fs/` is the harness's
+own copy of the format-layer primitives it needs, and `engram/core/memory/`
+is where harness sessions read and write user memory.
 
 ---
 

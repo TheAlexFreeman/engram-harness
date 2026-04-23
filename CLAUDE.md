@@ -14,13 +14,13 @@ Agent-callable tools: `harness/tools/`. Cost accounting: `harness/pricing.py` +
 `harness/pricing.json`. Tracing: `harness/trace.py`. The phased integration plan
 is in `ROADMAP.md`.
 
-**Working on memory.** Treat `engram/` as a self-contained memory repo and follow
-its own bootstrap: start at `engram/README.md` for the architectural contract,
-then `engram/core/INIT.md` for live routing, thresholds, and the context-loading
-manifest. `engram/CLAUDE.md`, `engram/AGENTS.md`, `engram/.cursorrules`, and
-`engram/agent-bootstrap.toml` are Engram-local adapter files — don't duplicate
-their rules here. When local `agent-memory` MCP tools are available, prefer them
-for memory reads, search, and governed writes.
+**Working on memory.** The actual memory data — HOME.md, knowledge, skills,
+activity, users, working — lives under `engram/core/memory/` and is what the
+harness reads and writes. `engram/CLAUDE.md`, `engram/README.md`,
+`engram/core/INIT.md`, and the rest of `engram/HUMANS/` are standalone-Engram
+platform docs preserved here as historical reference — the authoritative copies
+live in a separate Engram repo. The MCP server and its tools no longer ship
+from this project; what the harness needs it owns at `harness/_engram_fs/`.
 
 **Working on the integration seam.** `harness/engram_memory.py` implements the
 `MemoryBackend` protocol against an Engram repo (compact returning-session
@@ -51,34 +51,28 @@ from it. Authoritative Engram code lives in a separate standalone repo.
 
 ```bash
 pip install -e ".[dev]"                                      # editable install, full dev deps
-pytest                                                       # runs harness/tests/ + engram/core/tools/tests/
+pytest                                                       # runs harness/tests/
 harness "<task>" --workspace ~/proj                          # file-memory session (FileMemory fallback)
 harness "<task>" --workspace ~/proj --memory engram          # Engram-backed session (auto-detects ./engram)
 ```
 
 The root `conftest.py` shims `tomllib` onto `tomli` for Python 3.10 sandboxes.
-`.github/workflows/ci.yml` runs both suites on Ubuntu and Windows and covers the
-search-extras install separately.
+`.github/workflows/ci.yml` runs the harness suite on Ubuntu and Windows and
+covers the search-extras install separately.
 
 ## Intentional quirks to not "fix"
-
-`engram/conftest.py` auto-skips a small list of tests when `engram/` isn't the
-git toplevel. The original ~30-entry list shrank to 5 as the runtime and test
-fixtures were adjusted: content-prefix auto-detection in `server.py` unblocked
-the MCP-live tests, and an `engram-overlay` fixture at
-`engram/core/tools/tests/fixtures/engram-overlay/` supplies the
-`pyproject.toml` + `.github/workflows/` that setup-flow tests expect. What
-remains are three live-repo validators that trip on harness-session
-`act-NNN` ids in `engram/core/memory/*/ACCESS.jsonl`, one time-sensitive
-health-check test with a hardcoded date, and one manifest test that can't
-match when engram/ ships extra tracked files. Each is documented inline in
-`_MERGER_SKIPS`; don't delete the gate without resolving the underlying
-issues.
 
 `engram/.pre-commit-config.yaml` is dead in the merged layout (pre-commit anchors
 hooks at the git toplevel, which is the parent repo). Root CI runs the same
 commands directly. The file is kept because `engram/HUMANS/docs/QUICKSTART.md`
 links to it for standalone-Engram users.
+
+Several files under `engram/` — `engram/CLAUDE.md`, `engram/core/INIT.md`,
+`engram/HUMANS/docs/`, `engram/README.md` — still reference MCP tool names
+(`memory_context_project`, `memory_record_session`, etc.) that no longer ship
+from this repo. The authoritative copies live in the separate standalone
+Engram repo; this repo keeps them as historical references and for the
+memory data underneath `engram/core/memory/` to remain intact.
 
 The `harness` CLI falls back to `FileMemory` whenever the Engram repo, the
 `sentence-transformers` dep, or the trace bridge is unavailable — every
