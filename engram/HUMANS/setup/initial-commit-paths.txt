@@ -969,7 +969,6 @@ core/tools/tests/test_cli_trace.py
 core/tools/tests/test_cli_validate.py
 core/tools/tests/test_context_helpers.py
 core/tools/tests/test_context_home.py
-core/tools/tests/test_context_project.py
 core/tools/tests/test_core_boundary.py
 core/tools/tests/test_detect_content_prefix.py
 core/tools/tests/test_eval_scenarios.py

@@ -378,6 +378,114 @@ def test_context_project_validates_type(engram: EngramMemory) -> None:
 
 
 # ---------------------------------------------------------------------------
+# memory_context — `project` bundle (SUMMARY + active plans)
+# ---------------------------------------------------------------------------
+
+
+def test_context_project_bundle_includes_summary(engram: EngramMemory, tmp_path: Path) -> None:
+    """SUMMARY.md content is prepended to the returned text when project= is passed."""
+    from harness.workspace import Workspace
+
+    ws = Workspace(engram.content_root, session_id=engram.session_id)
+    ws.ensure_layout()
+    ws.project_create(
+        "billing-overhaul",
+        goal="Replace legacy billing adapter",
+        questions=["Grandfather old contracts?"],
+    )
+    project = ws.project("billing-overhaul")
+    project.summary_path.write_text(
+        "# Billing overhaul\n\nMigrating from the 2018 adapter to the v3 API.\n"
+        "Blocker: TaxJar deprecation on 2026-06-01.\n",
+        encoding="utf-8",
+    )
+
+    tool = MemoryContext(engram, workspace=ws)
+    out = tool.run({"needs": ["domain:payments"], "project": "billing-overhaul", "budget": "M"})
+    assert "## Project SUMMARY — billing-overhaul" in out
+    assert "TaxJar deprecation" in out
+
+
+def test_context_project_bundle_includes_active_plans(engram: EngramMemory, tmp_path: Path) -> None:
+    """Active plan names + phase titles appear in the bundle."""
+    from harness.workspace import Workspace
+
+    ws = Workspace(engram.content_root, session_id=engram.session_id)
+    ws.ensure_layout()
+    ws.project_create(
+        "billing-overhaul",
+        goal="Replace legacy billing adapter",
+        questions=[],
+    )
+    ws.plan_create(
+        "billing-overhaul",
+        "migrate-adapter",
+        purpose="Port the billing adapter to v3",
+        phases=[
+            {"title": "Scope the diff", "postconditions": []},
+            {"title": "Ship behind flag", "postconditions": []},
+        ],
+    )
+
+    tool = MemoryContext(engram, workspace=ws)
+    out = tool.run({"needs": ["domain:payments"], "project": "billing-overhaul", "budget": "M"})
+    assert "## Active plans — billing-overhaul" in out
+    assert "migrate-adapter" in out
+    assert "Port the billing adapter to v3" in out
+    assert "Phase 1/2: Scope the diff" in out
+
+
+def test_context_project_bundle_omitted_when_nothing_to_show(
+    engram: EngramMemory, tmp_path: Path
+) -> None:
+    """A project with no SUMMARY.md and no plans contributes no bundle —
+    the goal/questions still lift into the re-ranking purpose."""
+    from harness.workspace import Workspace
+
+    ws = Workspace(engram.content_root, session_id=engram.session_id)
+    ws.ensure_layout()
+    ws.project_create(
+        "thin-project",
+        goal="Placeholder goal",
+        questions=["Any open question?"],
+    )
+    # project_create auto-generates SUMMARY.md; remove it so the bundle is
+    # empty and only the goal/questions purpose-lift runs.
+    ws.project("thin-project").summary_path.unlink()
+
+    tool = MemoryContext(engram, workspace=ws)
+    out = tool.run({"needs": ["domain:x"], "project": "thin-project", "budget": "S"})
+    assert "## Project SUMMARY" not in out
+    assert "## Active plans" not in out
+    # No warning either — goal/questions are enough to count as "something to lift".
+    assert "no goal" not in out
+
+
+def test_context_project_bundle_truncates_large_summary(
+    engram: EngramMemory, tmp_path: Path
+) -> None:
+    """Oversized SUMMARY.md is truncated to the bundle budget."""
+    from harness.workspace import Workspace
+
+    ws = Workspace(engram.content_root, session_id=engram.session_id)
+    ws.ensure_layout()
+    ws.project_create(
+        "huge-project",
+        goal="A project",
+        questions=[],
+    )
+    project = ws.project("huge-project")
+    # Build a SUMMARY that's clearly larger than the S budget (2000 chars).
+    big_body = "# huge\n\n" + ("lorem ipsum " * 400)
+    project.summary_path.write_text(big_body, encoding="utf-8")
+
+    tool = MemoryContext(engram, workspace=ws)
+    out = tool.run({"needs": ["domain:x"], "project": "huge-project", "budget": "S"})
+    assert "## Project SUMMARY" in out
+    assert "[…summary truncated]" in out
+
+
+# ---------------------------------------------------------------------------
 # memory_trace — buffered annotations
 # ---------------------------------------------------------------------------
 
