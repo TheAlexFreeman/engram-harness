@@ -878,7 +878,7 @@ def _notable_calls(calls: list[_ToolCall], limit: int = 8) -> list[str]:
 
 
 def _serialize_with_frontmatter(fm: dict[str, Any], body: str) -> str:
-    from engram_mcp.agent_memory_mcp.frontmatter_utils import render_with_frontmatter
+    from harness._engram_fs import render_with_frontmatter
 
     return render_with_frontmatter(fm, body)
 

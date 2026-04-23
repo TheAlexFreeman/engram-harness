@@ -30,21 +30,22 @@ activity records, reflection notes, ACCESS entries, and trace spans — then com
 them. `harness/tools/recall.py` exposes `recall()` as an agent-callable tool when
 `--memory=engram` is selected.
 
-## The one import alias to know about
+## Harness-owned format primitives
 
-The Engram runtime lives on disk at `engram/core/tools/agent_memory_mcp/` but is
-exposed to Python as `engram_mcp.agent_memory_mcp.*` via `[tool.setuptools.package-dir]`
-in the root `pyproject.toml`. Harness code that touches Engram therefore looks
-like:
+The harness reads and writes Engram-format files via its own copy of the format
+layer at `harness/_engram_fs/` — `frontmatter_utils`, `git_repo`,
+`path_policy`, `frontmatter_policy`, `errors`, and an `embedding_index` module
+for the optional semantic-search path. Harness code looks like:
 
 ```python
-from engram_mcp.agent_memory_mcp.core.frontmatter_utils import read_with_frontmatter
-from engram_mcp.agent_memory_mcp.git_repo import GitRepo
+from harness._engram_fs import GitRepo, read_with_frontmatter
+from harness._engram_fs.embedding_index import EmbeddingIndex
 ```
 
-This remap is what lets `engram/` keep functioning as a standalone memory repo
-(its own tests in `engram/core/tools/tests/` resolve paths relative to `engram/`)
-while Python import paths stay stable for the merged package.
+The `engram_mcp` package still ships from `engram/core/tools/agent_memory_mcp/`
+via `[tool.setuptools.package-dir]` for historical-reference purposes and to
+keep `engram/core/tools/tests/` runnable, but nothing in `harness/` imports
+from it. Authoritative Engram code lives in a separate standalone repo.
 
 ## Setup and run
 

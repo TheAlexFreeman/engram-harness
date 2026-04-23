@@ -67,13 +67,14 @@ engram-distribute-skills = "engram_mcp.agent_memory_mcp.skill_distributor:main"
 packages = [
     # Harness
     "harness",
+    "harness._engram_fs",
     "harness.modes",
     "harness.sinks",
     "harness.tests",
     "harness.tools",
     "harness.tools.fs",
     "harness.tools.search",
-    # Engram
+    # Engram (standalone MCP surface — scheduled for removal in a later pass)
     "engram_mcp",
     "engram_mcp.agent_memory_mcp",
     "engram_mcp.agent_memory_mcp.cli",
