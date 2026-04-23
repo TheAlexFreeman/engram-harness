@@ -1,11 +1,34 @@
 # Workspace Affordances — System Prompt Draft
 
-> Design document. Not wired into code yet. Describes the `work:` affordance
-> family for the agent's operational workspace — the mutable, cross-session
-> working surface that sits between ephemeral scratch and durable memory.
+> Design document. Describes the `work:` affordance family for the agent's
+> operational workspace — the mutable, cross-session working surface that
+> sits between ephemeral scratch and durable memory.
 >
-> Companion to `memory-affordances-draft.md`, which covers the `memory:` family
-> for the durable, git-backed memory system.
+> Companion to `memory-affordances-draft.md`, which covers the `memory:`
+> family for the durable, git-backed memory system.
+>
+> **Status:** partially wired.
+>
+> - Shipped: `work_status`, `work_thread`, `work_jot`, `work_note`,
+>   `work_read`, `work_scratch`, and the project CRUD operations
+>   (`work_project_create`, `_goal`, `_ask`, `_resolve`, `_list`,
+>   `_status`, `_archive`) with auto-generated SUMMARY.md and trace-event
+>   emission on state changes. Backend lives in `harness/workspace.py`;
+>   tools in `harness/tools/work_tools.py`; prompt section in
+>   `harness/prompts.py::_WORK_SECTION`.
+> - Deferred to follow-up PRs: `work_search` (project-scoped keyword
+>   search), `work_promote` (graduate a working note into memory), and
+>   `work_project_plan` (op-dispatched create/brief/advance/list).
+>   Existing `plan_tools.py` continues to handle multi-session plans
+>   unchanged until `work_project_plan` lands.
+> - Migration from `memory/working/` to `workspace/` is manual for now —
+>   both locations coexist. The bootstrap still reads
+>   `memory/working/USER.md` and `memory/working/CURRENT.md`; the new
+>   `workspace/CURRENT.md` is independent until a migration pass retires
+>   `memory/working/`.
+> - The doc's project-scoped `memory: context({..., "project": ...})`
+>   variant is also deferred — it requires a schema change on
+>   `memory_context` and is a separate concern.
 
 ---
 

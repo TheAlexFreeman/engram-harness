@@ -370,6 +370,49 @@ ACCESS.jsonl gains entries that feed the aggregation pipeline.
 
 ---
 
+### Phase 2b — Workspace Tool Surface
+
+**Goal:** The agent has a mutable operational workspace that sits between
+ephemeral scratch and durable memory, with a coherent set of affordances
+for threads, working notes, projects, and (eventually) plans.
+
+The design for the expanded surface lives in
+`docs/workspace-affordances-draft.md`. It introduces a new `workspace/`
+directory peer to `memory/` (no trust frontmatter, no ACCESS tracking,
+freely mutable) and a ``work:`` tool family. Tools are registered with
+underscore names and documented in the prompt with `work: <op>(...)` or
+`work: project.<op>(...)` prefix syntax.
+
+- [x] `harness/workspace.py`: `Workspace` backend (directory layout,
+      CURRENT.md parser/writer, project CRUD, SUMMARY.md auto-generation,
+      closed-thread archive rotation)
+- [x] `harness/tools/work_tools.py`: 13 tool classes covering status,
+      thread, jot, note, read, scratch, and the seven project ops
+- [x] System prompt `## Workspace` section (opt-in via
+      `system_prompt_native(with_work_tools=True)`), wired in
+      `config.py` when Engram is active
+- [x] Thread / project state changes auto-emit `memory_trace` events
+      so the trace bridge picks up workspace transitions without the
+      agent annotating manually
+- [ ] `work_search` — project-scoped keyword/semantic search
+- [ ] `work_promote` — graduate a working note into durable memory
+      (calls into `EngramMemory` for frontmatter + git commit)
+- [ ] `work_project_plan` — op-dispatched create/brief/advance/list
+      that replaces the current `plan_tools.py` surface for
+      workspace-managed plans
+- [ ] `memory_context` project parameter — when a project name is
+      supplied, its goal and open questions re-rank the results
+- [ ] Migration pass retiring `memory/working/` in favor of
+      `workspace/` (and shrinking the bootstrap accordingly — see the
+      open question flagged in Phase 2)
+
+**Exit criteria:** Agent uses `work_status` at session start, tracks
+active lines of work as threads, scaffolds projects when scope
+warrants, and workspace state changes appear in trace bridge
+reflections — all without direct file writes into `workspace/`.
+
+---
+
 ### Phase 3 — Trace Bridge (post-run)
 
 **Goal:** Harness JSONL traces become comprehensive Engram activity records,
