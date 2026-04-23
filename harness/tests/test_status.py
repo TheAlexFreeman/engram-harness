@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -14,7 +14,7 @@ from harness.cmd_status import (
     _resolve_engram_content_root,
 )
 from harness.session_store import SessionRecord, SessionStore
-from harness.tools.plan_tools import CreatePlan
+from harness.workspace import Workspace
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -25,30 +25,33 @@ def _make_content_root(tmp: Path) -> Path:
     """Minimal Engram content root layout."""
     (tmp / "memory").mkdir(parents=True, exist_ok=True)
     (tmp / "memory" / "HOME.md").write_text("# Home\n", encoding="utf-8")
-    (tmp / "memory" / "working" / "projects").mkdir(parents=True, exist_ok=True)
     return tmp
 
 
-def _make_mock_memory(content_root: Path) -> MagicMock:
-    m = MagicMock()
-    m.content_root = content_root
-    m.session_id = "act-001"
-    return m
+def _create_plan(
+    content_root: Path,
+    purpose: str,
+    *,
+    plan_id: str | None = None,
+    project: str = "misc-plans",
+    n_phases: int = 2,
+    budget: dict | None = None,
+) -> tuple[str, str]:
+    """Scaffold a workspace plan directly via ``Workspace.plan_create``.
 
-
-def _create_plan(content_root: Path, title: str, n_phases: int = 2, **kwargs) -> str:
-    """Use CreatePlan tool to write a plan and return its plan_id."""
-    mem = _make_mock_memory(content_root)
-    tool = CreatePlan(mem)
-    phases = [{"name": f"Phase {i + 1}", "tasks": [f"Task {i + 1}a"]} for i in range(n_phases)]
-    result = tool.run({"title": title, "phases": phases, **kwargs})
-    # Extract plan_id from result string
-    for word in result.split():
-        if word.startswith("**plan-") and word.endswith("**"):
-            return word.strip("*")
-        if word.startswith("plan-"):
-            return word.rstrip(".")
-    raise RuntimeError(f"Could not extract plan_id from: {result!r}")
+    Returns ``(project, plan_id)`` so tests can address the new layout
+    without assuming anything about how the content is written.
+    """
+    ws = Workspace(content_root, session_id="act-001")
+    ws.ensure_layout()
+    # project_create seeds GOAL.md + SUMMARY.md — plan_create requires
+    # the project to exist first.
+    if not ws.project(project).exists():
+        ws.project_create(project, goal=f"test bucket for {purpose}")
+    pid = plan_id or purpose.lower().replace(" ", "-")
+    phases = [{"title": f"Phase {i + 1}"} for i in range(n_phases)]
+    ws.plan_create(project, pid, purpose, phases=phases, budget=budget)
+    return project, pid
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +113,8 @@ def test_print_active_plans_shows_active(tmp_path, capsys):
 
 def test_print_active_plans_shows_multiple(tmp_path, capsys):
     cr = _make_content_root(tmp_path)
-    _create_plan(cr, "Plan Alpha")
-    _create_plan(cr, "Plan Beta")
+    _create_plan(cr, "Plan Alpha", plan_id="plan-alpha")
+    _create_plan(cr, "Plan Beta", plan_id="plan-beta")
     _print_active_plans(cr)
     out = capsys.readouterr().out
     assert "Active plans (2)" in out
@@ -121,13 +124,13 @@ def test_print_active_plans_shows_multiple(tmp_path, capsys):
 
 def test_print_active_plans_completed_plan_excluded(tmp_path, capsys):
     cr = _make_content_root(tmp_path)
-    plan_id = _create_plan(cr, "Done plan")
-    # Manually mark as complete
-    plans_dir = cr / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id
-    state_path = plans_dir / "run-state.json"
-    state = json.loads(state_path.read_text())
-    state["status"] = "complete"
-    state_path.write_text(json.dumps(state))
+    project, plan_id = _create_plan(cr, "Done plan")
+    # Mark the workspace run-state as completed (new schema uses the
+    # "completed" string, not "complete").
+    state_path = cr / "workspace" / "projects" / project / "plans" / f"{plan_id}.run-state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["status"] = "completed"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
     _print_active_plans(cr)
     out = capsys.readouterr().out
     assert "Done plan" not in out
@@ -135,12 +138,15 @@ def test_print_active_plans_completed_plan_excluded(tmp_path, capsys):
 
 def test_print_active_plans_shows_session_count(tmp_path, capsys):
     cr = _make_content_root(tmp_path)
-    plan_id = _create_plan(cr, "Tracked plan")
-    plans_dir = cr / "memory" / "working" / "projects" / "misc-plans" / "plans" / plan_id
-    state_path = plans_dir / "run-state.json"
-    state = json.loads(state_path.read_text())
-    state["sessions"] = [{"phase_index": 0, "completed_at": "2026-04-20T00:00:00"}]
-    state_path.write_text(json.dumps(state))
+    project, plan_id = _create_plan(cr, "Tracked plan")
+    # Simulate one distinct session having advanced the plan. The new
+    # schema tracks this via sessions_used + sessions_touched, not a
+    # list of per-session dicts.
+    state_path = cr / "workspace" / "projects" / project / "plans" / f"{plan_id}.run-state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["sessions_used"] = 1
+    state["sessions_touched"] = ["act-200"]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
     _print_active_plans(cr)
     out = capsys.readouterr().out
     assert "1 session" in out
@@ -148,7 +154,7 @@ def test_print_active_plans_shows_session_count(tmp_path, capsys):
 
 def test_print_active_plans_shows_budget_when_max_sessions(tmp_path, capsys):
     cr = _make_content_root(tmp_path)
-    _create_plan(cr, "Budgeted plan", max_sessions=5)
+    _create_plan(cr, "Budgeted plan", budget={"max_sessions": 5})
     _print_active_plans(cr)
     out = capsys.readouterr().out
     assert "0/5" in out

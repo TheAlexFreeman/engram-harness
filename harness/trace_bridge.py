@@ -34,7 +34,9 @@ _ACCESS_ROOTS = (
     "memory/knowledge",
     "memory/skills",
     "memory/activity",
-    "memory/working/projects",
+    # workspace/projects/ replaced the legacy memory/working/projects/ root
+    # when plan_tools.py retired; plan state and project notes live there now.
+    "workspace/projects",
 )
 
 # Helpfulness presets — keep the bands explicit so the trace bridge is auditable.
@@ -632,14 +634,6 @@ def _build_spans(
 # ---------------------------------------------------------------------------
 
 
-_PLAN_TOOL_ACTIONS: dict[str, str] = {
-    "create_plan": "plan_create",
-    "resume_plan": "plan_resume",
-    "complete_phase": "plan_complete",
-    "record_failure": "plan_failure",
-}
-
-
 def _access_paths(
     memory: EngramMemory,
     tool_calls: list[_ToolCall],
@@ -654,8 +648,6 @@ def _access_paths(
             namespace = _access_namespace(str(arg_path), content_prefix)
             if namespace:
                 seen.add(f"{namespace}/ACCESS.jsonl")
-        elif tc.name in _PLAN_TOOL_ACTIONS:
-            seen.add("memory/working/projects/ACCESS.jsonl")
     for ev in memory.recall_events:
         if getattr(ev, "phase", "manifest") == "fetch":
             continue
@@ -702,26 +694,6 @@ def _emit_access_entries(
             "session_id": canonical_session_id,
         }
         access_path = memory.content_root / access_dir_rel / "ACCESS.jsonl"
-        entries_by_file[access_path].append(entry)
-
-    for tc in tool_calls:
-        action = _PLAN_TOOL_ACTIONS.get(tc.name)
-        if not action:
-            continue
-        plan_id = str(tc.args.get("plan_id") or "").strip()
-        if not plan_id:
-            continue
-        project_id = (str(tc.args.get("project_id") or "").strip()) or "misc-plans"
-        plan_rel = f"memory/working/projects/{project_id}/plans/{plan_id}"
-        entry = {
-            "file": plan_rel,
-            "date": access_date,
-            "task": task_slug,
-            "helpfulness": 0.5,
-            "note": f"plan tool: {action}",
-            "session_id": canonical_session_id,
-        }
-        access_path = memory.content_root / "memory" / "working" / "projects" / "ACCESS.jsonl"
         entries_by_file[access_path].append(entry)
 
     for ev in memory.recall_events:

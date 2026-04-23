@@ -31,17 +31,6 @@ def _render_tool(tool: Tool) -> str:
     return f"### {tool.name}\n{tool.description}\n\nInput schema:\n```json\n{schema}\n```"
 
 
-_PLAN_TOOLS_SECTION = """\
-## Plan tools
-You have access to multi-session plan management tools:
-- `create_plan` — create a structured multi-phase plan
-- `resume_plan` — load and brief a plan's current state
-- `complete_phase` — seal the current phase and advance
-- `record_failure` — log a failed attempt with context
-
-Use plans for tasks that span multiple sessions or have distinct verifiable phases."""
-
-
 _WORK_SECTION = """\
 ## Workspace
 
@@ -324,7 +313,6 @@ session ends."""
 
 def system_prompt_native(
     *,
-    with_plan_tools: bool = False,
     with_memory_tools: bool = False,
     with_work_tools: bool = False,
 ) -> str:
@@ -333,8 +321,6 @@ def system_prompt_native(
         extras.append(_MEMORY_SECTION)
     if with_work_tools:
         extras.append(_WORK_SECTION)
-    if with_plan_tools:
-        extras.append(_PLAN_TOOLS_SECTION)
     tail = ("\n\n" + "\n\n".join(extras)) if extras else ""
     return f"{_IDENTITY}\n\n{_RULES}\n\n{_OUTPUT_NATIVE}{tail}"
 

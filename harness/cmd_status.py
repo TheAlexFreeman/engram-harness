@@ -24,39 +24,60 @@ def _resolve_engram_content_root(memory_repo: str | None) -> "Path | None":
 
 
 def _print_active_plans(content_root: Path) -> None:
-    try:
-        from harness.tools.plan_tools import (
-            _load_plan_yaml,
-            _load_run_state,
-            find_active_plans,
-        )
-    except ImportError:
-        return
+    """List active workspace plans under this Engram repo.
+
+    Scans ``workspace/projects/*/plans/*.run-state.json`` for plans
+    with status=active, loads the sibling YAML for purpose/phase
+    titles, and prints a compact per-plan line. Silent when the
+    workspace doesn't exist yet (a fresh repo that's never used the
+    work tools).
+    """
+    import json
+
+    import yaml
 
     print(f"\nMemory repo content root: {content_root}")
-    active = find_active_plans(content_root)
+    state_paths = sorted(
+        content_root.glob("workspace/projects/*/plans/*.run-state.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    active: list[tuple[Path, dict, dict]] = []
+    for state_path in state_paths:
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if state.get("status") != "active":
+            continue
+        plan_id = state_path.name[: -len(".run-state.json")]
+        plan_path = state_path.with_name(f"{plan_id}.yaml")
+        try:
+            plan = yaml.safe_load(plan_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        active.append((state_path, state, plan))
+
     if not active:
         print("Active plans: none")
         return
 
     print(f"Active plans ({len(active)}):")
-    for plan_dir in active:
-        try:
-            state = _load_run_state(plan_dir)
-            plan = _load_plan_yaml(plan_dir)
-        except Exception:
-            continue
-        plan_id = state.get("plan_id", plan_dir.name)
-        title = plan.get("title", "?")
+    for state_path, state, plan in active:
+        plan_id = state.get("plan_id") or state_path.name[: -len(".run-state.json")]
+        purpose = plan.get("purpose", "?")
         phases: list = plan.get("phases", [])
         current_idx = int(state.get("current_phase", 0))
-        phase_name = phases[current_idx]["name"] if current_idx < len(phases) else "—"
-        n_sessions = len(state.get("sessions", []))
-        max_sessions = plan.get("max_sessions")
-        budget_str = f"{n_sessions}/{max_sessions}" if max_sessions else str(n_sessions)
+        phase_title = (
+            phases[current_idx].get("title", "—") if 0 <= current_idx < len(phases) else "—"
+        )
+        sessions_used = int(state.get("sessions_used", 0))
+        max_sessions = (plan.get("budget") or {}).get("max_sessions")
+        budget_str = f"{sessions_used}/{max_sessions}" if max_sessions else str(sessions_used)
+        project = state_path.parent.parent.name
         print(
-            f"  {plan_id:<10} {title[:40]:<42}"
-            f"Phase {current_idx + 1}/{len(phases)}: {phase_name[:28]:<30}"
+            f"  {plan_id:<18} [{project[:16]:<16}] {purpose[:40]:<42}"
+            f"Phase {current_idx + 1}/{len(phases)}: {phase_title[:28]:<30}"
             f"{budget_str} session(s)"
         )
 

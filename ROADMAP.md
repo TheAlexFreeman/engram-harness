@@ -410,10 +410,24 @@ underscore names and documented in the prompt with `work: <op>(...)` or
       postcondition verification (`grep:<pattern>::<path>`,
       `test:<command>`, plain text manual), and in-conversation
       approval gates. SUMMARY.md auto-embeds the active plan.
-- [ ] Migration pass retiring `memory/working/` (and the legacy
-      `plan_tools.py` surface) in favor of `workspace/` (plus
-      shrinking the bootstrap accordingly — see the open question
-      flagged in Phase 2)
+- [x] Retire `plan_tools.py` + decouple the harness from
+      `memory/working/`: the legacy four-tool plan surface is gone;
+      `_BOOTSTRAP_FILES` no longer includes `memory/working/USER.md`
+      or `memory/working/CURRENT.md`; `_active_plan_briefing` and
+      `cmd_status._print_active_plans` now scan
+      `workspace/projects/*/plans/*.run-state.json`. `memory/working`
+      stays in `_SEARCH_SCOPES` so `memory_recall` can still surface
+      MCP-curated content.
+- [ ] MCP-side `memory/working/` retirement. ~45 references across
+      `engram/core/tools/agent_memory_mcp/**` (identity_paths,
+      plan_approvals, plan_utils, context tools, tool_schemas, etc.)
+      still read and write under `memory/working/`. Migrating the
+      MCP layer is a separate, larger concern that affects standalone
+      Engram users. Out of scope until a dedicated pass.
+- [ ] Bootstrap-shrink open question from Phase 2 — whether
+      `start_session`'s primer should drop further files in favor of
+      agent-initiated `memory_context` / `work_status` calls. Still
+      open.
 
 **Exit criteria:** Agent uses `work_status` at session start, tracks
 active lines of work as threads, scaffolds projects when scope

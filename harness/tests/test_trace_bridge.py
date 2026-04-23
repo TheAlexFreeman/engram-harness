@@ -15,7 +15,6 @@ from harness.trace_bridge import (
     HELPFULNESS_READ_THEN_EDIT,
     _access_namespace,
     _derive_read_helpfulness,
-    _emit_access_entries,
     _normalize_for_access,
     _split_subsessions,
     _ToolCall,
@@ -50,8 +49,14 @@ def test_access_namespace_normalises_paths() -> None:
     # default content_prefix="core"
     assert _access_namespace("memory/knowledge/foo.md") == "memory/knowledge"
     assert _access_namespace("core/memory/skills/bar.md") == "memory/skills"
-    assert _access_namespace("memory/working/projects/x/notes.md") == "memory/working/projects"
-    assert _access_namespace("memory/working/scratchpad.md") is None
+    # workspace/projects/ replaced the legacy memory/working/projects/ root.
+    assert _access_namespace("workspace/projects/x/notes.md") == "workspace/projects"
+    # Top-level workspace files (like CURRENT.md) are not ACCESS-tracked —
+    # only reads under the listed _ACCESS_ROOTS get logged.
+    assert _access_namespace("workspace/CURRENT.md") is None
+    # Legacy memory/working/ paths also no longer ACCESS-track (MCP layer
+    # keeps writing there but the harness stopped sourcing from it).
+    assert _access_namespace("memory/working/projects/x/notes.md") is None
     assert _access_namespace("totally/unrelated/file.md") is None
 
 
@@ -377,61 +382,11 @@ def test_run_trace_bridge_uses_session_date_from_trace(
 
 
 # ---------------------------------------------------------------------------
-# Plan 07: plan tool ACCESS entries
+# Plan tool ACCESS entries: removed in favour of work_project_plan, which
+# emits memory_trace events (not ACCESS rows). The old create_plan /
+# complete_phase / record_failure ACCESS emission retired with
+# plan_tools.py; the trace_bridge no longer recognises those tool names.
 # ---------------------------------------------------------------------------
-
-
-def test_plan_tool_access_entries_emitted(memory: EngramMemory) -> None:
-    from harness.trace_bridge import _aggregate_stats
-
-    # Use two different plans so deduplication doesn't merge them into one entry.
-    tool_calls = [
-        _ToolCall(
-            turn=0,
-            seq=0,
-            name="create_plan",
-            args={"plan_id": "plan-001", "project_id": "my-proj"},
-            timestamp=_now_iso(),
-        ),
-        _ToolCall(
-            turn=1,
-            seq=1,
-            name="complete_phase",
-            args={"plan_id": "plan-002", "project_id": "my-proj"},
-            timestamp=_now_iso(),
-        ),
-    ]
-    stats = _aggregate_stats([])
-    stats.session_date = "2026-04-21"
-
-    count = _emit_access_entries(memory, tool_calls, stats, content_prefix="core")
-    assert count == 2
-
-    access_path = memory.content_root / "memory" / "working" / "projects" / "ACCESS.jsonl"
-    assert access_path.is_file()
-    lines = [json.loads(line) for line in access_path.read_text().splitlines() if line]
-    notes = {r["note"] for r in lines}
-    assert "plan tool: plan_create" in notes
-    assert "plan tool: plan_complete" in notes
-    for rec in lines:
-        assert "my-proj" in rec["file"]
-
-
-def test_plan_tool_access_skips_missing_plan_id(memory: EngramMemory) -> None:
-    from harness.trace_bridge import _aggregate_stats
-
-    tool_calls = [
-        _ToolCall(
-            turn=0,
-            seq=0,
-            name="create_plan",
-            args={"project_id": "my-proj"},  # no plan_id
-            timestamp=_now_iso(),
-        ),
-    ]
-    stats = _aggregate_stats([])
-    count = _emit_access_entries(memory, tool_calls, stats, content_prefix="core")
-    assert count == 0
 
 
 # ---------------------------------------------------------------------------
