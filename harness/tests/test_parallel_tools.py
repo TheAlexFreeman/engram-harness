@@ -84,8 +84,11 @@ class RecordingMemory:
     prior: str = ""
     notes: list[tuple[str, str]] = field(default_factory=list)
     summary: str | None = None
+    start_calls: int = 0
+    end_calls: int = 0
 
     def start_session(self, task: str) -> str:
+        self.start_calls += 1
         return self.prior
 
     def recall(self, query: str, k: int = 5):
@@ -94,7 +97,8 @@ class RecordingMemory:
     def record(self, content: str, kind: str = "note") -> None:
         self.notes.append((kind, content))
 
-    def end_session(self, summary: str) -> None:
+    def end_session(self, summary: str, *, skip_commit: bool = False) -> None:
+        self.end_calls += 1
         self.summary = summary
 
 
@@ -105,8 +109,7 @@ def _build_run(
     tool = SleepingTool(tool_name)
     tools: dict[str, Tool] = {tool_name: tool}
     calls = [
-        ToolCall(name=tool_name, args=args, id=f"call_{i}")
-        for i, args in enumerate(tool_call_args)
+        ToolCall(name=tool_name, args=args, id=f"call_{i}") for i, args in enumerate(tool_call_args)
     ]
     mode = ScriptedMode(
         [
@@ -118,9 +121,7 @@ def _build_run(
 
 
 def test_parallel_execution_is_concurrent():
-    tools, mode, memory = _build_run(
-        [{"duration": 0.3, "tag": str(i)} for i in range(4)]
-    )
+    tools, mode, memory = _build_run([{"duration": 0.3, "tag": str(i)} for i in range(4)])
 
     start = time.monotonic()
     result = run(
@@ -168,9 +169,7 @@ def test_parallel_preserves_order_with_mixed_latencies():
 
 
 def test_max_parallel_tools_one_is_sequential():
-    tools, mode, memory = _build_run(
-        [{"duration": 0.3, "tag": str(i)} for i in range(4)]
-    )
+    tools, mode, memory = _build_run([{"duration": 0.3, "tag": str(i)} for i in range(4)])
 
     start = time.monotonic()
     run(

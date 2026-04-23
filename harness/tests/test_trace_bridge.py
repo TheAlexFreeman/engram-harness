@@ -15,6 +15,9 @@ from harness.trace_bridge import (
     HELPFULNESS_READ_THEN_EDIT,
     _access_namespace,
     _derive_read_helpfulness,
+    _emit_access_entries,
+    _normalize_for_access,
+    _split_subsessions,
     _ToolCall,
     run_trace_bridge,
 )
@@ -44,11 +47,37 @@ def _now_iso() -> str:
 
 
 def test_access_namespace_normalises_paths() -> None:
+    # default content_prefix="core"
     assert _access_namespace("memory/knowledge/foo.md") == "memory/knowledge"
     assert _access_namespace("core/memory/skills/bar.md") == "memory/skills"
     assert _access_namespace("memory/working/projects/x/notes.md") == "memory/working/projects"
     assert _access_namespace("memory/working/scratchpad.md") is None
     assert _access_namespace("totally/unrelated/file.md") is None
+
+
+def test_access_namespace_custom_prefix() -> None:
+    assert _access_namespace("custom/memory/knowledge/foo.md", "custom") == "memory/knowledge"
+    assert _access_namespace("memory/knowledge/foo.md", "custom") == "memory/knowledge"
+
+
+def test_access_namespace_empty_prefix() -> None:
+    assert _access_namespace("memory/knowledge/foo.md", "") == "memory/knowledge"
+    # With empty prefix, a path starting with "core/" is not treated as prefixed
+    assert _access_namespace("core/memory/knowledge/foo.md", "") is None
+
+
+def test_normalize_for_access_with_prefix() -> None:
+    assert (
+        _normalize_for_access("memory/knowledge/foo.md", "core") == "core/memory/knowledge/foo.md"
+    )
+    assert (
+        _normalize_for_access("core/memory/knowledge/foo.md", "core")
+        == "core/memory/knowledge/foo.md"
+    )
+
+
+def test_normalize_for_access_empty_prefix() -> None:
+    assert _normalize_for_access("memory/knowledge/foo.md", "") == "memory/knowledge/foo.md"
 
 
 def test_derive_read_helpfulness_then_edit() -> None:
@@ -145,7 +174,7 @@ def test_run_trace_bridge_minimal_session(repo: Path, memory: EngramMemory, tmp_
     rec = json.loads(lines[-1])
     assert rec["file"] == "core/memory/knowledge/celery.md"
     assert rec["helpfulness"] == HELPFULNESS_READ_THEN_EDIT
-    assert rec["session_id"] == memory.session_id
+    assert rec["session_id"] == f"core/{memory._session_dir_rel()}"
 
 
 def test_run_trace_bridge_dedupe_safe_to_rerun(
@@ -298,3 +327,206 @@ def test_run_trace_bridge_uses_session_date_from_trace(
     access_path = repo / "core" / "memory" / "knowledge" / "ACCESS.jsonl"
     rec = json.loads(access_path.read_text(encoding="utf-8").splitlines()[-1])
     assert rec["date"] == "2024-01-15"
+
+
+# ---------------------------------------------------------------------------
+# Plan 07: plan tool ACCESS entries
+# ---------------------------------------------------------------------------
+
+
+def test_plan_tool_access_entries_emitted(memory: EngramMemory) -> None:
+    from harness.trace_bridge import _aggregate_stats
+
+    # Use two different plans so deduplication doesn't merge them into one entry.
+    tool_calls = [
+        _ToolCall(
+            turn=0,
+            seq=0,
+            name="create_plan",
+            args={"plan_id": "plan-001", "project_id": "my-proj"},
+            timestamp=_now_iso(),
+        ),
+        _ToolCall(
+            turn=1,
+            seq=1,
+            name="complete_phase",
+            args={"plan_id": "plan-002", "project_id": "my-proj"},
+            timestamp=_now_iso(),
+        ),
+    ]
+    stats = _aggregate_stats([])
+    stats.session_date = "2026-04-21"
+
+    count = _emit_access_entries(memory, tool_calls, stats, content_prefix="core")
+    assert count == 2
+
+    access_path = memory.content_root / "memory" / "working" / "projects" / "ACCESS.jsonl"
+    assert access_path.is_file()
+    lines = [json.loads(line) for line in access_path.read_text().splitlines() if line]
+    notes = {r["note"] for r in lines}
+    assert "plan tool: plan_create" in notes
+    assert "plan tool: plan_complete" in notes
+    for rec in lines:
+        assert "my-proj" in rec["file"]
+
+
+def test_plan_tool_access_skips_missing_plan_id(memory: EngramMemory) -> None:
+    from harness.trace_bridge import _aggregate_stats
+
+    tool_calls = [
+        _ToolCall(
+            turn=0,
+            seq=0,
+            name="create_plan",
+            args={"project_id": "my-proj"},  # no plan_id
+            timestamp=_now_iso(),
+        ),
+    ]
+    stats = _aggregate_stats([])
+    count = _emit_access_entries(memory, tool_calls, stats, content_prefix="core")
+    assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Plan 08: recall event dedupe (manifest vs fetch phase)
+# ---------------------------------------------------------------------------
+
+
+def test_recall_dedupe_fetch_phase_skipped_in_access(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """Fetch-phase recall events must not produce a second ACCESS entry."""
+    from harness.tools.recall import RecallMemory
+
+    tool = RecallMemory(memory)
+    tool.run({"query": "celery"})  # manifest call
+    tool.run({"query": "celery", "result_index": 1})  # fetch call
+
+    events = memory.recall_events
+    phases = [getattr(ev, "phase", "manifest") for ev in events]
+    assert "manifest" in phases
+    assert "fetch" in phases
+
+    trace = tmp_path / "trace.jsonl"
+    _write_trace(
+        trace,
+        [
+            {"ts": _now_iso(), "kind": "session_start", "task": "dedupe test"},
+            {"ts": _now_iso(), "kind": "session_end", "turns": 1},
+        ],
+    )
+    result = run_trace_bridge(trace, memory, commit=False)
+
+    # Only the manifest-phase recall events should produce ACCESS entries.
+    manifest_count = sum(
+        1 for ev in memory.recall_events if getattr(ev, "phase", "manifest") == "manifest"
+    )
+    assert result.access_entries == manifest_count
+
+
+# ---------------------------------------------------------------------------
+# Sub-session splitting
+# ---------------------------------------------------------------------------
+
+
+def _make_subsession_events(task: str, n_subtasks: int) -> list[dict]:
+    """Build a synthetic interactive-mode trace with n_subtasks sub-sessions."""
+    ts = _now_iso()
+    events: list[dict] = [
+        {"ts": ts, "kind": "session_start", "task": task},
+    ]
+    for i in range(n_subtasks):
+        input_text = f"subtask {i + 1}"
+        events += [
+            {"ts": ts, "kind": "sub_session_start", "input": input_text, "subtask_idx": i},
+            {"ts": ts, "kind": "model_response", "turn": i * 2},
+            {
+                "ts": ts,
+                "kind": "session_usage",
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_cost_usd": 0.001,
+            },
+            {
+                "ts": ts,
+                "kind": "sub_session_end",
+                "subtask_idx": i,
+                "final_text": f"done with subtask {i + 1}",
+                "turns": 1,
+            },
+        ]
+    events += [
+        {"ts": ts, "kind": "interactive_turn", "chars": 10},
+        {
+            "ts": ts,
+            "kind": "session_usage",
+            "input_tokens": n_subtasks * 100,
+            "output_tokens": n_subtasks * 50,
+            "total_cost_usd": n_subtasks * 0.001,
+        },
+        {"ts": ts, "kind": "session_end", "turns": n_subtasks, "reason": "interactive_exit"},
+    ]
+    return events
+
+
+def test_split_subsessions_returns_none_for_plain_trace() -> None:
+    events = [
+        {"kind": "session_start", "task": "plain"},
+        {"kind": "session_end", "turns": 1},
+    ]
+    assert _split_subsessions(events) is None
+
+
+def test_split_subsessions_returns_segments() -> None:
+    events = _make_subsession_events("interactive test", n_subtasks=2)
+    segments = _split_subsessions(events)
+    assert segments is not None
+    assert len(segments) == 2
+    assert segments[0][0]["kind"] == "sub_session_start"
+    assert segments[0][-1]["kind"] == "sub_session_end"
+    assert segments[1][0]["subtask_idx"] == 1
+
+
+def test_run_trace_bridge_with_subsessions(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """Interactive trace produces per-subtask summary files under sub-001/, sub-002/."""
+    trace = tmp_path / "trace.jsonl"
+    events = _make_subsession_events("multi-turn task", n_subtasks=2)
+    _write_trace(trace, events)
+
+    result = run_trace_bridge(trace, memory, commit=False)
+
+    session_dir = result.session_dir
+    # Parent summary should list sub-sessions
+    parent_summary = result.summary_path.read_text(encoding="utf-8")
+    assert "sub-001" in parent_summary
+    assert "sub-002" in parent_summary
+
+    # Per-subtask summary files should exist
+    assert (session_dir / "sub-001" / "summary.md").is_file()
+    assert (session_dir / "sub-002" / "summary.md").is_file()
+    assert (session_dir / "sub-001" / "reflection.md").is_file()
+
+    sub1_text = (session_dir / "sub-001" / "summary.md").read_text(encoding="utf-8")
+    assert "subtask 1" in sub1_text.lower()
+
+
+def test_run_trace_bridge_no_markers_unchanged(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """A trace without sub-session markers should behave exactly as before."""
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    events = [
+        {"ts": ts, "kind": "session_start", "task": "plain batch task"},
+        {"ts": ts, "kind": "session_end", "turns": 1, "reason": "idle"},
+    ]
+    _write_trace(trace, events)
+
+    result = run_trace_bridge(trace, memory, commit=False)
+
+    assert result.summary_path.is_file()
+    assert not (result.session_dir / "sub-001").is_dir()
+    summary = result.summary_path.read_text(encoding="utf-8")
+    assert "Sub-sessions" not in summary

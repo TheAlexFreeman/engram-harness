@@ -159,6 +159,49 @@ def resolve_repo_root(explicit_root: str | Path | None = None) -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _detect_content_prefix(root: Path) -> str | None:
+    """Detect the content_prefix (relative to git toplevel) for a memory repo root.
+
+    Looks under ``root`` for the Engram content marker (``core/memory/HOME.md``
+    for the standard layout, or ``memory/HOME.md`` for flat fixtures) and
+    returns the prefix that ``GitRepo`` needs — which is relative to the git
+    toplevel, not to ``root``. This matters in the merged engram-harness
+    layout: when ``MEMORY_REPO_ROOT`` points at ``<harness>/engram`` but the
+    git toplevel is ``<harness>``, the correct prefix is ``"engram/core"``,
+    not ``"core"``.
+
+    Returns None if no content marker is found or git toplevel can't be
+    resolved — callers should fall back to the existing default in that case.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+
+    toplevel = Path(result.stdout.strip()).resolve()
+    try:
+        rel = root.resolve().relative_to(toplevel).as_posix()
+    except ValueError:
+        return None
+    if rel == ".":
+        rel = ""
+
+    if (root / "core" / "memory" / "HOME.md").is_file():
+        return f"{rel}/core" if rel else "core"
+    if (root / "memory" / "HOME.md").is_file():
+        return rel
+
+    return None
+
+
 def _build_delete_permission_hook(root: Path) -> DeletePermissionHook | None:
     """Build an optional delete-permission helper from the environment.
 
@@ -244,7 +287,16 @@ def create_mcp(
 ) -> tuple[FastMCP, dict[str, object], Path, GitRepo]:
     """Create the FastMCP app, register tools, and expose their callables."""
     root = resolve_repo_root(repo_root)
-    content_prefix = os.environ.get("MEMORY_CORE_PREFIX", "core")
+    # MEMORY_CORE_PREFIX remains an explicit override (including "" to disable
+    # the prefix entirely). When unset, auto-detect from the layout so that
+    # MEMORY_REPO_ROOT alone is sufficient in both standalone and merged
+    # engram-harness checkouts.
+    env_override = os.environ.get("MEMORY_CORE_PREFIX")
+    if env_override is not None:
+        content_prefix = env_override
+    else:
+        detected = _detect_content_prefix(root)
+        content_prefix = detected if detected is not None else "core"
     repo = GitRepo(root, content_prefix=content_prefix)
     _validate_repo_identity(repo)
     root = repo.root

@@ -133,7 +133,9 @@ def test_git_commit_all_flag(scope: WorkspaceScope, repo: Path) -> None:
 
 
 def test_git_commit_amend(scope: WorkspaceScope, repo: Path) -> None:
-    out = GitCommit(scope).run({"message": "seed commit (amended)", "amend": True, "allow_empty": True})
+    out = GitCommit(scope).run(
+        {"message": "seed commit (amended)", "amend": True, "allow_empty": True}
+    )
     assert "exit code: 0" in out
     log = GitLog(scope).run({"max_count": 1})
     assert "seed commit (amended)" in log

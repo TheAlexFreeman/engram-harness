@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import shutil
 from datetime import datetime, timezone
-from pathlib import Path
 
 from .scope import (
     MAX_GLOB_RESULTS,
@@ -300,9 +299,7 @@ class EditFile:
 
         if not path.exists():
             if old != "":
-                raise FileNotFoundError(
-                    f"{path.name} does not exist; pass empty old_str to create"
-                )
+                raise FileNotFoundError(f"{path.name} does not exist; pass empty old_str to create")
             path.write_text(new, encoding="utf-8")
             return f"created {path.name}"
 
@@ -311,9 +308,7 @@ class EditFile:
         if occurrences == 0:
             raise ValueError(f"old_str not found in {path.name}")
         if occurrences > 1:
-            raise ValueError(
-                f"old_str appears {occurrences} times in {path.name}; must be unique"
-            )
+            raise ValueError(f"old_str appears {occurrences} times in {path.name}; must be unique")
         path.write_text(content.replace(old, new, 1), encoding="utf-8")
         return f"edited {path.name}"
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 import threading
-from typing import IO, Any, Protocol
+from typing import IO, Any, Mapping, Protocol
 
 
 class StreamSink(Protocol):
@@ -37,6 +37,25 @@ class StreamSink(Protocol):
     def on_block_end(self, kind: str, *, index: int | None = None) -> None: ...
 
     def on_error(self, exc: BaseException) -> None: ...
+
+    def on_search_status(
+        self,
+        phase: str,
+        *,
+        kind: str,
+        output_index: int | None = None,
+        item_id: str | None = None,
+        extra: Mapping[str, Any] | None = None,
+    ) -> None: ...
+
+    def on_annotation(
+        self,
+        annotation: object,
+        *,
+        output_index: int | None = None,
+        content_index: int | None = None,
+        annotation_index: int | None = None,
+    ) -> None: ...
 
     def flush(self) -> None: ...
 
@@ -77,6 +96,27 @@ class NullStreamSink:
     def on_error(self, exc: BaseException) -> None:
         pass
 
+    def on_search_status(
+        self,
+        phase: str,
+        *,
+        kind: str,
+        output_index: int | None = None,
+        item_id: str | None = None,
+        extra: Mapping[str, Any] | None = None,
+    ) -> None:
+        pass
+
+    def on_annotation(
+        self,
+        annotation: object,
+        *,
+        output_index: int | None = None,
+        content_index: int | None = None,
+        annotation_index: int | None = None,
+    ) -> None:
+        pass
+
     def flush(self) -> None:
         pass
 
@@ -110,9 +150,11 @@ class StderrStreamPrinter:
         stream: IO[str] | None = None,
         *,
         max_block_chars: int = 4000,
+        max_annotation_chars: int = 500,
     ) -> None:
         self._stream: IO[str] = stream if stream is not None else sys.stderr
         self._max_block_chars = max_block_chars
+        self._max_annotation_chars = max_annotation_chars
         self._lock = threading.Lock()
         self._block_chars = 0
         self._block_dropped = 0
@@ -223,6 +265,93 @@ class StderrStreamPrinter:
                 self._block_chars = 0
                 self._block_dropped = 0
             self._write(f"[stream error] {type(exc).__name__}: {exc}\n")
+
+    def on_search_status(
+        self,
+        phase: str,
+        *,
+        kind: str,
+        output_index: int | None = None,
+        item_id: str | None = None,
+        extra: Mapping[str, Any] | None = None,
+    ) -> None:
+        if kind == "web_search_call":
+            label = "web"
+        elif kind == "x_search_call":
+            label = "x"
+        else:
+            label = kind
+        parts: list[str] = [f"  [search:{label}] {phase}"]
+        if output_index is not None:
+            parts.append(f"idx={output_index}")
+        if item_id:
+            parts.append(f"id={item_id}")
+        line = " ".join(parts) + "\n"
+        with self._lock:
+            self._write(line)
+
+    @staticmethod
+    def _format_annotation_line(annotation: object) -> str:
+        title = ""
+        url = ""
+        if isinstance(annotation, Mapping):
+            title = str(annotation.get("title") or "").strip()
+            url = str(annotation.get("url") or "").strip()
+            if not url:
+                u = annotation.get("file_id")
+                if u is not None:
+                    url = f"file_id:{u}"
+        else:
+            t = getattr(annotation, "title", None)
+            u = getattr(annotation, "url", None)
+            if t is not None:
+                title = str(t).strip()
+            if u is not None:
+                url = str(u).strip()
+            if not url:
+                fid = getattr(annotation, "file_id", None)
+                if fid is not None:
+                    url = f"file_id:{fid}"
+        ann_type = ""
+        if isinstance(annotation, Mapping):
+            ann_type = str(annotation.get("type") or "")
+        else:
+            at = getattr(annotation, "type", None)
+            if at is not None:
+                ann_type = str(at)
+        if title and url:
+            core = f"{title} — {url}"
+        elif url:
+            core = url
+        elif title:
+            core = title
+        else:
+            core = repr(annotation)[:200]
+        if ann_type and ann_type not in core:
+            return f"[citation:{ann_type}] {core}"
+        return f"[citation] {core}"
+
+    def on_annotation(
+        self,
+        annotation: object,
+        *,
+        output_index: int | None = None,
+        content_index: int | None = None,
+        annotation_index: int | None = None,
+    ) -> None:
+        line = self._format_annotation_line(annotation)
+        if len(line) > self._max_annotation_chars:
+            line = line[: self._max_annotation_chars - 3] + "..."
+        meta: list[str] = []
+        if output_index is not None:
+            meta.append(f"out={output_index}")
+        if content_index is not None:
+            meta.append(f"part={content_index}")
+        if annotation_index is not None:
+            meta.append(f"ann={annotation_index}")
+        suffix = f" ({', '.join(meta)})" if meta else ""
+        with self._lock:
+            self._write(f"  {line}{suffix}\n")
 
     def flush(self) -> None:
         with self._lock:

@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -79,6 +80,8 @@ class _SessionStats:
     # if available, else the earliest event). Used for ACCESS rows so reruns
     # on a later day don't collide with the (file, session_id, date) dedupe.
     session_date: str = ""
+    # turn number → total cost for that turn (from "usage" events)
+    turn_costs: dict[int, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -121,6 +124,8 @@ def run_trace_bridge(
     session_dir = memory.content_root / session_dir_rel
     session_dir.mkdir(parents=True, exist_ok=True)
 
+    content_prefix = getattr(memory, "content_prefix", "core")
+
     tool_calls = _extract_tool_calls(events)
 
     summary_path = session_dir / "summary.md"
@@ -128,8 +133,21 @@ def run_trace_bridge(
     reflection_path = session_dir / "reflection.md"
 
     written: list[str] = []
+    access_count = 0
 
-    summary_text = _render_summary(memory, stats, tool_calls)
+    # Interactive sessions: per-subtask records when markers are present.
+    subsessions = _split_subsessions(events)
+    sub_ids: list[str] = []
+    if subsessions:
+        for idx, segment in enumerate(subsessions):
+            sub_written, sub_access = _run_subsession_bridge(
+                memory, session_dir, segment, idx, content_prefix
+            )
+            written.extend(sub_written)
+            access_count += sub_access
+            sub_ids.append(f"sub-{idx + 1:03d}")
+
+    summary_text = _render_summary(memory, stats, tool_calls, sub_sessions=sub_ids)
     _write_artifact(summary_path, summary_text)
     written.append(_relpath(memory, summary_path))
 
@@ -137,15 +155,44 @@ def run_trace_bridge(
     _write_artifact(reflection_path, reflection_text)
     written.append(_relpath(memory, reflection_path))
 
-    spans = _build_spans(memory, tool_calls, events)
+    spans = _build_spans(memory, tool_calls, events, stats)
     _write_jsonl(spans_path, spans)
     written.append(_relpath(memory, spans_path))
 
-    access_count = _emit_access_entries(memory, tool_calls, stats)
+    if not subsessions:
+        access_count = _emit_access_entries(
+            memory, tool_calls, stats, content_prefix=content_prefix
+        )
+
+    if trace_path.is_file():
+        try:
+            raw_rel = _relpath(memory, trace_path)
+        except ValueError:
+            pass
+        else:
+            if raw_rel not in written:
+                written.append(raw_rel)
 
     commit_sha: str | None = None
     if commit:
-        commit_sha = _commit_artifacts(memory, written + _access_paths(memory, tool_calls))
+        commit_sha = _commit_artifacts(
+            memory, written + _access_paths(memory, tool_calls, content_prefix=content_prefix)
+        )
+
+    if otel_endpoint := os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        try:
+            from harness.otel_export import export_session_spans
+
+            n = export_session_spans(
+                spans_path,
+                endpoint=otel_endpoint,
+                service_name="engram-harness",
+                session_id=memory.session_id,
+            )
+            if n:
+                _log.info("OTLP export: %d spans → %s", n, otel_endpoint)
+        except Exception:  # noqa: BLE001
+            _log.warning("OTLP export failed", exc_info=True)
 
     return TraceBridgeResult(
         session_dir=session_dir,
@@ -156,6 +203,79 @@ def run_trace_bridge(
         commit_sha=commit_sha,
         artifacts=written,
     )
+
+
+# ---------------------------------------------------------------------------
+# Sub-session splitting (interactive mode with sub_session_start/end markers)
+# ---------------------------------------------------------------------------
+
+
+def _split_subsessions(events: list[dict[str, Any]]) -> "list[list[dict]] | None":
+    """Split events at sub_session_start/end boundaries.
+
+    Returns a list of per-subtask event segments if any markers are found,
+    or None if the trace has no sub-session structure (non-interactive or old traces).
+    Each segment includes the sub_session_start and sub_session_end events.
+    """
+    segments: list[list[dict]] = []
+    current: list[dict] = []
+    in_sub = False
+
+    for ev in events:
+        kind = ev.get("kind")
+        if kind == "sub_session_start":
+            current = [ev]
+            in_sub = True
+        elif kind == "sub_session_end":
+            if in_sub:
+                current.append(ev)
+                segments.append(current)
+                current = []
+                in_sub = False
+        elif in_sub:
+            current.append(ev)
+
+    return segments if segments else None
+
+
+def _run_subsession_bridge(
+    memory: EngramMemory,
+    session_dir: Path,
+    segment_events: list[dict[str, Any]],
+    subtask_idx: int,
+    content_prefix: str,
+) -> tuple[list[str], int]:
+    """Write artifacts for one interactive sub-session segment.
+
+    Returns (list_of_rel_paths, access_entry_count).
+    """
+    sub_dir = session_dir / f"sub-{subtask_idx + 1:03d}"
+    sub_dir.mkdir(parents=True, exist_ok=True)
+
+    stats = _aggregate_stats(segment_events)
+    # Task comes from the sub_session_start event's 'input' field
+    start_ev = next((e for e in segment_events if e.get("kind") == "sub_session_start"), {})
+    if not stats.task:
+        stats.task = str(start_ev.get("input", ""))
+
+    tool_calls = _extract_tool_calls(segment_events)
+
+    summary_path = sub_dir / "summary.md"
+    reflection_path = sub_dir / "reflection.md"
+
+    summary_text = _render_summary(memory, stats, tool_calls)
+    _write_artifact(summary_path, summary_text)
+
+    reflection_text = _render_reflection(memory, stats, tool_calls)
+    _write_artifact(reflection_path, reflection_text)
+
+    access_count = _emit_access_entries(memory, tool_calls, stats, content_prefix=content_prefix)
+
+    written = [
+        _relpath(memory, summary_path),
+        _relpath(memory, reflection_path),
+    ]
+    return written, access_count
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +311,9 @@ def _aggregate_stats(events: list[dict[str, Any]]) -> _SessionStats:
         elif kind == "tool_call":
             s.tool_call_count += 1
             s.by_tool[str(ev.get("name", ""))] += 1
+        elif kind == "native_search_call":
+            s.tool_call_count += 1
+            s.by_tool[str(ev.get("search_type", "native_search"))] += 1
         elif kind == "tool_result":
             if ev.get("is_error"):
                 s.error_count += 1
@@ -202,6 +325,10 @@ def _aggregate_stats(events: list[dict[str, Any]]) -> _SessionStats:
             s.total_input_tokens = int(ev.get("input_tokens", 0) or 0)
             s.total_output_tokens = int(ev.get("output_tokens", 0) or 0)
             s.total_cost_usd = float(ev.get("total_cost_usd", 0.0) or 0.0)
+        elif kind == "usage":
+            turn = int(ev.get("turn", -1))
+            if turn >= 0:
+                s.turn_costs[turn] = float(ev.get("total_cost_usd", 0.0) or 0.0)
     return s
 
 
@@ -236,14 +363,41 @@ def _extract_tool_calls(events: list[dict[str, Any]]) -> list[_ToolCall]:
             seq += 1
             pending_calls.append(tc)
             calls.append(tc)
+        elif kind == "native_search_call":
+            # Server-side Grok search — no separate tool_result event.
+            search_kind = str(ev.get("search_type", "native_search"))
+            query = ev.get("query")
+            tc = _ToolCall(
+                turn=current_turn,
+                seq=seq,
+                name=search_kind,
+                args={"query": query} if query else {},
+                timestamp=str(ev.get("ts", "")),
+                is_error=ev.get("status") == "failed",
+            )
+            seq += 1
+            calls.append(tc)  # no pending_calls entry — result already baked in
         elif kind == "tool_result":
-            name = str(ev.get("name", ""))
-            for tc in pending_calls:
-                if tc.name == name:
-                    tc.is_error = bool(ev.get("is_error", False))
-                    tc.content_preview = str(ev.get("content_preview", ""))
-                    pending_calls.remove(tc)
-                    break
+            result_seq = ev.get("seq")
+            matched: _ToolCall | None = None
+            if result_seq is not None:
+                # Prefer seq-based match — correct for parallel batches with
+                # duplicate tool names (e.g. two concurrent bash calls).
+                for tc in pending_calls:
+                    if tc.seq == result_seq:
+                        matched = tc
+                        break
+            if matched is None:
+                # Fallback: match by name for traces without seq field.
+                name = str(ev.get("name", ""))
+                for tc in pending_calls:
+                    if tc.name == name:
+                        matched = tc
+                        break
+            if matched is not None:
+                matched.is_error = bool(ev.get("is_error", False))
+                matched.content_preview = str(ev.get("content_preview", ""))
+                pending_calls.remove(matched)
     return calls
 
 
@@ -293,7 +447,13 @@ def _derive_recall_helpfulness(
 # ---------------------------------------------------------------------------
 
 
-def _render_summary(memory: EngramMemory, stats: _SessionStats, calls: list[_ToolCall]) -> str:
+def _render_summary(
+    memory: EngramMemory,
+    stats: _SessionStats,
+    calls: list[_ToolCall],
+    *,
+    sub_sessions: list[str] | None = None,
+) -> str:
     fm = dict(_AGENT_FM)
     fm["session"] = f"memory/activity/{memory._session_path_fragment()}/{memory.session_id}"
     fm["session_id"] = memory.session_id
@@ -302,6 +462,8 @@ def _render_summary(memory: EngramMemory, stats: _SessionStats, calls: list[_Too
     fm["errors"] = stats.error_count
     fm["total_cost_usd"] = round(stats.total_cost_usd, 4)
     fm["retrievals"] = len(memory.recall_events)
+    if sub_sessions:
+        fm["sub_sessions"] = sub_sessions
 
     body_lines = [
         f"# Session {memory.session_id}",
@@ -316,6 +478,13 @@ def _render_summary(memory: EngramMemory, stats: _SessionStats, calls: list[_Too
     if stats.end_reason:
         body_lines.append(f"- End reason: {stats.end_reason}")
     body_lines.append("")
+
+    if sub_sessions:
+        body_lines.append("## Sub-sessions")
+        body_lines.append("")
+        for sid in sub_sessions:
+            body_lines.append(f"- `{sid}/`")
+        body_lines.append("")
 
     if stats.by_tool:
         body_lines.append("## Tool usage")
@@ -411,10 +580,20 @@ def _build_spans(
     memory: EngramMemory,
     calls: list[_ToolCall],
     events: list[dict[str, Any]],
+    stats: _SessionStats,
 ) -> list[dict[str, Any]]:
     session_id = f"memory/activity/{memory._session_path_fragment()}/{memory.session_id}"
+
+    # Count calls per turn so we can split the turn's cost evenly.
+    calls_per_turn: dict[int, int] = defaultdict(int)
+    for tc in calls:
+        calls_per_turn[tc.turn] += 1
+
     spans: list[dict[str, Any]] = []
     for tc in calls:
+        n = calls_per_turn[tc.turn] or 1
+        turn_cost = stats.turn_costs.get(tc.turn, 0.0)
+        span_cost = round(turn_cost / n, 6)
         spans.append(
             {
                 "span_id": _short_hash(f"{session_id}:{tc.seq}:{tc.name}:{tc.timestamp}"),
@@ -423,6 +602,7 @@ def _build_spans(
                 "span_type": "tool_call",
                 "name": tc.name,
                 "status": "error" if tc.is_error else "ok",
+                "cost": {"usd": span_cost},
                 "metadata": {
                     "turn": tc.turn,
                     "seq": tc.seq,
@@ -438,18 +618,34 @@ def _build_spans(
 # ---------------------------------------------------------------------------
 
 
-def _access_paths(memory: EngramMemory, tool_calls: list[_ToolCall]) -> list[str]:
+_PLAN_TOOL_ACTIONS: dict[str, str] = {
+    "create_plan": "plan_create",
+    "resume_plan": "plan_resume",
+    "complete_phase": "plan_complete",
+    "record_failure": "plan_failure",
+}
+
+
+def _access_paths(
+    memory: EngramMemory,
+    tool_calls: list[_ToolCall],
+    content_prefix: str = "core",
+) -> list[str]:
     seen: set[str] = set()
     for tc in tool_calls:
         if tc.name == "read_file":
             arg_path = tc.args.get("path") or tc.args.get("file_path")
             if not arg_path:
                 continue
-            namespace = _access_namespace(str(arg_path))
+            namespace = _access_namespace(str(arg_path), content_prefix)
             if namespace:
                 seen.add(f"{namespace}/ACCESS.jsonl")
+        elif tc.name in _PLAN_TOOL_ACTIONS:
+            seen.add("memory/working/projects/ACCESS.jsonl")
     for ev in memory.recall_events:
-        namespace = _access_namespace(ev.file_path)
+        if getattr(ev, "phase", "manifest") == "fetch":
+            continue
+        namespace = _access_namespace(ev.file_path, content_prefix)
         if namespace:
             seen.add(f"{namespace}/ACCESS.jsonl")
     return sorted(seen)
@@ -459,6 +655,8 @@ def _emit_access_entries(
     memory: EngramMemory,
     tool_calls: list[_ToolCall],
     stats: _SessionStats,
+    *,
+    content_prefix: str = "core",
 ) -> int:
     """Append ACCESS entries for every read of a file under an access-tracked root."""
     entries_by_file: dict[Path, list[dict[str, Any]]] = defaultdict(list)
@@ -466,6 +664,10 @@ def _emit_access_entries(
     # match the existing (file, session_id, date) dedupe key.
     access_date = stats.session_date or datetime.now().date().isoformat()
     task_slug = _task_slug(stats.task) or memory.session_id
+    _prefix = content_prefix.strip("/")
+    canonical_session_id = (
+        f"{_prefix}/{memory._session_dir_rel()}" if _prefix else memory._session_dir_rel()
+    )
 
     for idx, tc in enumerate(tool_calls):
         if tc.name != "read_file":
@@ -473,22 +675,44 @@ def _emit_access_entries(
         arg_path = tc.args.get("path") or tc.args.get("file_path")
         if not arg_path:
             continue
-        access_dir_rel = _access_namespace(str(arg_path))
+        access_dir_rel = _access_namespace(str(arg_path), content_prefix)
         if not access_dir_rel:
             continue
         helpfulness, note = _derive_read_helpfulness(str(arg_path), idx, tool_calls)
         entry = {
-            "file": _normalize_for_access(str(arg_path)),
+            "file": _normalize_for_access(str(arg_path), content_prefix),
             "date": access_date,
             "task": task_slug,
             "helpfulness": round(helpfulness, 3),
             "note": note,
-            "session_id": memory.session_id,
+            "session_id": canonical_session_id,
         }
         access_path = memory.content_root / access_dir_rel / "ACCESS.jsonl"
         entries_by_file[access_path].append(entry)
 
+    for tc in tool_calls:
+        action = _PLAN_TOOL_ACTIONS.get(tc.name)
+        if not action:
+            continue
+        plan_id = str(tc.args.get("plan_id") or "").strip()
+        if not plan_id:
+            continue
+        project_id = (str(tc.args.get("project_id") or "").strip()) or "misc-plans"
+        plan_rel = f"memory/working/projects/{project_id}/plans/{plan_id}"
+        entry = {
+            "file": plan_rel,
+            "date": access_date,
+            "task": task_slug,
+            "helpfulness": 0.5,
+            "note": f"plan tool: {action}",
+            "session_id": canonical_session_id,
+        }
+        access_path = memory.content_root / "memory" / "working" / "projects" / "ACCESS.jsonl"
+        entries_by_file[access_path].append(entry)
+
     for ev in memory.recall_events:
+        if getattr(ev, "phase", "manifest") == "fetch":
+            continue  # skip fetch-phase duplicates; manifest already registered this access
         access_dir_rel = _access_namespace(ev.file_path)
         if not access_dir_rel:
             continue
@@ -499,7 +723,7 @@ def _emit_access_entries(
             "task": task_slug,
             "helpfulness": round(helpfulness, 3),
             "note": f"recall: {note}",
-            "session_id": memory.session_id,
+            "session_id": canonical_session_id,
         }
         access_path = memory.content_root / access_dir_rel / "ACCESS.jsonl"
         entries_by_file[access_path].append(entry)
@@ -565,31 +789,34 @@ def _sidecar_dedupe_entries(
 # ---------------------------------------------------------------------------
 
 
-def _access_namespace(file_path: str) -> str | None:
+def _access_namespace(file_path: str, content_prefix: str = "core") -> str | None:
     """Map a file path to its ACCESS-tracked namespace directory.
 
     Accepts:
       - content-root-relative paths (`memory/knowledge/foo.md`)
-      - git-root-relative paths (`core/memory/knowledge/foo.md`)
+      - git-root-relative paths (`{content_prefix}/memory/knowledge/foo.md`)
       - absolute paths under the content root
     """
     norm = _norm(file_path).strip("/")
-    # Strip a leading `core/` if present so we match against memory/...
-    if norm.startswith("core/"):
-        norm = norm[len("core/") :]
+    prefix = content_prefix.strip("/")
+    if prefix and norm.startswith(prefix + "/"):
+        norm = norm[len(prefix) + 1 :]
     for root in _ACCESS_ROOTS:
         if norm == root or norm.startswith(root + "/"):
             return root
     return None
 
 
-def _normalize_for_access(file_path: str) -> str:
-    """Always store ACCESS file paths with the `core/` prefix to match engram's convention."""
+def _normalize_for_access(file_path: str, content_prefix: str = "core") -> str:
+    """Store ACCESS file paths with the content_prefix to match the repo's convention."""
     norm = _norm(file_path).strip("/")
-    if norm.startswith("core/"):
+    prefix = content_prefix.strip("/")
+    if not prefix:
         return norm
+    if norm.startswith(prefix + "/"):
+        return norm  # already prefixed
     if norm.startswith("memory/"):
-        return f"core/{norm}"
+        return f"{prefix}/{norm}"
     return norm
 
 

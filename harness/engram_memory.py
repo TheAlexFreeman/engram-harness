@@ -88,6 +88,7 @@ class _RecallEvent:
     timestamp: datetime
     trust: str = ""
     score: float = 0.0
+    phase: str = "manifest"  # "manifest" (first call) or "fetch" (follow-up by index)
 
 
 class EngramMemory:
@@ -126,6 +127,7 @@ class EngramMemory:
         prefix, content_root = _resolve_content_root(repo_root, content_prefix)
         self.repo_root = repo_root
         self.content_root: Path = content_root
+        self.content_prefix: str = prefix  # git-relative prefix, e.g. "core", "", "engram/core"
 
         # GitRepo derives its own root via `git rev-parse`; we only use the
         # content_prefix to translate paths. Pass the *git-root-relative* prefix.
@@ -181,15 +183,20 @@ class EngramMemory:
         if relevant:
             sections.append(relevant)
 
+        active_plan = self._active_plan_briefing()
+        if active_plan:
+            sections.append(active_plan)
+
         return "".join(sections)
 
-    def recall(self, query: str, k: int = 5) -> list[Memory]:
+    def recall(self, query: str, k: int = 5, *, namespace: str | None = None) -> list[Memory]:
         q = (query or "").strip()
         if not q:
             return []
-        hits = self._semantic_recall(q, k=k) if self._embed_enabled else []
+        scopes = (f"memory/{namespace}",) if namespace else _SEARCH_SCOPES
+        hits = self._semantic_recall(q, k=k, scopes=scopes) if self._embed_enabled else []
         if not hits:
-            hits = self._keyword_recall(q, k=k)
+            hits = self._keyword_recall(q, k=k, scopes=scopes)
 
         results: list[Memory] = []
         now = datetime.now()
@@ -231,7 +238,7 @@ class EngramMemory:
     def record(self, content: str, kind: str = "note") -> None:
         self._records.append(_BufferedRecord(timestamp=datetime.now(), kind=kind, content=content))
 
-    def end_session(self, summary: str) -> None:
+    def end_session(self, summary: str, *, skip_commit: bool = False) -> None:
         rel_dir = self._session_dir_rel()
         summary_rel = f"{rel_dir}/summary.md"
         summary_abs = self.content_root / summary_rel
@@ -284,15 +291,29 @@ class EngramMemory:
         }
         write_with_frontmatter(summary_abs, fm, body)
 
+        if not skip_commit:
+            try:
+                self.repo.add(summary_rel)
+                if self.repo.has_staged_changes(summary_rel):
+                    self.repo.commit(
+                        f"[chat] harness session {self.session_id}",
+                        paths=[summary_rel],
+                    )
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("Failed to commit session summary: %s", exc)
+
+    def commit(self, message: str, paths: list[str]) -> None:
+        """Stage and commit content-relative paths to the Engram repo.
+
+        Silently logs and returns on any git error so callers don't need to
+        guard against read-only or detached-HEAD repos.
+        """
         try:
-            self.repo.add(summary_rel)
-            if self.repo.has_staged_changes(summary_rel):
-                self.repo.commit(
-                    f"[chat] harness session {self.session_id}",
-                    paths=[summary_rel],
-                )
+            self.repo.add(*paths)
+            if self.repo.has_staged_changes(*paths):
+                self.repo.commit(f"[plan] {message}", paths=paths)
         except Exception as exc:  # noqa: BLE001
-            _log.warning("Failed to commit session summary: %s", exc)
+            _log.warning("Failed to commit plan state (%s): %s", message, exc)
 
     # ------------------------------------------------------------------
     # Helpers exposed to the trace bridge
@@ -309,6 +330,11 @@ class EngramMemory:
     @property
     def buffered_records(self) -> list[_BufferedRecord]:
         return list(self._records)
+
+    def _tag_last_recall_phase(self, n: int, phase: str) -> None:
+        """Tag the last *n* recall events with *phase* ('manifest' or 'fetch')."""
+        for ev in self._recall_events[-n:]:
+            ev.phase = phase
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -342,6 +368,38 @@ class EngramMemory:
     def _session_dir_rel(self) -> str:
         return f"memory/activity/{self._session_path_fragment()}/{self.session_id}"
 
+    def _active_plan_briefing(self, max_chars: int = 2000) -> str:
+        """Return a brief briefing for the most recently active plan, if any."""
+        try:
+            from harness.tools.plan_tools import _load_plan_yaml, _load_run_state, find_active_plans
+        except ImportError:
+            return ""
+        active = find_active_plans(self.content_root)
+        if not active:
+            return ""
+        plan_dir = active[0]
+        try:
+            state = _load_run_state(plan_dir)
+            plan = _load_plan_yaml(plan_dir)
+        except (FileNotFoundError, Exception):
+            return ""
+        plan_id = state.get("plan_id", plan_dir.name)
+        title = plan.get("title", "?")
+        phases: list[dict] = plan.get("phases", [])
+        current_idx = int(state.get("current_phase", 0))
+        phase_name = phases[current_idx]["name"] if current_idx < len(phases) else "?"
+        rel = plan_dir.relative_to(self.content_root).as_posix()
+        lines = [
+            "\n## Active plan detected",
+            "",
+            f"**{plan_id}** — {title}",
+            f"Current phase ({current_idx + 1}/{len(phases)}): {phase_name}",
+            f"Path: `{rel}/`",
+            "",
+            "Call `resume_plan` with the plan_id above to get a full briefing and continue.",
+        ]
+        return "\n".join(lines) + "\n"
+
     def _task_relevant_excerpt(self, task: str, *, char_budget: int) -> str:
         if char_budget <= 200:
             return ""
@@ -362,7 +420,9 @@ class EngramMemory:
 
     # ---- recall backends -------------------------------------------------
 
-    def _semantic_recall(self, query: str, *, k: int) -> list[dict[str, Any]]:
+    def _semantic_recall(
+        self, query: str, *, k: int, scopes: tuple[str, ...] = _SEARCH_SCOPES
+    ) -> list[dict[str, Any]]:
         if not self._embed_enabled:
             return []
         try:
@@ -379,6 +439,8 @@ class EngramMemory:
         for r in results:
             fp = r["file_path"]
             if fp in seen:
+                continue
+            if not any(fp.startswith(s) for s in scopes):
                 continue
             seen.add(fp)
             out.append(
@@ -401,12 +463,14 @@ class EngramMemory:
             self._embed_index = EmbeddingIndex(self.repo.root, self.content_root)
         return self._embed_index
 
-    def _keyword_recall(self, query: str, *, k: int) -> list[dict[str, Any]]:
+    def _keyword_recall(
+        self, query: str, *, k: int, scopes: tuple[str, ...] = _SEARCH_SCOPES
+    ) -> list[dict[str, Any]]:
         tokens = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 2]
         if not tokens:
             return []
         candidates: list[tuple[float, Path, str]] = []
-        for scope in _SEARCH_SCOPES:
+        for scope in scopes:
             scope_dir = self.content_root / scope
             if not scope_dir.is_dir():
                 continue
@@ -480,6 +544,7 @@ def _git_relative_prefix(content_root: Path) -> str:
         cwd=str(content_root if content_root.is_dir() else content_root.parent),
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     if result.returncode != 0:
         raise ValueError(f"Not inside a git repo: {content_root}")

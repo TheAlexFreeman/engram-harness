@@ -1,3 +1,10 @@
+---
+source: agent-generated
+origin_session: manual
+created: 2026-04-21
+trust: medium
+---
+
 # External Skill Sources
 
 `core/memory/skills/_external/` is the human-visible staging area for notes, imported bundles, or operator-curated artifacts related to skills that originate outside the current vault.

@@ -97,6 +97,59 @@ def test_null_stream_sink_is_callable_and_silent():
     sink.on_text_delta("x")
     sink.on_reasoning_delta("y")
     sink.on_tool_args_delta("z", index=0, call_id="c", name="n")
+    sink.on_search_status(
+        "searching",
+        kind="web_search_call",
+        output_index=1,
+        item_id="ws1",
+    )
+    sink.on_annotation(
+        {"type": "url_citation", "title": "T", "url": "https://x.example"},
+        output_index=0,
+    )
     sink.on_block_end("text", index=0)
     sink.on_error(RuntimeError("ok"))
     sink.flush()
+
+
+def test_search_status_lines_use_search_header_prefix():
+    out = _render(
+        [
+            (
+                "on_search_status",
+                {
+                    "phase": "searching",
+                    "kind": "web_search_call",
+                    "output_index": 2,
+                    "item_id": "i1",
+                },
+            ),
+        ]
+    )
+    assert "[search:web]" in out
+    assert "searching" in out
+    assert "idx=2" in out
+    assert "i1" in out
+
+
+def test_annotation_line_shows_title_and_url():
+    out = _render(
+        [
+            (
+                "on_annotation",
+                {
+                    "annotation": {
+                        "type": "url_citation",
+                        "title": "Docs",
+                        "url": "https://example.com",
+                    },
+                    "output_index": 0,
+                    "annotation_index": 1,
+                },
+            ),
+        ]
+    )
+    assert "[citation" in out
+    assert "Docs" in out
+    assert "example.com" in out
+    assert "ann=1" in out

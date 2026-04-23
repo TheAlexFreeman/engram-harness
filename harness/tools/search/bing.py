@@ -14,12 +14,16 @@ _DEFAULT_BING_ENDPOINT = "https://api.bing.microsoft.com/v7.0/search"
 
 class BingBackend:
     def __init__(self, api_key: str | None = None, endpoint: str | None = None):
-        key = (api_key if api_key is not None else os.environ.get("AZURE_BING_SEARCH_KEY", "")).strip()
+        key = (
+            api_key if api_key is not None else os.environ.get("AZURE_BING_SEARCH_KEY", "")
+        ).strip()
         if not key:
             raise ValueError(
                 "Bing search requires AZURE_BING_SEARCH_KEY in the environment (or pass api_key=...)."
             )
-        ep = (endpoint if endpoint is not None else os.environ.get("AZURE_BING_SEARCH_ENDPOINT", "")).strip()
+        ep = (
+            endpoint if endpoint is not None else os.environ.get("AZURE_BING_SEARCH_ENDPOINT", "")
+        ).strip()
         self._endpoint = ep or _DEFAULT_BING_ENDPOINT
         self._api_key = key
 

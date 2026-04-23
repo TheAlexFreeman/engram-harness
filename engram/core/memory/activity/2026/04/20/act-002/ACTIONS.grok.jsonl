@@ -1,0 +1,5 @@
+{"ts": "2026-04-20T19:33:08.744", "kind": "session_start", "task": "What's the news on X today?"}
+{"ts": "2026-04-20T19:33:35.961", "kind": "model_response", "turn": 0}
+{"ts": "2026-04-20T19:33:35.961", "kind": "usage", "turn": 0, "model": "grok-4.20", "input_tokens": 33266, "output_tokens": 3260, "cache_read_tokens": 19840, "cache_write_tokens": 0, "reasoning_tokens": 2668, "server_search_calls": 0, "server_sources": 0, "input_cost_usd": 0.099798, "output_cost_usd": 0.0489, "cache_read_cost_usd": 0.0, "cache_write_cost_usd": 0.0, "search_cost_usd": 0.0, "total_cost_usd": 0.148698, "pricing_missing": false, "missing_models": []}
+{"ts": "2026-04-20T19:33:36.108", "kind": "session_usage", "model": "", "input_tokens": 33266, "output_tokens": 3260, "cache_read_tokens": 19840, "cache_write_tokens": 0, "reasoning_tokens": 2668, "server_search_calls": 0, "server_sources": 0, "input_cost_usd": 0.099798, "output_cost_usd": 0.0489, "cache_read_cost_usd": 0.0, "cache_write_cost_usd": 0.0, "search_cost_usd": 0.0, "total_cost_usd": 0.148698, "pricing_missing": false, "missing_models": []}
+{"ts": "2026-04-20T19:33:36.108", "kind": "session_end", "turns": 1}

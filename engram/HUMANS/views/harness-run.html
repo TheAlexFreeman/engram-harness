@@ -298,7 +298,7 @@ pre.json-block.error { border-color: rgba(211,95,74,0.4); }
 
   // ── Metadata ──
   function loadMeta() {
-    return H.api('/api/runs/' + encodeURIComponent(runId)).then(function (d) {
+    return H.api('/sessions/' + encodeURIComponent(runId)).then(function (d) {
       runMeta = d;
       renderMeta();
       return d;
@@ -309,13 +309,10 @@ pre.json-block.error { border-color: rgba(211,95,74,0.4); }
 
   function renderMeta() {
     if (!runMeta) return;
-    document.title = 'Harness — ' + (runMeta.task || runMeta.id);
+    document.title = 'Harness — ' + (runMeta.task || runMeta.session_id);
     $runTask.textContent = runMeta.task || '(no task)';
 
-    var subtitleParts = [];
-    subtitleParts.push('id ' + runMeta.id);
-    if (runMeta.pid) subtitleParts.push('pid ' + runMeta.pid);
-    $runSubtitle.textContent = subtitleParts.join('  ·  ');
+    $runSubtitle.textContent = 'id ' + runMeta.session_id;
 
     $metaRow.innerHTML = '';
     var statusWrap = H.el('span');
@@ -331,12 +328,16 @@ pre.json-block.error { border-color: rgba(211,95,74,0.4); }
     }
     addMeta('model', runMeta.model);
     addMeta('mode', runMeta.mode);
-    addMeta('turns', runMeta.turns);
-    addMeta('tool_calls', runMeta.tool_calls);
-    if (runMeta.tool_errors) addMeta('tool_errors', runMeta.tool_errors);
-    addMeta('started', runMeta.started_at ? H.fmtRelative(runMeta.started_at) : null);
+    addMeta('turns', runMeta.turns_used);
+    var tcCount = Array.isArray(runMeta.tool_calls) ? runMeta.tool_calls.length : (runMeta.tool_calls || 0);
+    if (tcCount) addMeta('tool_calls', tcCount);
+    var tcErrors = Array.isArray(runMeta.tool_calls)
+      ? runMeta.tool_calls.filter(function (tc) { return tc.is_error; }).length
+      : 0;
+    if (tcErrors) addMeta('tool_errors', tcErrors);
+    addMeta('started', runMeta.created_at ? H.fmtRelative(runMeta.created_at) : null);
 
-    $btnCancel.style.display = (runMeta.status === 'running') ? '' : 'none';
+    $btnCancel.style.display = (runMeta.status === 'running' || runMeta.status === 'idle') ? '' : 'none';
   }
 
   // ── Tool call / result pairing ──
@@ -538,6 +539,14 @@ pre.json-block.error { border-color: rgba(211,95,74,0.4); }
   }
 
   // ── SSE ──
+  // Trace event kinds emitted by the harness server. Each arrives as a named
+  // SSE event (e.g. "event: tool_call") with data wrapped in an SSEEvent envelope:
+  // { channel, event, data, ts }. We flatten it to { kind, ts, ...data }.
+  var TRACE_KINDS = [
+    'session_start', 'model_response', 'tool_dispatch',
+    'tool_call', 'tool_result', 'usage', 'session_end', 'native_search_call'
+  ];
+
   function connectSSE() {
     if (eventSource) {
       try { eventSource.close(); } catch (e) {}
@@ -547,7 +556,7 @@ pre.json-block.error { border-color: rgba(211,95,74,0.4); }
     $connStatus.querySelector('.dot').classList.remove('disconnected', 'connected');
     $connStatus.querySelector('.dot').classList.add('connecting');
 
-    var es = new EventSource('/api/runs/' + encodeURIComponent(runId) + '/stream?after=0');
+    var es = new EventSource('/sessions/' + encodeURIComponent(runId) + '/events');
     eventSource = es;
 
     es.addEventListener('open', function () {
@@ -555,34 +564,40 @@ pre.json-block.error { border-color: rgba(211,95,74,0.4); }
       clearError();
     });
 
-    es.addEventListener('trace', function (e) {
-      var offset = Number(e.lastEventId);
-      if (!isFinite(offset)) offset = events.length;
-      if (eventByOffset[offset] !== undefined) return;  // dedupe on reconnect
-      try {
-        var ev = JSON.parse(e.data);
-        ingestEvent(ev, offset);
-        appendTimelineRow(events.length - 1);
-      } catch (err) {
-        console.warn('malformed trace event', err, e.data);
-      }
+    // Unwrap the SSEEvent envelope and ingest as a flat trace event.
+    TRACE_KINDS.forEach(function (kind) {
+      es.addEventListener(kind, function (e) {
+        try {
+          var wrapper = JSON.parse(e.data);
+          var ev = Object.assign({ kind: wrapper.event, ts: wrapper.ts }, wrapper.data || {});
+          var offset = events.length;
+          ingestEvent(ev, offset);
+          appendTimelineRow(events.length - 1);
+        } catch (err) {
+          console.warn('malformed trace event', err, e.data);
+        }
+      });
     });
 
-    es.addEventListener('end', function (e) {
+    // Control events — session completed or errored.
+    es.addEventListener('done', function () {
       H.setConnStatus($connStatus, false, 'stream ended');
-      try {
-        var end = JSON.parse(e.data);
-        console.info('stream end', end);
-      } catch (_) {}
       try { es.close(); } catch (_) {}
       eventSource = null;
-      // Refresh metadata so status pill flips to done/error.
       loadMeta();
     });
 
-    es.addEventListener('error', function () {
-      // Browser will auto-reconnect; just reflect state.
-      H.setConnStatus($connStatus, false, 'reconnecting…');
+    es.addEventListener('error', function (e) {
+      if (e.data) {
+        // Server-sent control error event.
+        H.setConnStatus($connStatus, false, 'stream error');
+        try { es.close(); } catch (_) {}
+        eventSource = null;
+        loadMeta();
+      } else {
+        // Browser network error — EventSource will auto-reconnect.
+        H.setConnStatus($connStatus, false, 'reconnecting…');
+      }
     });
   }
 
@@ -608,7 +623,7 @@ pre.json-block.error { border-color: rgba(211,95,74,0.4); }
   $btnCancel.addEventListener('click', function () {
     if (!confirm('Cancel this run? The subprocess will receive SIGTERM.')) return;
     $btnCancel.disabled = true;
-    H.api('/api/runs/' + encodeURIComponent(runId) + '/cancel', { method: 'POST' })
+    H.api('/sessions/' + encodeURIComponent(runId) + '/stop', { method: 'POST' })
       .then(function () { loadMeta(); })
       .catch(function (err) { showError('Cancel failed: ' + err.message); })
       .then(function () { $btnCancel.disabled = false; });
@@ -621,7 +636,7 @@ pre.json-block.error { border-color: rgba(211,95,74,0.4); }
     } else {
       // Only reconnect if run is still live.
       loadMeta().then(function () {
-        if (runMeta && runMeta.status === 'running') connectSSE();
+        if (runMeta && (runMeta.status === 'running' || runMeta.status === 'idle')) connectSSE();
       });
     }
   });

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import importlib.util
 import os
 import re
@@ -12,6 +13,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VALIDATOR_PATH = REPO_ROOT / "HUMANS" / "tooling" / "scripts" / "validate_memory_repo.py"
+MANIFEST_GENERATOR_PATH = (
+    REPO_ROOT / "HUMANS" / "tooling" / "scripts" / "generate_initial_commit_manifest.py"
+)
+ENGRAM_OVERLAY_FIXTURE = REPO_ROOT / "core" / "tools" / "tests" / "fixtures" / "engram-overlay"
 
 SPEC = importlib.util.spec_from_file_location("validate_memory_repo", VALIDATOR_PATH)
 assert SPEC is not None
@@ -19,6 +24,16 @@ validator = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 sys.modules.setdefault("validate_memory_repo", validator)
 SPEC.loader.exec_module(validator)
+
+MANIFEST_SPEC = importlib.util.spec_from_file_location(
+    "generate_initial_commit_manifest",
+    MANIFEST_GENERATOR_PATH,
+)
+assert MANIFEST_SPEC is not None
+manifest_generator = importlib.util.module_from_spec(MANIFEST_SPEC)
+assert MANIFEST_SPEC.loader is not None
+sys.modules.setdefault("generate_initial_commit_manifest", manifest_generator)
+MANIFEST_SPEC.loader.exec_module(manifest_generator)
 
 
 def find_bash() -> str | None:
@@ -49,7 +64,6 @@ def build_setup_repo(root: Path) -> None:
         "README.md",
         "CHANGELOG.md",
         "agent-bootstrap.toml",
-        "pyproject.toml",
         "setup.sh",
         "setup.html",
         "AGENTS.md",
@@ -62,7 +76,6 @@ def build_setup_repo(root: Path) -> None:
 
     for dirname in (
         ".codex",
-        ".github",
         ".vscode",
         "core",
         "HUMANS",
@@ -72,6 +85,22 @@ def build_setup_repo(root: Path) -> None:
             root / dirname,
             ignore=shutil.ignore_patterns("__pycache__"),
         )
+
+    # Overlay fixtures for files the merged engram-harness layout no longer
+    # ships at engram/ (engram-only pyproject.toml and the engram-standalone
+    # .github/workflows/). The overlay represents what a standalone engram
+    # checkout would carry, so setup-flow tests remain layout-independent.
+    _copy_overlay(ENGRAM_OVERLAY_FIXTURE, root)
+
+
+def _copy_overlay(src: Path, dst: Path) -> None:
+    for entry in src.iterdir():
+        target = dst / entry.name
+        if entry.is_dir():
+            shutil.copytree(entry, target, dirs_exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(entry, target)
 
 
 def read_initial_commit_manifest(root: Path) -> list[str]:
@@ -564,29 +593,47 @@ class SetupFlowTests(unittest.TestCase):
         self.assertNotIn("C:\\\\path\\\\to\\\\python.exe", browser_text)
 
     def test_initial_commit_manifest_matches_tracked_repo_paths(self) -> None:
-        manifest_paths = set(read_initial_commit_manifest(REPO_ROOT))
-        tracked_paths = set(
-            subprocess.run(
-                ["git", "ls-files"],
-                cwd=REPO_ROOT,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.splitlines()
-        )
+        manifest_path = REPO_ROOT / "HUMANS" / "setup" / "initial-commit-paths.txt"
+        existing_text = manifest_path.read_text(encoding="utf-8")
+        rendered = manifest_generator.render_manifest(REPO_ROOT, existing_text)
 
-        expected_seed_paths = tracked_paths | {"HUMANS/setup/initial-commit-paths.txt"}
+        if existing_text != rendered:
+            diff = "\n".join(
+                difflib.unified_diff(
+                    existing_text.splitlines(),
+                    rendered.splitlines(),
+                    fromfile="checked-in",
+                    tofile="rendered",
+                    lineterm="",
+                )
+            )
+            self.fail(f"initial commit manifest is stale:\n{diff}")
 
-        self.assertTrue(
-            expected_seed_paths.issubset(manifest_paths),
-            "initial commit manifest is missing tracked seed paths",
-        )
-
+        manifest_paths = read_initial_commit_manifest(REPO_ROOT)
         for relative_path in manifest_paths:
             self.assertTrue(
                 (REPO_ROOT / relative_path).exists(),
                 f"manifest path does not exist: {relative_path}",
             )
+
+    def test_initial_commit_manifest_check_is_cwd_invariant(self) -> None:
+        in_repo = subprocess.run(
+            [sys.executable, str(MANIFEST_GENERATOR_PATH), "--check"],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        from_parent = subprocess.run(
+            [sys.executable, str(MANIFEST_GENERATOR_PATH), str(REPO_ROOT), "--check"],
+            cwd=REPO_ROOT.parent,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertIn("is up to date", in_repo.stdout)
+        self.assertIn("is up to date", from_parent.stdout)
 
     def test_setup_initial_commit_excludes_unrelated_local_files_and_generated_prompts(
         self,
