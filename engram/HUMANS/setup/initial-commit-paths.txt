@@ -987,15 +987,12 @@ core/tools/tests/test_multi_user_env_identity.py
 core/tools/tests/test_multi_user_working_namespace.py
 core/tools/tests/test_plan_schema_extensions.py
 core/tools/tests/test_plan_validation.py
-core/tools/tests/test_proxy_checkpoint.py
 core/tools/tests/test_proxy_cli.py
 core/tools/tests/test_proxy_core.py
-core/tools/tests/test_proxy_flush.py
 core/tools/tests/test_proxy_injection.py
 core/tools/tests/test_search_freshness.py
 core/tools/tests/test_semantic_search.py
 core/tools/tests/test_server_main.py
-core/tools/tests/test_session_lifecycle.py
 core/tools/tests/test_session_state.py
 core/tools/tests/test_sidecar_capture.py
 core/tools/tests/test_sidecar_cli.py

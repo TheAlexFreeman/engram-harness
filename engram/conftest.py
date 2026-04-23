@@ -48,12 +48,7 @@ def _is_engram_git_root() -> bool:
 
 # Tests skipped when engram is not the git root. Match by node-id substring so
 # class-level entries cover every method on the class.
-_MERGER_SKIPS: tuple[str, ...] = (
-    # Time-sensitive test with a hardcoded 'Last periodic review' date that
-    # drifts past the 30-day threshold. Not layout-dependent; left skipped
-    # to avoid flakiness until the test is reworked with time-machine.
-    "test_agent_memory_mcp_write_tools.py::AgentMemoryWriteToolTests::test_memory_session_health_check_reports_due_aggregation",
-)
+_MERGER_SKIPS: tuple[str, ...] = ()
 
 
 def pytest_collection_modifyitems(

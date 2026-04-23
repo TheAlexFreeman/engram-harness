@@ -144,8 +144,8 @@ class MemoryMCPTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["default_tool_profile"], "guided_write")
         self.assertFalse(payload["summary"]["dynamic_profile_switching"])
         self.assertFalse(payload["summary"]["list_changed_supported"])
-        self.assertGreaterEqual(payload["summary"]["resource_count"], 4)
-        self.assertGreaterEqual(payload["summary"]["prompt_count"], 4)
+        self.assertGreaterEqual(payload["summary"]["resource_count"], 3)
+        self.assertGreaterEqual(payload["summary"]["prompt_count"], 3)
 
     def test_get_capabilities_summary_reports_registered_tool_count(self) -> None:
         async def run_call() -> tuple[dict[str, Any], int]:
@@ -178,28 +178,6 @@ class MemoryMCPTests(unittest.TestCase):
             [],
             msg="Manifest lists tools with no MCP registration (excluding raw_fallback when Tier 2 is disabled).",
         )
-
-    def test_get_tool_profiles_returns_expanded_advisory_profiles(self) -> None:
-        raw = asyncio.run(self.module.memory_get_tool_profiles())
-        envelope = json.loads(raw)
-        payload = envelope["result"]
-
-        self.assertIn("_session", envelope)
-        self.assertEqual(payload["default_profile"], "guided_write")
-        self.assertFalse(payload["dynamic_runtime_switching"])
-        self.assertFalse(payload["list_changed_supported"])
-        self.assertIn("full", payload["profiles"])
-        self.assertIn("guided_write", payload["profiles"])
-        self.assertIn("read_only", payload["profiles"])
-        self.assertIn("memory_get_capabilities", payload["profiles"]["read_only"]["tools"])
-        self.assertNotIn("memory_reset_session_state", payload["profiles"]["read_only"]["tools"])
-        self.assertNotIn("memory_session_flush", payload["profiles"]["read_only"]["tools"])
-        self.assertIn("memory_reset_session_state", payload["profiles"]["guided_write"]["tools"])
-        self.assertIn("memory_session_flush", payload["profiles"]["guided_write"]["tools"])
-        self.assertNotIn("memory_write", payload["profiles"]["guided_write"]["tools"])
-        self.assertIn("memory_write", payload["profiles"]["full"]["tools"])
-        self.assertIn("memory_reset_session_state", payload["profiles"]["full"]["tools"])
-        self.assertIn("memory_session_flush", payload["profiles"]["full"]["tools"])
 
     def test_plan_schema_returns_structured_payload(self) -> None:
         raw = asyncio.run(self.module.memory_plan_schema())
@@ -287,36 +265,6 @@ class MemoryMCPTests(unittest.TestCase):
         )
 
         self.assertEqual(unsafe, [])
-
-    def test_policy_state_covers_session_maintenance_tools(self) -> None:
-        async def run_call() -> tuple[dict[str, Any], dict[str, Any]]:
-            flush = cast(
-                dict[str, Any],
-                self._load_tool_payload(
-                    await self.module.memory_get_policy_state(operation="memory_session_flush")
-                ),
-            )
-            reset = cast(
-                dict[str, Any],
-                self._load_tool_payload(
-                    await self.module.memory_get_policy_state(
-                        operation="memory_reset_session_state"
-                    )
-                ),
-            )
-            return flush, reset
-
-        flush, reset = asyncio.run(run_call())
-
-        for payload, tool_name in (
-            (flush, "memory_session_flush"),
-            (reset, "memory_reset_session_state"),
-        ):
-            self.assertEqual(payload["operation"], tool_name)
-            self.assertEqual(payload["tool"], tool_name)
-            self.assertEqual(payload["tier"], "semantic")
-            self.assertEqual(payload["change_class"], "automatic")
-            self.assertEqual(payload["warnings"], [])
 
     def test_mcp_registration_includes_approval_and_registry_tools(self) -> None:
         async def run_call() -> set[str]:
@@ -416,37 +364,6 @@ class MemoryMCPTests(unittest.TestCase):
         self.assertIn("generated_at", active_payload)
         self.assertIn("active_plan_count", active_payload)
         self.assertIn("plans", active_payload)
-
-    def test_native_prompts_enumerate_and_render(self) -> None:
-        async def run_call() -> tuple[list[str], Any, Any]:
-            prompts = await self.module.mcp.list_prompts()
-            prompt_names = [str(prompt.name) for prompt in prompts]
-            review_prompt = await self.module.mcp.get_prompt(
-                "memory_prepare_unverified_review_prompt",
-                {
-                    "folder_path": "memory/knowledge/_unverified",
-                    "max_files": 2,
-                    "max_extract_words": 20,
-                },
-            )
-            wrap_up_prompt = await self.module.mcp.get_prompt(
-                "memory_session_wrap_up_prompt",
-                {"session_id": "session-123", "key_topics": "routing,preview"},
-            )
-            return prompt_names, review_prompt, wrap_up_prompt
-
-        prompt_names, review_prompt, wrap_up_prompt = asyncio.run(run_call())
-
-        self.assertIn("memory_prepare_unverified_review_prompt", prompt_names)
-        self.assertIn("memory_governed_promotion_preview_prompt", prompt_names)
-        self.assertIn("memory_prepare_periodic_review_prompt", prompt_names)
-        self.assertIn("memory_session_wrap_up_prompt", prompt_names)
-        self.assertEqual(len(review_prompt.messages), 1)
-        self.assertIn("Review Bundle", cast(str, review_prompt.messages[0].content.text))
-        self.assertIn("memory_promote_knowledge", cast(str, review_prompt.messages[0].content.text))
-        self.assertEqual(len(wrap_up_prompt.messages), 1)
-        self.assertIn("Session Wrap-Up Context", cast(str, wrap_up_prompt.messages[0].content.text))
-        self.assertIn("memory_record_session", cast(str, wrap_up_prompt.messages[0].content.text))
 
     def test_new_tools_are_exported(self) -> None:
         for name in (

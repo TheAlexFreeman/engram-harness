@@ -140,7 +140,7 @@ For worktree deployments, set `MEMORY_REPO_ROOT` to the worktree path and `HOST_
 
 ## Tool surface
 
-The MCP server exposes **107 tools by default**: 47 Tier 0 read-only tools plus 60 Tier 1 semantic tools. Enabling `MEMORY_ENABLE_RAW_WRITE_TOOLS=1` adds **7 Tier 2** raw fallback tools for a full surface of **114**. The tier system enforces a deliberate preference order: inspect before mutating, use semantic operations before raw edits, and gate low-level writes behind an explicit opt-in.
+The MCP server exposes **102 tools by default**: 46 Tier 0 read-only tools plus 56 Tier 1 semantic tools. Enabling `MEMORY_ENABLE_RAW_WRITE_TOOLS=1` adds **7 Tier 2** raw fallback tools for a full surface of **109**. The tier system enforces a deliberate preference order: inspect before mutating, use semantic operations before raw edits, and gate low-level writes behind an explicit opt-in.
 
 ### JSON Schema registry (`memory_tool_schema`)
 
@@ -293,7 +293,6 @@ Important output fields:
 
 | Tool | Description |
 | --- | --- |
-| `memory_session_health_check` | Return session-start maintenance status for ACCESS and review queue. |
 | `memory_validate` | Run system integrity checks (frontmatter, structure, ACCESS format). |
 | `memory_access_analytics` | Classify files using curation-policy ACCESS patterns (hot, cold, rising, etc.). |
 | `memory_check_knowledge_freshness` | Check knowledge-file freshness against the configured host repo. |
@@ -305,7 +304,7 @@ Important output fields:
 
 ### Tier 1: Semantic tools
 
-These are the governed semantic operations. Most are the normal write path and usually auto-commit on success. A smaller subset stays read-only while sharing the same operation metadata and policy surface. Exceptions such as `memory_checkpoint` deliberately stage state for a later batch commit. These tools are not generic file-edit tools — each one owns a narrow slice of the memory model and keeps related files in sync.
+These are the governed semantic operations. Most are the normal write path and usually auto-commit on success. A smaller subset stays read-only while sharing the same operation metadata and policy surface. Some tools deliberately stage work for a later commit instead of auto-committing immediately. These tools are not generic file-edit tools — each one owns a narrow slice of the memory model and keeps related files in sync.
 
 **Plans**
 
@@ -556,29 +555,17 @@ Plan statuses now include `paused` (awaiting human approval), in addition to `dr
 
 **Session and activity**
 
+In **engram-harness** mode, the session lifecycle that used to be split across `memory_checkpoint`, `memory_session_flush`, `memory_record_session`, `memory_record_reflection`, and (for some diagnostics) `memory_session_health_check` is handled by the harness **trace bridge** in a single governed commit, so those MCP tools are not registered. Outside a harness, use the remaining semantic tools below and read-only inspection.
+
 | Tool | Description |
 | --- | --- |
-| `memory_checkpoint` | Append a timestamped incremental checkpoint to `CURRENT.md`, optionally tagged with `session_id`. |
-| `memory_session_flush` | Record a committed mid-session recovery checkpoint under the active chat folder when context pressure is too high. |
-| `memory_record_session` | Record a full session: summary, reflection, and access entries. |
 | `memory_record_chat_summary` | Record a single chat session summary to the activity log. |
-| `memory_record_reflection` | Record a session reflection entry. |
 | `memory_log_access` | Log a single memory file access event to ACCESS.jsonl. |
 | `memory_log_access_batch` | Log multiple access events in a batch. |
 | `memory_run_aggregation` | Aggregate hot ACCESS logs into summary updates. |
 | `memory_reset_session_state` | Reset in-process session counters (e.g. identity churn). |
 | `memory_semantic_search` | Hybrid vector + BM25 + freshness + helpfulness search (requires `[search]` extras). |
 | `memory_reindex` | Force rebuild of the semantic search embedding index. |
-
-**`memory_checkpoint` parameters and role**
-
-| Parameter | Type | Description |
-| --- | --- | --- |
-| `content` | str | Required checkpoint body to persist. |
-| `label` | str | Optional heading suffix shown after the timestamp. |
-| `session_id` | str | Optional canonical chat path such as `memory/activity/2026/03/29/chat-001`. |
-
-`memory_checkpoint` is the low-ceremony compaction-defense tool for active work. It appends a timestamped block to `memory/working/CURRENT.md` and stages the file without creating a commit. Prefer it over `memory_append_scratchpad` when you want consistent checkpoint formatting, and prefer it over the heavier mid-session sync protocol when you do not need a chat-folder `checkpoint.md` or a commit yet.
 
 **Scratchpad, skills, and identity**
 
@@ -636,27 +623,25 @@ Hybrid scoring combines four signals with configurable weights (defaults in pare
 
 ## MCP resources
 
-The server exposes four MCP resources — stable read endpoints that clients can bind to without making tool calls:
+The server exposes three MCP resources — stable read endpoints that clients can bind to without making tool calls:
 
 | URI | Backed by | Description |
 | --- | --- | --- |
 | `memory://capabilities/summary` | `memory_get_capabilities` | Load the compact capability and profile snapshot. |
 | `memory://policy/summary` | `memory_get_policy_state` | Inspect change-class, fallback, and profile policy boundaries. |
-| `memory://session/health` | `memory_session_health_check` | Check aggregation pressure, review cadence, and pending queue state. |
 | `memory://plans/active` | `memory_list_plans` | Load a compact summary of active plans and next actions. |
 
 Resources are passive — they provide data the client can read at any time, like a status dashboard. They complement the tools (which perform actions) and prompts (which scaffold workflows).
 
 ## MCP prompts
 
-The server exposes four MCP prompts — reusable workflow scaffolds that guide the agent through recurring multi-step operations:
+The server exposes three MCP prompts — reusable workflow scaffolds that guide the agent through recurring multi-step operations:
 
 | Prompt | Backed by | Description |
 | --- | --- | --- |
 | `memory_prepare_unverified_review_prompt` | `memory_review_unverified` | Guide review of low-trust knowledge before promotion. |
 | `memory_governed_promotion_preview_prompt` | `memory_promote_knowledge_batch` | Structure a governed promotion-preview conversation. |
 | `memory_prepare_periodic_review_prompt` | `memory_prepare_periodic_review` | Guide a protected periodic-review workflow. |
-| `memory_session_wrap_up_prompt` | `memory_record_session` | Guide end-of-session summarization, reflection, and deferred follow-up. |
 
 Prompts are useful for MCP-native clients that support prompt discovery: the client can offer them as one-click workflows, or the agent can invoke them as structured conversation templates.
 

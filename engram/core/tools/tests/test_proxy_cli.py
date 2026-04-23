@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import importlib
 import json
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any, ClassVar, cast
@@ -144,121 +142,3 @@ class ProxyCliTests(unittest.TestCase):
                 "memory/activity/alex/2026/03/29/chat-001"
             )
         )
-
-    def test_sidecar_observer_logs_access_and_finalizes_session(self) -> None:
-        state_path = Path(self._tmpdir.name) / "proxy-state.json"
-        fake_client = _FakeClient()
-
-        async def _run() -> None:
-            config = self.cli_module.load_config(
-                self.cli_module.parse_args(["--repo-root", str(self.repo_root), "--with-sidecar"]),
-                env={"MEMORY_REPO_ROOT": str(self.repo_root)},
-            )
-            observer = self.cli_module.ProxySidecarObserver(
-                config,
-                tool_client=fake_client,
-                state_store=self.cli_module.SidecarStateStore(state_path),
-                loop=asyncio.get_running_loop(),
-            )
-            await observer.start()
-            try:
-                request_body = json.dumps(
-                    {
-                        "model": "gpt-4o-mini",
-                        "messages": [
-                            {"role": "user", "content": "Summarize the topic."},
-                            {
-                                "role": "assistant",
-                                "content": "",
-                                "tool_calls": [
-                                    {
-                                        "id": "call-1",
-                                        "type": "function",
-                                        "function": {
-                                            "name": "memory_read_file",
-                                            "arguments": json.dumps(
-                                                {"path": "memory/knowledge/topic.md"}
-                                            ),
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "role": "tool",
-                                "tool_call_id": "call-1",
-                                "content": json.dumps(
-                                    {
-                                        "path": "memory/knowledge/topic.md",
-                                        "inline": True,
-                                        "content": "Topic details explain lifecycle handling.",
-                                    }
-                                ),
-                            },
-                        ],
-                    }
-                ).encode("utf-8")
-                response_body = json.dumps(
-                    {
-                        "id": "cmpl_123",
-                        "object": "chat.completion",
-                        "choices": [
-                            {
-                                "message": {
-                                    "role": "assistant",
-                                    "content": "The topic explains lifecycle handling.",
-                                }
-                            }
-                        ],
-                    }
-                ).encode("utf-8")
-                observation = self.server_module.ProxyObservation(
-                    observed_at=datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc),
-                    client_host="127.0.0.1",
-                    method="POST",
-                    path="/v1/chat/completions",
-                    format_name="openai",
-                    request_headers={
-                        "Content-Type": "application/json",
-                        "X-Engram-Session-Id": "memory/activity/2026/03/29/chat-070",
-                    },
-                    request_inspection=self.formats_module.inspect_request_body(
-                        "openai", request_body
-                    ),
-                    response_headers={"Content-Type": "application/json"},
-                    response_inspection=self.auto_checkpoint_module.inspect_response_body(
-                        "openai", response_body
-                    ),
-                    status_code=200,
-                    streaming_response=False,
-                )
-                observer.submit(observation)
-                await asyncio.sleep(0.05)
-            finally:
-                await observer.close()
-
-        asyncio.run(_run())
-
-        self.assertEqual(
-            [name for name, _ in fake_client.calls],
-            [
-                "memory_log_access_batch",
-                "memory_check_aggregation_triggers",
-                "memory_record_session",
-            ],
-        )
-        batch_args = fake_client.calls[0][1]
-        self.assertEqual(batch_args["session_id"], "memory/activity/2026/03/29/chat-070")
-        access_entries = cast(list[dict[str, object]], batch_args["access_entries"])
-        self.assertEqual(access_entries[0]["file"], "memory/knowledge/topic.md")
-        record_session_args = fake_client.calls[2][1]
-        self.assertEqual(record_session_args["session_id"], "memory/activity/2026/03/29/chat-070")
-        self.assertIn("Task: Summarize the topic.", cast(str, record_session_args["summary"]))
-        self.assertIn(
-            "Outcome: The topic explains lifecycle handling.",
-            cast(str, record_session_args["summary"]),
-        )
-        self.assertTrue(state_path.exists())
-
-
-if __name__ == "__main__":
-    unittest.main()

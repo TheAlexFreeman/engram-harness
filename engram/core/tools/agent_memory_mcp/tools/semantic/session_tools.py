@@ -5,15 +5,13 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, cast
 
 from ...identity_paths import (
     normalize_user_id,
     resolve_working_scratchpad_target,
-    working_file_path,
 )
 from ...path_policy import (
     KNOWN_COMMIT_PREFIXES,
@@ -402,91 +400,6 @@ def _existing_chat_summary_matches(
     return existing == legacy_expected
 
 
-def _access_entry_signature(payload: dict[str, object]) -> str:
-    comparable = {key: value for key, value in payload.items() if key not in {"date", "user_id"}}
-    return json.dumps(comparable, sort_keys=True, ensure_ascii=False)
-
-
-def _expected_access_entry_signatures(
-    repo,
-    root: Path,
-    *,
-    session_id: str,
-    access_entries: list[dict[str, object]],
-    user_id: str | None,
-    aggregate_validation_errors: bool = False,
-) -> dict[str, Counter[str]]:
-    expected: dict[str, Counter[str]] = {}
-    normalized_entries = _normalize_access_entries(
-        repo,
-        root,
-        access_entries,
-        session_id=session_id,
-        user_id=user_id,
-        aggregate_validation_errors=aggregate_validation_errors,
-    )
-    for access_jsonl, line, _ in normalized_entries:
-        payload = json.loads(line)
-        expected.setdefault(access_jsonl, Counter())[_access_entry_signature(payload)] += 1
-    return expected
-
-
-def _recorded_access_entry_signatures(
-    abs_access: Path,
-    *,
-    session_id: str,
-) -> Counter[str]:
-    recorded: Counter[str] = Counter()
-    if not abs_access.exists():
-        return recorded
-    for raw_line in abs_access.read_text(encoding="utf-8").splitlines():
-        stripped = raw_line.strip()
-        if not stripped:
-            continue
-        try:
-            payload = json.loads(stripped)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(payload, dict) or payload.get("session_id") != session_id:
-            continue
-        recorded[_access_entry_signature(payload)] += 1
-    return recorded
-
-
-def _validate_replayed_access_entries(
-    repo,
-    root: Path,
-    *,
-    session_id: str,
-    access_entries: list[dict[str, object]] | None,
-    user_id: str | None,
-) -> list[str]:
-    from ...errors import ValidationError
-
-    if not access_entries:
-        return []
-
-    expected_by_jsonl = _expected_access_entry_signatures(
-        repo,
-        root,
-        session_id=session_id,
-        access_entries=access_entries,
-        user_id=user_id,
-        aggregate_validation_errors=True,
-    )
-    for access_jsonl, expected_signatures in expected_by_jsonl.items():
-        recorded_signatures = _recorded_access_entry_signatures(
-            root / access_jsonl,
-            session_id=session_id,
-        )
-        for signature, count in expected_signatures.items():
-            if recorded_signatures.get(signature, 0) < count:
-                raise ValidationError(
-                    f"Session {session_id} is already recorded but the provided ACCESS entries do not match the existing log state. Use memory_log_access or memory_log_access_batch for additional retrieval logging."
-                )
-    return sorted(expected_by_jsonl)
-
-
 def _update_chats_summary_index(content: str, session_id: str, recorded_date: str) -> str | None:
     if session_id in content:
         return None
@@ -498,33 +411,6 @@ def _update_chats_summary_index(content: str, session_id: str, recorded_date: st
     if "## Structure" in content:
         return content.replace("## Structure", mention + "\n## Structure", 1)
     return content.rstrip() + mention
-
-
-def _build_reflection_content(reflection: str) -> str:
-    trimmed = reflection.strip()
-    if trimmed.startswith("## "):
-        return trimmed + "\n"
-    return "## Session reflection\n\n" + trimmed + "\n"
-
-
-def _build_structured_reflection_content(
-    memory_retrieved: str,
-    memory_influence: str,
-    outcome_quality: str,
-    gaps_noticed: str,
-    system_observations: str = "",
-) -> str:
-    lines = [
-        "## Session reflection\n",
-        "\n",
-        f"**Memory retrieved:** {memory_retrieved}\n",
-        f"**Memory influence:** {memory_influence}\n",
-        f"**Outcome quality:** {outcome_quality}\n",
-        f"**Gaps noticed:** {gaps_noticed}\n",
-    ]
-    if system_observations:
-        lines.append(f"**System observations:** {system_observations}\n")
-    return "".join(lines)
 
 
 def _iter_dialogue_files(
@@ -1118,42 +1004,6 @@ def _resolve_scratchpad_target(target: str, *, user_id: str | None) -> str:
     return resolve_working_scratchpad_target(target, user_id=user_id)
 
 
-def _format_checkpoint_entry(
-    content: str,
-    *,
-    label: str = "",
-    session_id: str = "",
-    user_id: str = "",
-) -> str:
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M")
-    label_text = label.strip()
-    heading = f"### [{timestamp}] {label_text}".rstrip()
-    lines = [heading]
-    if session_id:
-        lines.append(f"<!-- session_id: {session_id} -->")
-    if user_id:
-        lines.append(f"<!-- user_id: {user_id} -->")
-    body = content.strip()
-    if body:
-        lines.append(body)
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def _count_checkpoint_entries(content: str) -> int:
-    return len(re.findall(r"(?m)^### \[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}\](?: .*)?$", content))
-
-
-def _build_compaction_flush_commit_message(summary: str, *, label: str, trigger: str) -> str:
-    descriptor = label.strip()
-    if not descriptor:
-        descriptor = next((line.strip() for line in summary.splitlines() if line.strip()), "")
-    if not descriptor:
-        descriptor = trigger.replace("_", " ")
-    if len(descriptor) > 72:
-        descriptor = descriptor[:69].rstrip() + "..."
-    return f"[chat] Context-pressure flush - {descriptor}"
-
-
 def _review_item_slug(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return normalized or "review-item"
@@ -1434,175 +1284,6 @@ def register_tools(
         return merge_payload, merge_warnings
 
     @mcp.tool(
-        name="memory_checkpoint",
-        annotations=_tool_annotations(
-            title="Record Checkpoint",
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=False,
-            openWorldHint=False,
-        ),
-    )
-    async def memory_checkpoint(content: str, label: str = "", session_id: str = "") -> str:
-        """Append a timestamped checkpoint entry to the active CURRENT.md scratchpad.
-
-        label and session_id are optional. The write is staged but not
-        committed, so use memory_tool_schema with tool_name="memory_checkpoint"
-        for the full machine-readable contract.
-        """
-        from ...models import MemoryWriteResult
-
-        repo = get_repo()
-        root = get_root()
-
-        if session_state is not None:
-            session_state.record_tool_call()
-        resolved_user_id = _resolved_user_id(session_state)
-        resolved_session_id = (
-            _resolve_session_id_for_user(session_id, resolved_user_id) if session_id else ""
-        )
-
-        rel_path = working_file_path("CURRENT.md", user_id=resolved_user_id)
-        abs_path = root / rel_path
-        abs_path.parent.mkdir(parents=True, exist_ok=True)
-
-        existing = abs_path.read_text(encoding="utf-8") if abs_path.exists() else ""
-        entry = _format_checkpoint_entry(
-            content,
-            label=label,
-            session_id=resolved_session_id,
-            user_id=resolved_user_id or "",
-        )
-        if existing.strip():
-            new_content = existing.rstrip() + "\n\n---\n\n" + entry
-        else:
-            new_content = entry
-
-        abs_path.write_text(new_content, encoding="utf-8")
-        repo.add(rel_path)
-        if session_state is not None:
-            session_state.record_write(rel_path)
-            session_state.record_checkpoint()
-
-        result = MemoryWriteResult(
-            files_changed=[rel_path],
-            commit_sha=None,
-            commit_message=None,
-            new_state={
-                "target": rel_path,
-                "entry_count": _count_checkpoint_entries(new_content),
-                "session_id": resolved_session_id or None,
-                "user_id": resolved_user_id,
-                "staged": True,
-            },
-        )
-        return result.to_json(session_state=session_state)
-
-    @mcp.tool(
-        name="memory_session_flush",
-        annotations=_tool_annotations(
-            title="Record Context-Pressure Flush",
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=False,
-            openWorldHint=False,
-        ),
-    )
-    async def memory_session_flush(
-        summary: str,
-        session_id: str = "",
-        label: str = "",
-        trigger: str = "context_pressure",
-    ) -> str:
-        """Persist a committed mid-session checkpoint for context-pressure recovery.
-
-        session_id resolves from the explicit argument first, then
-        MEMORY_SESSION_ID, then memory/activity/CURRENT_SESSION. trigger may use
-        underscores or hyphens and is normalized before validation. Call
-        memory_tool_schema with tool_name="memory_session_flush" for the full
-        machine-readable contract.
-        """
-
-        from ...errors import ValidationError
-        from ...models import MemoryWriteResult
-
-        repo = get_repo()
-        root = get_root()
-
-        body = summary.strip()
-        if not body:
-            raise ValidationError("summary must be a non-empty string")
-
-        normalized_trigger = validate_slug(trigger.replace("_", "-"), field_name="trigger")
-        resolved_user_id = _resolved_user_id(session_state)
-        resolved_session_id = _resolve_access_session_id(
-            root,
-            session_id or None,
-            user_id=resolved_user_id,
-        )
-        if resolved_session_id is None:
-            raise ValidationError(
-                "session_id is required when MEMORY_SESSION_ID and memory/activity/CURRENT_SESSION are unset"
-            )
-        if session_state is not None:
-            session_state.record_tool_call()
-
-        checkpoint_rel, abs_checkpoint = resolve_repo_path(
-            repo,
-            f"{resolved_session_id}/checkpoint.md",
-            field_name="session_id",
-        )
-        abs_checkpoint.parent.mkdir(parents=True, exist_ok=True)
-
-        existing = abs_checkpoint.read_text(encoding="utf-8") if abs_checkpoint.exists() else ""
-        entry_label = label.strip() or "Context-pressure flush"
-        entry = _format_checkpoint_entry(
-            body,
-            label=entry_label,
-            session_id=resolved_session_id,
-            user_id=resolved_user_id or "",
-        )
-        if existing.strip():
-            new_content = existing.rstrip() + "\n\n---\n\n" + entry
-        else:
-            new_content = entry
-
-        abs_checkpoint.write_text(new_content, encoding="utf-8")
-        repo.add(checkpoint_rel)
-
-        commit_msg = _build_compaction_flush_commit_message(
-            body,
-            label=label,
-            trigger=normalized_trigger,
-        )
-        commit_result = repo.commit(commit_msg)
-        if session_state is not None:
-            session_state.record_write(checkpoint_rel)
-            session_state.record_checkpoint()
-            session_state.record_flush()
-        merge_state, merge_warnings = _maybe_fast_forward_publication_base(
-            repo,
-            commit_sha=commit_result.sha,
-            blocked_action="Session branch flush",
-        )
-        result = MemoryWriteResult.from_commit(
-            files_changed=[checkpoint_rel],
-            commit_result=commit_result,
-            commit_message=commit_msg,
-            new_state={
-                "session_id": resolved_session_id,
-                "checkpoint_path": checkpoint_rel,
-                "entry_count": _count_checkpoint_entries(new_content),
-                "trigger": normalized_trigger,
-                "user_id": resolved_user_id,
-            },
-            warnings=merge_warnings,
-        )
-        if merge_state is not None:
-            result.new_state["merge"] = merge_state
-        return result.to_json(session_state=session_state)
-
-    @mcp.tool(
         name="memory_append_scratchpad",
         annotations=_tool_annotations(
             title="Append to Scratchpad",
@@ -1687,10 +1368,8 @@ def register_tools(
     ) -> str:
         """Record a chat summary.
 
-        For full session wrap-up, prefer memory_record_session so summary,
-        reflection, and ACCESS writes land in a single commit. Call
-        memory_tool_schema with tool_name="memory_record_chat_summary" for the
-        exact session_id and key_topics contract.
+        Call memory_tool_schema with tool_name="memory_record_chat_summary"
+        for the exact session_id and key_topics contract.
         """
         from ...errors import ValidationError
         from ...frontmatter_utils import today_str
@@ -2151,214 +1830,6 @@ def register_tools(
         return result.to_json()
 
     @mcp.tool(
-        name="memory_record_session",
-        annotations=_tool_annotations(
-            title="Record Full Session",
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=False,
-        ),
-    )
-    async def memory_record_session(
-        session_id: str,
-        summary: str,
-        reflection: str | None = None,
-        key_topics: str = "",
-        access_entries: list[dict[str, object]] | None = None,
-        metrics: dict[str, object] | None = None,
-        dialogue_entries: list[dict[str, object]] | None = None,
-    ) -> str:
-        """Record a full session in one commit.
-
-        Required top-level fields:
-        - session_id: canonical memory/activity/YYYY/MM/DD/chat-NNN id
-        - summary: non-empty session summary body
-
-        Optional top-level fields:
-        - reflection: markdown text written to reflection.md
-        - key_topics: summary index topics string
-        - access_entries: ACCESS entries to append under the same session id
-        - metrics: optional session activity metrics dict merged into SUMMARY frontmatter
-        - dialogue_entries: optional compressed dialogue rows written to dialogue.jsonl
-
-        The tool writes the session summary, optional reflection, chat index
-        update, and optional ACCESS entries atomically under a single [chat]
-        commit. Replaying the exact same payload for an already-recorded
-        session is idempotent and returns an already_recorded state instead of
-        mutating files.
-
-        access_entries uses the same payload shape as memory_log_access_batch:
-        every entry requires file, task, helpfulness, and note, with optional
-        category, mode ("read" | "write" | "update" | "create"), task_id,
-        and estimator fields. The outer session_id is applied to all supplied
-        access entries.
-        """
-        from ...errors import ValidationError
-        from ...frontmatter_utils import today_str
-        from ...models import MemoryWriteResult
-
-        repo = get_repo()
-        root = get_root()
-        resolved_user_id = _resolved_user_id(session_state)
-        resolved_session_id = _resolve_session_id_for_user(session_id, resolved_user_id)
-
-        session_summary_rel, abs_session_summary = resolve_repo_path(
-            repo, f"{resolved_session_id}/SUMMARY.md", field_name="session_id"
-        )
-        abs_session_summary.parent.mkdir(parents=True, exist_ok=True)
-
-        normalized_reflection = reflection.strip() if reflection is not None else ""
-        reflection_rel = f"{resolved_session_id}/reflection.md"
-        access_jsonls: list[str] = []
-
-        if abs_session_summary.exists():
-            if not _existing_chat_summary_matches(
-                root,
-                abs_session_summary,
-                session_id=resolved_session_id,
-                summary=summary,
-                key_topics=key_topics,
-                session_metrics=metrics,
-                user_id=resolved_user_id,
-            ):
-                raise ValidationError(
-                    f"Session summary already exists for {resolved_session_id} with different content. Edit the existing session files directly if an update is needed."
-                )
-
-            matching_reflection_path: str | None = None
-            if normalized_reflection:
-                reflection_abs = root / reflection_rel
-                expected_reflection = _build_reflection_content(normalized_reflection)
-                if (
-                    not reflection_abs.exists()
-                    or reflection_abs.read_text(encoding="utf-8") != expected_reflection
-                ):
-                    raise ValidationError(
-                        f"Session {resolved_session_id} is already recorded but the provided reflection does not match the existing reflection.md content. Use memory_record_reflection or edit the reflection directly if an update is needed."
-                    )
-                matching_reflection_path = reflection_rel
-
-            access_jsonls = _validate_replayed_access_entries(
-                repo,
-                root,
-                session_id=resolved_session_id,
-                access_entries=access_entries,
-                user_id=resolved_user_id,
-            )
-            result = MemoryWriteResult(
-                files_changed=[],
-                commit_sha=None,
-                commit_message=None,
-                new_state=_build_session_recording_state(
-                    resolved_session_id,
-                    session_summary_rel,
-                    recording_outcome="already_recorded",
-                    reflection_path=matching_reflection_path,
-                    access_jsonls=access_jsonls,
-                    user_id=resolved_user_id,
-                ),
-            )
-            return result.to_json()
-
-        if access_entries:
-            _normalize_access_entries(
-                repo,
-                root,
-                access_entries,
-                session_id=resolved_session_id,
-                user_id=resolved_user_id,
-                aggregate_validation_errors=True,
-            )
-
-        files_changed = [session_summary_rel]
-        abs_session_summary.write_text(
-            _build_chat_summary_content(
-                resolved_session_id,
-                summary,
-                key_topics,
-                root=root,
-                session_metrics=metrics,
-                user_id=resolved_user_id,
-            ),
-            encoding="utf-8",
-        )
-        repo.add(session_summary_rel)
-
-        dialogue_rows = dialogue_entries or []
-        if dialogue_rows:
-            dialogue_rel = f"{resolved_session_id}/dialogue.jsonl"
-            dialogue_abs = root / dialogue_rel
-            dialogue_abs.parent.mkdir(parents=True, exist_ok=True)
-            dialogue_abs.write_text(
-                "\n".join(json.dumps(row, ensure_ascii=False) for row in dialogue_rows) + "\n",
-                encoding="utf-8",
-            )
-            repo.add(dialogue_rel)
-            files_changed.append(dialogue_rel)
-
-        applied_reflection_path: str | None = None
-        if normalized_reflection:
-            reflection_abs = root / reflection_rel
-            reflection_abs.parent.mkdir(parents=True, exist_ok=True)
-            reflection_abs.write_text(
-                _build_reflection_content(normalized_reflection),
-                encoding="utf-8",
-            )
-            repo.add(reflection_rel)
-            files_changed.append(reflection_rel)
-            applied_reflection_path = reflection_rel
-
-        chats_summary_rel = "memory/activity/SUMMARY.md"
-        abs_chats_summary = root / chats_summary_rel
-        if abs_chats_summary.exists():
-            updated_chats_content = _update_chats_summary_index(
-                abs_chats_summary.read_text(encoding="utf-8"),
-                resolved_session_id,
-                today_str(),
-            )
-            if updated_chats_content is not None:
-                abs_chats_summary.write_text(updated_chats_content, encoding="utf-8")
-                repo.add(chats_summary_rel)
-                files_changed.append(chats_summary_rel)
-
-        access_files_changed, _ = _append_access_entries(
-            repo,
-            root,
-            access_entries,
-            session_id=resolved_session_id,
-            user_id=resolved_user_id,
-            aggregate_validation_errors=True,
-        )
-
-        files_changed.extend(path for path in access_files_changed if path not in files_changed)
-
-        commit_msg = f"[chat] Record session {resolved_session_id}"
-        commit_result = repo.commit(commit_msg)
-        merge_state, merge_warnings = _maybe_fast_forward_publication_base(
-            repo,
-            commit_sha=commit_result.sha,
-            blocked_action="Session branch session record",
-        )
-        result = MemoryWriteResult.from_commit(
-            files_changed=files_changed,
-            commit_result=commit_result,
-            commit_message=commit_msg,
-            new_state=_build_session_recording_state(
-                resolved_session_id,
-                session_summary_rel,
-                recording_outcome="recorded",
-                reflection_path=applied_reflection_path,
-                access_jsonls=access_files_changed,
-                user_id=resolved_user_id,
-            ),
-            warnings=merge_warnings,
-        )
-        if merge_state is not None:
-            result.new_state["merge"] = merge_state
-        return result.to_json()
-
-    @mcp.tool(
         name="memory_run_aggregation",
         annotations=_tool_annotations(
             title="Run ACCESS Aggregation",
@@ -2529,81 +2000,6 @@ def register_tools(
             commit_result=commit_result,
             commit_message=commit_msg,
             new_state=preview_state,
-            warnings=merge_warnings,
-        )
-        if merge_state is not None:
-            result.new_state["merge"] = merge_state
-        return result.to_json()
-
-    @mcp.tool(
-        name="memory_record_reflection",
-        annotations=_tool_annotations(
-            title="Record Session Reflection",
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=False,
-            openWorldHint=False,
-        ),
-    )
-    async def memory_record_reflection(
-        session_id: str,
-        memory_retrieved: str,
-        memory_influence: str,
-        outcome_quality: str,
-        gaps_noticed: str,
-        system_observations: str = "",
-    ) -> str:
-        """Record a structured reflection.
-
-        For full session wrap-up, prefer memory_record_session so summary,
-        reflection, and ACCESS writes land in a single commit. The session
-        summary must already exist; call memory_tool_schema with
-        tool_name="memory_record_reflection" for the required reflection fields.
-        """
-        from ...errors import ValidationError
-        from ...models import MemoryWriteResult
-
-        repo = get_repo()
-        root = get_root()
-        resolved_user_id = _resolved_user_id(session_state)
-        resolved_session_id = _resolve_session_id_for_user(session_id, resolved_user_id)
-
-        session_dir = root / resolved_session_id
-        if not session_dir.is_dir():
-            raise ValidationError(
-                f"Session folder does not exist: {resolved_session_id}. Create the chat summary first with memory_record_chat_summary."
-            )
-
-        reflection_rel = f"{resolved_session_id}/reflection.md"
-        reflection_abs = root / reflection_rel
-        if reflection_abs.exists():
-            raise ValidationError(
-                f"Reflection already exists for {resolved_session_id}. Edit it directly with memory_edit if an update is needed."
-            )
-
-        reflection_abs.write_text(
-            _build_structured_reflection_content(
-                memory_retrieved,
-                memory_influence,
-                outcome_quality,
-                gaps_noticed,
-                system_observations,
-            ),
-            encoding="utf-8",
-        )
-        repo.add(reflection_rel)
-        commit_msg = f"[chat] Add session reflection for {resolved_session_id}"
-        commit_result = repo.commit(commit_msg)
-        merge_state, merge_warnings = _maybe_fast_forward_publication_base(
-            repo,
-            commit_sha=commit_result.sha,
-            blocked_action="Session branch reflection",
-        )
-        result = MemoryWriteResult.from_commit(
-            files_changed=[reflection_rel],
-            commit_result=commit_result,
-            commit_message=commit_msg,
-            new_state={"reflection_path": reflection_rel},
             warnings=merge_warnings,
         )
         if merge_state is not None:
@@ -2932,18 +2328,14 @@ def register_tools(
         return json.dumps(payload, indent=2)
 
     return {
-        "memory_checkpoint": memory_checkpoint,
-        "memory_session_flush": memory_session_flush,
         "memory_append_scratchpad": memory_append_scratchpad,
         "memory_record_chat_summary": memory_record_chat_summary,
         "memory_flag_for_review": memory_flag_for_review,
         "memory_resolve_review_item": memory_resolve_review_item,
         "memory_log_access": memory_log_access,
         "memory_log_access_batch": memory_log_access_batch,
-        "memory_record_session": memory_record_session,
         "memory_query_dialogue": memory_query_dialogue,
         "memory_run_aggregation": memory_run_aggregation,
-        "memory_record_reflection": memory_record_reflection,
         "memory_record_periodic_review": memory_record_periodic_review,
         "memory_revert_commit": memory_revert_commit,
     }
