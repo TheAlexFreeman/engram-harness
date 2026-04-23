@@ -123,6 +123,7 @@ def _build_memory(
         WorkProjectCreate,
         WorkProjectGoal,
         WorkProjectList,
+        WorkProjectPlan,
         WorkProjectResolve,
         WorkProjectStatus,
         WorkPromote,
@@ -214,6 +215,11 @@ def _build_memory(
         WorkProjectList(workspace),
         WorkProjectStatus(workspace),
         WorkProjectArchive(workspace, engram=engram),
+        # Plan postconditions of the form ``test:<cmd>`` run against the
+        # agent's --workspace (where the code under development lives),
+        # not the Engram repo. ``grep:…`` checks resolve their paths the
+        # same way.
+        WorkProjectPlan(workspace, engram=engram, verify_cwd=config.workspace),
     ]
     if read_only:
         # Honour the --tool-profile=read_only contract: drop every work

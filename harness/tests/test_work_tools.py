@@ -21,6 +21,7 @@ from harness.tools.work_tools import (
     WorkProjectCreate,
     WorkProjectGoal,
     WorkProjectList,
+    WorkProjectPlan,
     WorkProjectResolve,
     WorkProjectStatus,
     WorkPromote,
@@ -333,6 +334,7 @@ def test_work_tools_declare_mutates_flag() -> None:
         "work_project_ask",
         "work_project_resolve",
         "work_project_archive",
+        "work_project_plan",
     }
     all_tools = (
         WorkStatus,
@@ -350,6 +352,7 @@ def test_work_tools_declare_mutates_flag() -> None:
         WorkProjectList,
         WorkProjectStatus,
         WorkProjectArchive,
+        WorkProjectPlan,
     )
     read_only_names = {cls.name for cls in all_tools if not cls.mutates}
     mutating_names = {cls.name for cls in all_tools if cls.mutates}
@@ -397,6 +400,7 @@ def test_build_memory_filters_work_tools_under_read_only(tmp_path: Path) -> None
     assert "work_promote" not in names
     assert "work_project_create" not in names
     assert "work_project_archive" not in names
+    assert "work_project_plan" not in names
     # Read-only ones stay.
     assert "work_status" in names
     assert "work_read" in names
@@ -438,6 +442,7 @@ def test_build_memory_registers_all_work_tools_under_full(tmp_path: Path) -> Non
         "work_project_list",
         "work_project_status",
         "work_project_archive",
+        "work_project_plan",
     ):
         assert expected in names, f"missing in full profile: {expected}"
     # Full profile creates the workspace up-front.
@@ -681,3 +686,213 @@ def test_promote_commits_to_engram_repo(ws: Workspace, engram: EngramMemory) -> 
     )
     assert "[chat] promote" in log.stdout
     assert "knowledge/new.md" in log.stdout
+
+
+# ---------------------------------------------------------------------------
+# work_project_plan — op-dispatched create / brief / advance / list
+# ---------------------------------------------------------------------------
+
+
+def _mk_plan_tool(ws: Workspace, engram: EngramMemory) -> WorkProjectPlan:
+    # verify_cwd=None lets grep/test checks resolve against the process cwd
+    # (fine for tests that don't exercise automated verification).
+    return WorkProjectPlan(ws, engram=engram, verify_cwd=None)
+
+
+def test_plan_tool_op_required(ws: Workspace, engram: EngramMemory) -> None:
+    with pytest.raises(ValueError):
+        _mk_plan_tool(ws, engram).run({})
+    with pytest.raises(ValueError):
+        _mk_plan_tool(ws, engram).run({"op": "not-an-op"})
+
+
+def test_plan_tool_create_emits_trace_and_refreshes_summary(
+    ws: Workspace, engram: EngramMemory
+) -> None:
+    ws.project_create("auth", goal="redesign")
+    out = _mk_plan_tool(ws, engram).run(
+        {
+            "op": "create",
+            "project": "auth",
+            "plan_id": "token",
+            "purpose": "Implement offline-capable token refresh",
+            "phases": [{"title": "Schema"}, {"title": "Endpoint"}],
+            "budget": {"max_sessions": 3},
+        }
+    )
+    assert "Created plan" in out
+    events = engram.trace_events
+    assert any(ev.event == "plan_create" and "auth/token" in ev.reason for ev in events)
+    # SUMMARY.md should now mention the active plan.
+    summary = ws.project("auth").summary_path.read_text(encoding="utf-8")
+    assert "token" in summary
+    assert "active" in summary
+
+
+def test_plan_tool_brief_shows_current_phase(ws: Workspace, engram: EngramMemory) -> None:
+    ws.project_create("auth", goal="g")
+    _mk_plan_tool(ws, engram).run(
+        {
+            "op": "create",
+            "project": "auth",
+            "plan_id": "p",
+            "purpose": "first plan",
+            "phases": [
+                {"title": "Phase one", "postconditions": ["grep:foo::bar.py"]},
+                {"title": "Phase two"},
+            ],
+        }
+    )
+    out = _mk_plan_tool(ws, engram).run({"op": "brief", "project": "auth", "plan_id": "p"})
+    assert "Phase one" in out
+    assert "[grep]" in out
+    assert "Status: **active**" in out
+
+
+def test_plan_tool_brief_missing_plan_friendly(ws: Workspace, engram: EngramMemory) -> None:
+    ws.project_create("auth", goal="g")
+    out = _mk_plan_tool(ws, engram).run({"op": "brief", "project": "auth", "plan_id": "ghost"})
+    assert "plan not found" in out
+
+
+def test_plan_tool_advance_complete_emits_trace(ws: Workspace, engram: EngramMemory) -> None:
+    ws.project_create("auth", goal="g")
+    _mk_plan_tool(ws, engram).run(
+        {
+            "op": "create",
+            "project": "auth",
+            "plan_id": "p",
+            "purpose": "first plan",
+            "phases": [{"title": "P1"}, {"title": "P2"}],
+        }
+    )
+    out = _mk_plan_tool(ws, engram).run(
+        {
+            "op": "advance",
+            "project": "auth",
+            "plan_id": "p",
+            "action": "complete",
+            "checkpoint": "step 1 done",
+        }
+    )
+    assert "Completed phase 1" in out
+    events = [ev for ev in engram.trace_events if ev.event == "plan_advance"]
+    assert events
+    assert "action=complete" in events[-1].detail
+
+
+def test_plan_tool_advance_fail_records_failure(ws: Workspace, engram: EngramMemory) -> None:
+    ws.project_create("auth", goal="g")
+    _mk_plan_tool(ws, engram).run(
+        {
+            "op": "create",
+            "project": "auth",
+            "plan_id": "p",
+            "purpose": "x",
+            "phases": [{"title": "P1"}],
+        }
+    )
+    out = _mk_plan_tool(ws, engram).run(
+        {
+            "op": "advance",
+            "project": "auth",
+            "plan_id": "p",
+            "action": "fail",
+            "reason": "broken build",
+        }
+    )
+    assert "Recorded failure" in out
+    assert "broken build" in out
+
+
+def test_plan_tool_advance_awaiting_approval_message(ws: Workspace, engram: EngramMemory) -> None:
+    ws.project_create("auth", goal="g")
+    _mk_plan_tool(ws, engram).run(
+        {
+            "op": "create",
+            "project": "auth",
+            "plan_id": "p",
+            "purpose": "x",
+            "phases": [{"title": "gated", "requires_approval": True}],
+        }
+    )
+    out = _mk_plan_tool(ws, engram).run(
+        {"op": "advance", "project": "auth", "plan_id": "p", "action": "complete"}
+    )
+    assert "requires user approval" in out
+    # And a second call with approved=True completes.
+    out2 = _mk_plan_tool(ws, engram).run(
+        {
+            "op": "advance",
+            "project": "auth",
+            "plan_id": "p",
+            "action": "complete",
+            "approved": True,
+        }
+    )
+    assert "complete" in out2.lower()
+
+
+def test_plan_tool_advance_verify_failure_blocks(
+    ws: Workspace, engram: EngramMemory, tmp_path: Path
+) -> None:
+    ws.project_create("auth", goal="g")
+    _mk_plan_tool(ws, engram).run(
+        {
+            "op": "create",
+            "project": "auth",
+            "plan_id": "p",
+            "purpose": "x",
+            "phases": [
+                {
+                    "title": "verifier",
+                    "postconditions": ["grep:xyz::does-not-exist.md"],
+                }
+            ],
+        }
+    )
+    # Use a tool whose verify_cwd is tmp_path (empty directory).
+    tool = WorkProjectPlan(ws, engram=engram, verify_cwd=tmp_path)
+    out = tool.run(
+        {
+            "op": "advance",
+            "project": "auth",
+            "plan_id": "p",
+            "action": "complete",
+            "verify": True,
+        }
+    )
+    assert "not advanced" in out
+    assert "grep" in out
+
+
+def test_plan_tool_list_shows_progress(ws: Workspace, engram: EngramMemory) -> None:
+    ws.project_create("auth", goal="g")
+    _mk_plan_tool(ws, engram).run(
+        {
+            "op": "create",
+            "project": "auth",
+            "plan_id": "alpha",
+            "purpose": "first",
+            "phases": [{"title": "X"}, {"title": "Y"}],
+        }
+    )
+    _mk_plan_tool(ws, engram).run(
+        {
+            "op": "create",
+            "project": "auth",
+            "plan_id": "beta",
+            "purpose": "second",
+            "phases": [{"title": "P"}],
+        }
+    )
+    out = _mk_plan_tool(ws, engram).run({"op": "list", "project": "auth"})
+    assert "alpha" in out
+    assert "beta" in out
+    assert "active" in out
+
+
+def test_plan_tool_list_empty(ws: Workspace, engram: EngramMemory) -> None:
+    ws.project_create("auth", goal="g")
+    out = _mk_plan_tool(ws, engram).run({"op": "list", "project": "auth"})
+    assert "no plans" in out

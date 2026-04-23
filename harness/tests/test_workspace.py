@@ -436,3 +436,187 @@ def test_regenerate_summary_lists_project_files(ws: Workspace) -> None:
     # Auto-generated files (GOAL.md, SUMMARY.md, questions.md) are excluded.
     assert "GOAL.md" not in body
     assert "SUMMARY.md" not in body
+
+
+# ---------------------------------------------------------------------------
+# Plans — Workspace backend
+# ---------------------------------------------------------------------------
+
+
+def test_plan_create_writes_yaml_and_run_state(ws: Workspace) -> None:
+    ws.project_create("auth", goal="redesign auth")
+    plan_path = ws.plan_create(
+        "auth",
+        "token-refresh",
+        "Implement offline-capable token refresh",
+        phases=[{"title": "Schema design"}, {"title": "Endpoint"}],
+        budget={"max_sessions": 4, "deadline": "2026-05-01"},
+    )
+    assert plan_path.name == "token-refresh.yaml"
+    state_path = plan_path.with_name("token-refresh.run-state.json")
+    assert state_path.is_file()
+    plan, state = ws.plan_load("auth", "token-refresh")
+    assert plan["purpose"] == "Implement offline-capable token refresh"
+    assert len(plan["phases"]) == 2
+    assert plan["budget"]["max_sessions"] == 4
+    assert state["status"] == "active"
+    assert state["current_phase"] == 0
+
+
+def test_plan_create_rejects_unknown_project(ws: Workspace) -> None:
+    with pytest.raises(ValueError):
+        ws.plan_create("ghost", "p1", "purpose", phases=[{"title": "a"}])
+
+
+def test_plan_create_rejects_duplicate(ws: Workspace) -> None:
+    ws.project_create("p", goal="g")
+    ws.plan_create("p", "dup", "purpose", phases=[{"title": "a"}])
+    with pytest.raises(ValueError):
+        ws.plan_create("p", "dup", "again", phases=[{"title": "b"}])
+
+
+def test_plan_create_rejects_invalid_phase(ws: Workspace) -> None:
+    ws.project_create("p", goal="g")
+    with pytest.raises(ValueError):
+        ws.plan_create("p", "bad", "purpose", phases=[{}])  # missing title
+    with pytest.raises(ValueError):
+        ws.plan_create("p", "bad", "purpose", phases=[])  # empty list
+
+
+def test_plan_create_rejects_bad_budget(ws: Workspace) -> None:
+    ws.project_create("p", goal="g")
+    with pytest.raises(ValueError):
+        ws.plan_create(
+            "p", "bad", "purpose", phases=[{"title": "a"}], budget={"deadline": "not-a-date"}
+        )
+
+
+def test_plan_advance_complete_progresses_phase(ws: Workspace) -> None:
+    ws.project_create("p", goal="g")
+    ws.plan_create(
+        "p",
+        "plan-a",
+        "purpose",
+        phases=[{"title": "P1"}, {"title": "P2"}],
+    )
+    r = ws.plan_advance("p", "plan-a", "complete", checkpoint="done step 1")
+    assert r["report"]["action"] == "complete"
+    assert r["state"]["current_phase"] == 1
+    assert r["state"]["phases_completed"] == [0]
+    assert r["state"]["last_checkpoint"] == "done step 1"
+
+
+def test_plan_advance_final_phase_marks_completed(ws: Workspace) -> None:
+    ws.project_create("p", goal="g")
+    ws.plan_create("p", "plan-a", "purpose", phases=[{"title": "P1"}])
+    r = ws.plan_advance("p", "plan-a", "complete")
+    assert r["state"]["status"] == "completed"
+
+
+def test_plan_advance_fail_records_failure(ws: Workspace) -> None:
+    ws.project_create("p", goal="g")
+    ws.plan_create("p", "plan-a", "purpose", phases=[{"title": "P1"}])
+    r = ws.plan_advance("p", "plan-a", "fail", reason="broken build")
+    assert r["report"]["action"] == "fail"
+    failures = r["state"]["failure_history"]
+    assert len(failures) == 1
+    assert failures[0]["reason"] == "broken build"
+    # Still on phase 0.
+    assert r["state"]["current_phase"] == 0
+
+
+def test_plan_advance_requires_approval_pauses(ws: Workspace) -> None:
+    ws.project_create("p", goal="g")
+    ws.plan_create(
+        "p",
+        "plan-a",
+        "purpose",
+        phases=[{"title": "gated", "requires_approval": True}],
+    )
+    r = ws.plan_advance("p", "plan-a", "complete")
+    assert r["report"]["action"] == "awaiting_approval"
+    assert r["state"]["status"] == "awaiting_approval"
+    # Second call with approved=True completes.
+    r2 = ws.plan_advance("p", "plan-a", "complete", approved=True)
+    assert r2["report"]["action"] == "complete"
+    assert r2["state"]["status"] == "completed"
+
+
+def test_plan_advance_verify_blocks_on_failed_check(ws: Workspace, tmp_path: Path) -> None:
+    ws.project_create("p", goal="g")
+    ws.plan_create(
+        "p",
+        "plan-a",
+        "purpose",
+        phases=[
+            {
+                "title": "verify phase",
+                "postconditions": ["grep:nonexistent::missing.md"],
+            }
+        ],
+    )
+    r = ws.plan_advance("p", "plan-a", "complete", verify=True, cwd=tmp_path)
+    assert r["report"]["action"] == "verify_failed"
+    # State unchanged — still on phase 0.
+    assert r["state"]["current_phase"] == 0
+
+
+def test_plan_verify_postconditions_grep_hit(ws: Workspace, tmp_path: Path) -> None:
+    target = tmp_path / "foo.py"
+    target.write_text("def refresh_interval(): return 300\n", encoding="utf-8")
+    phase = {"postconditions": ["grep:refresh_interval::foo.py"]}
+    results = ws.plan_verify_postconditions(phase, cwd=tmp_path)
+    assert len(results) == 1
+    assert results[0]["kind"] == "grep"
+    assert results[0]["passed"] is True
+
+
+def test_plan_verify_postconditions_grep_miss(ws: Workspace, tmp_path: Path) -> None:
+    phase = {"postconditions": ["grep:xyz::missing.md"]}
+    results = ws.plan_verify_postconditions(phase, cwd=tmp_path)
+    assert results[0]["passed"] is False
+    assert "file not found" in results[0]["detail"]
+
+
+def test_plan_verify_postconditions_test_pass(ws: Workspace, tmp_path: Path) -> None:
+    import sys
+
+    phase = {"postconditions": [f'test:{sys.executable} -c "import sys; sys.exit(0)"']}
+    results = ws.plan_verify_postconditions(phase, cwd=tmp_path)
+    assert results[0]["kind"] == "test"
+    assert results[0]["passed"] is True
+
+
+def test_plan_verify_postconditions_test_fail(ws: Workspace, tmp_path: Path) -> None:
+    import sys
+
+    phase = {"postconditions": [f'test:{sys.executable} -c "import sys; sys.exit(3)"']}
+    results = ws.plan_verify_postconditions(phase, cwd=tmp_path)
+    assert results[0]["passed"] is False
+    assert "exit code 3" in results[0]["detail"]
+
+
+def test_plan_verify_postconditions_manual_always_passes(ws: Workspace) -> None:
+    phase = {"postconditions": ["migration lands cleanly"]}
+    results = ws.plan_verify_postconditions(phase)
+    assert results[0]["kind"] == "manual"
+    assert results[0]["passed"] is True
+
+
+def test_plan_list_summary(ws: Workspace) -> None:
+    ws.project_create("p", goal="g")
+    ws.plan_create("p", "plan-a", "first plan", phases=[{"title": "P1"}])
+    ws.plan_create("p", "plan-b", "second plan", phases=[{"title": "Q1"}, {"title": "Q2"}])
+    items = ws.plan_list("p")
+    ids = {item["plan_id"] for item in items}
+    assert ids == {"plan-a", "plan-b"}
+
+
+def test_summary_auto_includes_active_plan(ws: Workspace) -> None:
+    ws.project_create("p", goal="g")
+    ws.plan_create("p", "plan-a", "active plan description", phases=[{"title": "P1"}])
+    ws.regenerate_summary(ws.project("p"))
+    body = ws.project("p").summary_path.read_text(encoding="utf-8")
+    assert "Active plan" in body
+    assert "plan-a" in body
+    assert "active plan description" in body
