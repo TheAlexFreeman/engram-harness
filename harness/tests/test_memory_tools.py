@@ -314,6 +314,70 @@ def test_context_cache_order_independent(engram: EngramMemory) -> None:
 
 
 # ---------------------------------------------------------------------------
+# memory_context — `project` parameter
+# ---------------------------------------------------------------------------
+
+
+def test_context_project_requires_workspace(engram: EngramMemory) -> None:
+    """Without a workspace reference, `project` degrades with a warning."""
+    tool = MemoryContext(engram)  # no workspace passed
+    out = tool.run({"needs": ["domain:auth"], "project": "whatever"})
+    assert "project=whatever" in out or "project='whatever'" in out
+    assert "ignored" in out
+
+
+def test_context_project_unknown_shows_note(engram: EngramMemory, tmp_path: Path) -> None:
+    """An unknown project logs a short note; the context still returns."""
+    from harness.workspace import Workspace
+
+    ws = Workspace(engram.content_root, session_id=engram.session_id)
+    ws.ensure_layout()
+    tool = MemoryContext(engram, workspace=ws)
+    out = tool.run({"needs": ["domain:auth"], "project": "never-created"})
+    assert "never-created" in out
+    assert "no goal" in out or "ignored" in out
+
+
+def test_context_project_folds_goal_and_questions_into_purpose(
+    engram: EngramMemory, tmp_path: Path
+) -> None:
+    """A known project's goal and open questions are appended to purpose.
+
+    The re-ranking path blends purpose into the query inside _need_search,
+    so we assert distinct cache entries show up for the same needs+budget
+    when `project` is used, since the computed purpose differs.
+    """
+    from harness.workspace import Workspace
+
+    ws = Workspace(engram.content_root, session_id=engram.session_id)
+    ws.ensure_layout()
+    ws.project_create(
+        "auth-redesign",
+        goal="Redesign token refresh to support offline clients",
+        questions=["Reuse session table?", "Max offline window?"],
+    )
+    tool = MemoryContext(engram, workspace=ws)
+
+    # Call without project.
+    tool.run({"needs": ["domain:celery"], "budget": "S"})
+    size_without = len(engram._context_cache)
+
+    # Call with project — purpose differs so a new cache entry lands.
+    tool.run({"needs": ["domain:celery"], "budget": "S", "project": "auth-redesign"})
+    assert len(engram._context_cache) == size_without + 1
+
+
+def test_context_project_validates_type(engram: EngramMemory) -> None:
+    from harness.workspace import Workspace
+
+    ws = Workspace(engram.content_root, session_id=engram.session_id)
+    ws.ensure_layout()
+    tool = MemoryContext(engram, workspace=ws)
+    with pytest.raises(ValueError):
+        tool.run({"needs": ["domain:x"], "project": "   "})
+
+
+# ---------------------------------------------------------------------------
 # memory_trace — buffered annotations
 # ---------------------------------------------------------------------------
 

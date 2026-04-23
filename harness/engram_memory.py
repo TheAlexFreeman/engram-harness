@@ -467,6 +467,66 @@ class EngramMemory:
         except Exception as exc:  # noqa: BLE001
             _log.warning("Failed to commit plan state (%s): %s", message, exc)
 
+    def promote_note(
+        self,
+        dest_rel: str,
+        body: str,
+        *,
+        origin_rel: str = "",
+        trust: str = "medium",
+    ) -> Path:
+        """Write *body* to ``memory/<dest_rel>`` with agent-generated frontmatter + commit.
+
+        The graduation-gate for ``work: promote``. Takes a body string
+        (frontmatter already stripped by the caller if the source had any)
+        and places it under ``memory/`` with ``source: agent-generated``
+        + ``trust`` + ``created`` metadata. Commits with the standard
+        ``[chat]`` prefix so it enters Engram's aggregation pipeline
+        the same way any other agent-generated content does.
+
+        Returns the absolute path to the written file.
+        """
+        rel = _normalize_memory_path(dest_rel)
+        if not rel.endswith(".md"):
+            raise ValueError(f"memory promotion requires a .md destination (got {dest_rel!r})")
+        abs_path = (self.content_root / rel).resolve()
+        memory_root = (self.content_root / "memory").resolve()
+        try:
+            abs_path.relative_to(memory_root)
+        except ValueError as exc:
+            raise ValueError(f"destination must resolve under memory/: {dest_rel!r}") from exc
+        if abs_path.exists():
+            raise ValueError(
+                f"refusing to overwrite existing memory file: {rel} "
+                "(choose a different path or remove the existing file first)"
+            )
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
+
+        fm = {
+            "source": "agent-generated",
+            "trust": trust,
+            "created": datetime.now().date().isoformat(),
+            "tool": "harness",
+        }
+        if origin_rel:
+            fm["origin_workspace"] = origin_rel
+        if self.session_id:
+            fm["session_id"] = self.session_id
+
+        from engram_mcp.agent_memory_mcp.core.frontmatter_utils import write_with_frontmatter
+
+        write_with_frontmatter(abs_path, fm, body.strip())
+        try:
+            self.repo.add(rel)
+            if self.repo.has_staged_changes(rel):
+                self.repo.commit(
+                    f"[chat] promote {rel}" + (f" from {origin_rel}" if origin_rel else ""),
+                    paths=[rel],
+                )
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Failed to commit promoted file %s: %s", rel, exc)
+        return abs_path
+
     # ------------------------------------------------------------------
     # Helpers exposed to the trace bridge
     # ------------------------------------------------------------------
@@ -735,7 +795,10 @@ class EngramMemory:
     def _keyword_recall(
         self, query: str, *, k: int, scopes: tuple[str, ...] = _SEARCH_SCOPES
     ) -> list[dict[str, Any]]:
-        tokens = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 2]
+        # Keep 2-char tokens — software vocab has common acronyms (UI, DB,
+        # CI, QA) that would otherwise produce deterministic empty results.
+        # Only single-char tokens are filtered out (too noisy to score).
+        tokens = [t.lower() for t in re.findall(r"\w+", query) if len(t) >= 2]
         if not tokens:
             return []
         candidates: list[tuple[float, Path, str]] = []

@@ -385,23 +385,28 @@ underscore names and documented in the prompt with `work: <op>(...)` or
 
 - [x] `harness/workspace.py`: `Workspace` backend (directory layout,
       CURRENT.md parser/writer, project CRUD, SUMMARY.md auto-generation,
-      closed-thread archive rotation)
-- [x] `harness/tools/work_tools.py`: 13 tool classes covering status,
-      thread, jot, note, read, scratch, and the seven project ops
+      closed-thread archive rotation, project keyword search)
+- [x] `harness/tools/work_tools.py`: 15 tool classes covering status,
+      thread, jot, note, read, search, scratch, promote, and the seven
+      project ops
 - [x] System prompt `## Workspace` section (opt-in via
       `system_prompt_native(with_work_tools=True)`), wired in
       `config.py` when Engram is active
 - [x] Thread / project state changes auto-emit `memory_trace` events
       so the trace bridge picks up workspace transitions without the
       agent annotating manually
-- [ ] `work_search` — project-scoped keyword/semantic search
-- [ ] `work_promote` — graduate a working note into durable memory
-      (calls into `EngramMemory` for frontmatter + git commit)
+- [x] `work_search` — project-scoped keyword search over
+      `workspace/projects/`, with optional single-project scope
+- [x] `work_promote` — graduate a working note into durable memory
+      (reuses `EngramMemory.promote_note` for frontmatter + git commit
+      with the standard `[chat]` prefix; refuses to overwrite existing
+      memory files)
+- [x] `memory_context` project parameter — when a project name is
+      supplied, its goal and open questions are folded into the
+      re-ranking purpose automatically
 - [ ] `work_project_plan` — op-dispatched create/brief/advance/list
       that replaces the current `plan_tools.py` surface for
       workspace-managed plans
-- [ ] `memory_context` project parameter — when a project name is
-      supplied, its goal and open questions re-rank the results
 - [ ] Migration pass retiring `memory/working/` in favor of
       `workspace/` (and shrinking the bootstrap accordingly — see the
       open question flagged in Phase 2)

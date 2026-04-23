@@ -107,10 +107,13 @@ def test_index_out_of_range_message(engram: EngramMemory) -> None:
 def test_manifest_empty_recall(engram: EngramMemory) -> None:
     """Empty recall returns 'no memory matched', not an index error."""
     tool = RecallMemory(engram)
-    out = tool.run({"query": "xyzzy-no-match-anywhere"})
+    # Use nonsense tokens all ≥2 chars so the (legitimate) 2-char token
+    # filter doesn't accidentally turn what should be an empty-result
+    # query into a "any word matches anything" fallback.
+    out = tool.run({"query": "quxzyzz flibbertigibbet wibblewobble"})
     assert "no memory matched" in out
     # Should not raise any exception
-    out2 = tool.run({"query": "xyzzy-no-match-anywhere", "result_index": 1})
+    out2 = tool.run({"query": "quxzyzz flibbertigibbet wibblewobble", "result_index": 1})
     assert "out of range" in out2 or "no memory matched" in out2
 
 

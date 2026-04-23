@@ -13,7 +13,9 @@ Currently implemented:
 - ``work_jot``               — append to the freeform Notes section
 - ``work_note``              — create/update persistent working documents
 - ``work_read``              — read any workspace file by relative path
+- ``work_search``            — project-scoped keyword search
 - ``work_scratch``           — append to the session-scoped scratch file
+- ``work_promote``           — graduate a working note into durable memory
 - ``work_project_create``    — scaffold a new project with goal + questions
 - ``work_project_goal``      — read or update a project's goal
 - ``work_project_ask``       — add a question to a project
@@ -24,8 +26,6 @@ Currently implemented:
 
 Deferred to follow-up PRs:
 
-- ``work_search`` — project-scoped keyword/semantic search
-- ``work_promote`` — graduate a working note into durable memory
 - ``work_project_plan`` — op-dispatched plan create/brief/advance/list
 
 State changes that are visible in CURRENT.md or a project's SUMMARY.md
@@ -419,6 +419,214 @@ class WorkRead:
 
 
 # ---------------------------------------------------------------------------
+# work: search
+# ---------------------------------------------------------------------------
+
+
+class WorkSearch:
+    """``work_search`` — keyword search over ``workspace/projects/``."""
+
+    name = "work_search"
+    mutates = False
+    description = (
+        "Search across all projects in the workspace by keyword. Returns a "
+        "compact manifest of matching files with snippets. Useful when you "
+        "don't know which project contains the information you need. Set "
+        "`project` to restrict to a single project. Scope covers "
+        "`projects/` only — for notes, use `work_status` or `work_read` to "
+        "list and inspect individual files."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Natural-language or keyword search.",
+            },
+            "project": {
+                "type": "string",
+                "description": "Restrict to a single project directory.",
+            },
+            "k": {
+                "type": "integer",
+                "description": "Maximum results to return (1–20). Default 5.",
+            },
+        },
+        "required": ["query"],
+    }
+
+    _DEFAULT_K = 5
+    _MIN_K = 1
+    _MAX_K = 20
+    _MANIFEST_SNIPPET_CHARS = 200
+
+    def __init__(self, workspace: "Workspace"):
+        self._workspace = workspace
+
+    def run(self, args: dict) -> str:
+        query = (args.get("query") or "").strip()
+        if not query:
+            raise ValueError("query must be a non-empty string")
+        k_raw = args.get("k", self._DEFAULT_K)
+        try:
+            k = int(k_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("k must be an integer") from exc
+        k = max(self._MIN_K, min(k, self._MAX_K))
+        project = args.get("project")
+        if project is not None and not isinstance(project, str):
+            raise ValueError("project must be a string")
+        project_arg = (project or "").strip() or None
+
+        hits = self._workspace.search_projects(query, project=project_arg, k=k)
+        if not hits:
+            scope = f"project {project_arg!r}" if project_arg else "workspace/projects/"
+            return f"(no matches for {query!r} under {scope})\n"
+
+        lines = [
+            f"# workspace search — {len(hits)} result(s) for {query!r}"
+            + (f" in project {project_arg!r}" if project_arg else ""),
+            "",
+        ]
+        for i, hit in enumerate(hits, start=1):
+            snippet = (hit["snippet"] or "")[: self._MANIFEST_SNIPPET_CHARS].replace("\n", " ")
+            lines.append(f"{i}. [{hit['path']}] (score={hit['score']:.2f})\n   {snippet}…")
+            lines.append("")
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# work: promote
+# ---------------------------------------------------------------------------
+
+
+class WorkPromote:
+    """``work_promote`` — graduate a working note into durable memory."""
+
+    name = "work_promote"
+    mutates = True
+    description = (
+        "Graduate a working note into durable memory. Reads the workspace "
+        "file at `path`, strips any existing frontmatter, writes the body "
+        "to `memory/<dest>` with `source: agent-generated` and "
+        "`trust: medium` frontmatter, and commits via the Engram repo. "
+        "The workspace file is left in place — promotion is a one-way copy. "
+        "You must choose the right memory namespace (knowledge, skills, "
+        "activity, users) and location in the memory taxonomy."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": (
+                    "Workspace path of the file to promote (e.g. notes/auth-redesign.md)."
+                ),
+            },
+            "dest": {
+                "type": "string",
+                "description": (
+                    "Memory path relative to the memory root "
+                    "(e.g. knowledge/architecture/auth-redesign.md). "
+                    "Must end in .md and land under memory/."
+                ),
+            },
+            "trust": {
+                "type": "string",
+                "description": "Trust level for frontmatter. Default medium.",
+                "enum": ["low", "medium", "high"],
+            },
+        },
+        "required": ["path", "dest"],
+    }
+
+    def __init__(self, workspace: "Workspace", engram: "EngramMemory"):
+        self._workspace = workspace
+        self._engram = engram
+
+    def run(self, args: dict) -> str:
+        raw_path = args.get("path")
+        dest = args.get("dest")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError("path must be a non-empty string")
+        if not isinstance(dest, str) or not dest.strip():
+            raise ValueError("dest must be a non-empty string")
+        trust = (args.get("trust") or "medium").strip().lower()
+        if trust not in ("low", "medium", "high"):
+            raise ValueError(f"trust must be one of low/medium/high; got {trust!r}")
+
+        # Read workspace source (traversal-safe).
+        try:
+            raw = self._workspace.read_file(raw_path)
+        except FileNotFoundError:
+            return f"(no such workspace file: {raw_path})\n"
+
+        body = _strip_frontmatter(raw)
+        if not body.strip():
+            raise ValueError(f"workspace file {raw_path!r} is empty after frontmatter strip")
+
+        # Workspace-relative form for provenance.
+        origin_rel = (
+            self._workspace.resolve_in_workspace(raw_path)
+            .relative_to(self._workspace.dir)
+            .as_posix()
+        )
+
+        written = self._engram.promote_note(
+            dest_rel=dest,
+            body=body,
+            origin_rel=f"workspace/{origin_rel}",
+            trust=trust,
+        )
+        memory_rel = written.relative_to(self._engram.content_root).as_posix()
+        return (
+            f"Promoted workspace/{origin_rel} → {memory_rel} "
+            f"(trust={trust}, source=agent-generated)\n"
+        )
+
+
+def _strip_frontmatter(raw: str) -> str:
+    """Strip a leading YAML frontmatter block if present.
+
+    A file only counts as having frontmatter when the content between
+    the opening ``---`` and the matching closing ``---`` parses as a
+    YAML mapping (i.e. a dict with at least one key). A Markdown
+    thematic break at the start of the file, or any other
+    ``---``…``---`` pair that doesn't contain valid YAML metadata, is
+    left in place — otherwise a note like::
+
+        ---
+
+        # Title
+
+        Content
+
+        ---
+
+        Rest
+
+    would have its title and content silently dropped when promoted
+    into memory (Codex-flagged P2 on PR #7).
+    """
+    import re
+
+    import yaml
+
+    if not raw.startswith("---"):
+        return raw
+    m = re.match(r"---\r?\n(.*?)\r?\n---\r?\n?", raw, re.DOTALL)
+    if not m:
+        return raw
+    try:
+        parsed = yaml.safe_load(m.group(1))
+    except yaml.YAMLError:
+        return raw
+    if not isinstance(parsed, dict) or not parsed:
+        return raw
+    return raw[m.end() :].lstrip("\n")
+
+
+# ---------------------------------------------------------------------------
 # work: scratch
 # ---------------------------------------------------------------------------
 
@@ -775,6 +983,8 @@ __all__ = [
     "WorkJot",
     "WorkNote",
     "WorkRead",
+    "WorkSearch",
+    "WorkPromote",
     "WorkScratch",
     "WorkProjectCreate",
     "WorkProjectGoal",
