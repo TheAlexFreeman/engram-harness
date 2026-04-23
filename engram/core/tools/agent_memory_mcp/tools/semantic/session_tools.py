@@ -5,15 +5,13 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, cast
 
 from ...identity_paths import (
     normalize_user_id,
     resolve_working_scratchpad_target,
-    working_file_path,
 )
 from ...path_policy import (
     KNOWN_COMMIT_PREFIXES,

@@ -13,7 +13,6 @@ from datetime import date
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, ClassVar, Coroutine, cast
-from unittest.mock import patch
 
 import time_machine
 import yaml  # type: ignore[import-untyped]
