@@ -13,7 +13,6 @@ from datetime import date
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, ClassVar, Coroutine, cast
-from unittest.mock import patch
 
 import time_machine
 import yaml  # type: ignore[import-untyped]
@@ -5812,7 +5811,6 @@ Direct and concise.
                     key_topics="semantic-tools,wrapup",
                 )
             )
-
 
     def test_memory_append_scratchpad_accepts_dated_slug_and_creates_file(self) -> None:
         repo_root = self._init_repo({"memory/working/CURRENT.md": "# Current\n"})

@@ -62,7 +62,7 @@ class MemoryCapabilitiesTests(unittest.TestCase):
             "implemented",
         )
         self.assertEqual(
-            manifest["desktop_operations"]["record_session_reflection"]["status"],
+            manifest["desktop_operations"]["record_chat_summary"]["status"],
             "implemented",
         )
         self.assertEqual(
@@ -75,7 +75,7 @@ class MemoryCapabilitiesTests(unittest.TestCase):
         raw_fallback = set(manifest["tool_sets"]["raw_fallback"])
         change_classes = set(manifest["change_classes"])
         allowed_commit_models = {"auto_commit", "auto_commit_exception_direct_write", "none"}
-        staged_semantic_operations = {"memory_checkpoint"}
+        staged_semantic_operations: set[str] = set()
 
         for tool_name in manifest["tool_sets"]["semantic_extensions"]:
             operation = manifest["operations"][tool_name]
@@ -342,8 +342,8 @@ class MemoryCapabilitiesTests(unittest.TestCase):
             "memory_log_access",
         )
         self.assertEqual(
-            desktop_operations["record_session_reflection"]["tool"],
-            "memory_record_reflection",
+            desktop_operations["record_chat_summary"]["tool"],
+            "memory_record_chat_summary",
         )
 
     def test_manifest_declares_approval_preview_and_confirmation_flows(self) -> None:
@@ -570,7 +570,9 @@ class MemoryCapabilitiesTests(unittest.TestCase):
             manifest["operations"]["memory_run_aggregation"]["notes"],
         )
 
-    def test_manifest_declares_session_flush_and_reset_as_semantic_operations(self) -> None:
+    def test_manifest_declares_reset_session_state_and_retired_session_flush(
+        self,
+    ) -> None:
         manifest = tomllib.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
         self.assertNotIn("memory_reset_session_state", manifest["tool_sets"]["read_support"])
@@ -578,14 +580,10 @@ class MemoryCapabilitiesTests(unittest.TestCase):
             "memory_reset_session_state",
             manifest["tool_sets"]["semantic_extensions"],
         )
-        self.assertIn("memory_session_flush", manifest["tool_sets"]["semantic_extensions"])
+        self.assertNotIn("memory_session_flush", manifest["tool_sets"]["semantic_extensions"])
         self.assertEqual(
             manifest["operations"]["memory_reset_session_state"]["result_fields"],
             ["reset", "identity_updates_this_session"],
-        )
-        self.assertEqual(
-            manifest["operations"]["memory_session_flush"]["result_fields"],
-            ["session_id", "checkpoint_path", "entry_count", "trigger"],
         )
         self.assertEqual(
             manifest["ui_feedback"]["result_field_labels"]["checkpoint_path"],

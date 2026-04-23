@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import importlib
 import json
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any, ClassVar, cast
@@ -144,4 +142,3 @@ class ProxyCliTests(unittest.TestCase):
                 "memory/activity/alex/2026/03/29/chat-001"
             )
         )
-

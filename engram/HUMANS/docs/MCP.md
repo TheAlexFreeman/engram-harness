@@ -140,11 +140,11 @@ For worktree deployments, set `MEMORY_REPO_ROOT` to the worktree path and `HOST_
 
 ## Tool surface
 
-The MCP server exposes **109 tools by default**: 49 Tier 0 read-only tools plus 60 Tier 1 semantic tools. Enabling `MEMORY_ENABLE_RAW_WRITE_TOOLS=1` adds **7 Tier 2** raw fallback tools for a full surface of **116**. The tier system enforces a deliberate preference order: inspect before mutating, use semantic operations before raw edits, and gate low-level writes behind an explicit opt-in.
+The MCP server exposes **102 tools by default**: 46 Tier 0 read-only tools plus 56 Tier 1 semantic tools. Enabling `MEMORY_ENABLE_RAW_WRITE_TOOLS=1` adds **7 Tier 2** raw fallback tools for a full surface of **109**. The tier system enforces a deliberate preference order: inspect before mutating, use semantic operations before raw edits, and gate low-level writes behind an explicit opt-in.
 
 ### JSON Schema registry (`memory_tool_schema`)
 
-Structured input contracts for complex tools live in [`core/tools/agent_memory_mcp/tool_schemas.py`](../../core/tools/agent_memory_mcp/tool_schemas.py) (`TOOL_INPUT_SCHEMAS`). The `memory_tool_schema` tool returns JSON Schema for every name in that registry: Tier 1 semantic tools (nested objects, enums, preview flows), Tier 2 raw tools when you need an explicit contract, and selected Tier 0 tools where the maintainers added registry entries (for example `memory_read_file`, `memory_extract_file`, `memory_search`, and the context injectors). Most other Tier 0 tools expose only FastMCP-generated schemas derived from their Python type hints; calling `memory_tool_schema` for those names raises a validation error that lists the registry tool names. Use `memory_plan_schema` when you specifically want the `memory_plan_create` contract without passing the tool name.
+Structured input contracts for complex tools live in [`core/tools/agent_memory_mcp/tool_schemas.py`](../../core/tools/agent_memory_mcp/tool_schemas.py) (`TOOL_INPUT_SCHEMAS`). The `memory_tool_schema` tool returns JSON Schema for every name in that registry: Tier 1 semantic tools (nested objects, enums, preview flows), Tier 2 raw tools when you need an explicit contract, and selected Tier 0 tools where the maintainers added registry entries (for example `memory_read_file`, `memory_extract_file`, `memory_search`, and `memory_context_home`). Most other Tier 0 tools expose only FastMCP-generated schemas derived from their Python type hints; calling `memory_tool_schema` for those names raises a validation error that lists the registry tool names. Use `memory_plan_schema` when you specifically want the `memory_plan_create` contract without passing the tool name.
 
 ### Tier 0: Read-only tools
 
@@ -184,25 +184,25 @@ These tools inspect, analyze, and report on the repo without changing it. Always
 | `memory_score_links_by_access` | Score links using ACCESS.jsonl co-retrieval patterns. |
 | `memory_session_bootstrap` | Return compact bootstrap context for session initialization. |
 | `memory_context_home` | Return home-context Markdown with a JSON metadata header under a soft character budget. |
-| `memory_context_project` | Return project-focused Markdown with plan state, staged-file manifest, and optional sources. |
 | `memory_prepare_unverified_review` | Prepare a structured review packet for unverified knowledge files. |
 | `memory_prepare_promotion_batch` | Prepare a batch of knowledge files for promotion review. |
 | `memory_prepare_periodic_review` | Assemble the full periodic review analysis packet. |
 
 ### Context injectors
 
-**These are the primary session entrypoints when the MCP surface is available.** Prefer them over the equivalent file-based sequences; fall back to files only when the MCP surface is unavailable or lacks the needed operation.
+**This is a primary session entrypoint when the MCP surface is available.** Prefer it over the equivalent file-based sequences; fall back to files only when the MCP surface is unavailable or lacks the needed operation.
 
-`memory_context_home` and `memory_context_project` are Tier 0 read-only context injectors. They are designed to replace the most common file-based bootstrap patterns with a single MCP call that returns native Markdown plus a JSON metadata header.
+`memory_context_home` is a Tier 0 read-only context injector. It is designed to replace the most common file-based bootstrap patterns with a single MCP call that returns native Markdown plus a JSON metadata header.
+
+**Project-scoped context** is not exposed as a dedicated MCP tool in this layout. The old `memory_context_project` / `memory_context_project_lite` tools were removed from the Engram MCP server; in **engram-harness** their behavior is folded into the harness-native `memory_context` tool (use `project=<slug>`). Outside a harness, read project and plan material with `memory_read_file` and related Tier 0 tools.
 
 Return format:
 
 - A leading `json` code fence containing metadata such as `tool`, `loaded_files`, and `budget_report`.
 - Metadata also includes `format_version` and `body_sections`, so hosts can identify the included top-level sections and their source paths without re-parsing the Markdown body.
-- `memory_context_project` metadata also includes a compact `next_action` object when a selected plan has an actionable phase.
 - Markdown sections below the header for the included context blocks.
 - Each body section includes a `_Source: ..._` provenance line and comment delimiters (`<!-- context-section: ... -->`) to make section boundaries explicit even when the embedded Markdown contains its own headings.
-- Soft character budgets: sections are either included whole or dropped by priority; the tools never truncate mid-file.
+- Soft character budgets: sections are either included whole or dropped by priority; the tool never truncates mid-file.
 
 `memory_context_home` parameters:
 
@@ -213,18 +213,7 @@ Return format:
 
 Use `memory_context_home` for general session startup when an agent needs the same sequence prescribed by `memory/HOME.md`: user portrait, recent activity, working state, and optional indexes.
 
-`memory_context_project` parameters:
-
-- `project`: target project slug under `memory/working/projects/`.
-- `max_context_chars` (default `24000`): soft character budget; `0` means unbounded.
-- `include_plan_sources` (default `true`): include whole-file source content for the current plan phase when budget permits.
-- `include_user_profile` (default `null` / auto): include `memory/users/SUMMARY.md` only when no plan is selected. Set `true` to force inclusion or `false` to force omission.
-
-Use `memory_context_project` when an automation or execution agent is resuming work on one named project and needs the project summary, current plan state, staged IN/ manifest, relevant working notes, and a lightweight `next_action` hint in metadata.
-
-When callers start from `memory_session_bootstrap`, active plan entries use the same compact `next_action` shape and include a `resume_context` object that points directly to `memory_context_project` for that plan's project.
-
-When strict plan validation fails but the YAML is still readable, `memory_context_project` falls back to a raw-YAML summary for draft or partially specified plans and reports `plan_source: "raw_yaml_fallback"` in metadata. This keeps the injector useful during planning, before every postcondition or source has been fully normalized.
+When callers start from `memory_session_bootstrap`, active plan entries use the same compact `next_action` shape and include a `resume_context` object that names how to open project context (harness: `memory_context` with `project=`, or in any layout: the governed file paths the bootstrap lists).
 
 Roadmap note:
 
@@ -304,7 +293,6 @@ Important output fields:
 
 | Tool | Description |
 | --- | --- |
-| `memory_session_health_check` | Return session-start maintenance status for ACCESS and review queue. |
 | `memory_validate` | Run system integrity checks (frontmatter, structure, ACCESS format). |
 | `memory_access_analytics` | Classify files using curation-policy ACCESS patterns (hot, cold, rising, etc.). |
 | `memory_check_knowledge_freshness` | Check knowledge-file freshness against the configured host repo. |
@@ -316,7 +304,7 @@ Important output fields:
 
 ### Tier 1: Semantic tools
 
-These are the governed semantic operations. Most are the normal write path and usually auto-commit on success. A smaller subset stays read-only while sharing the same operation metadata and policy surface. Exceptions such as `memory_checkpoint` deliberately stage state for a later batch commit. These tools are not generic file-edit tools — each one owns a narrow slice of the memory model and keeps related files in sync.
+These are the governed semantic operations. Most are the normal write path and usually auto-commit on success. A smaller subset stays read-only while sharing the same operation metadata and policy surface. Some tools deliberately stage work for a later commit instead of auto-committing immediately. These tools are not generic file-edit tools — each one owns a narrow slice of the memory model and keeps related files in sync.
 
 **Plans**
 
@@ -567,29 +555,17 @@ Plan statuses now include `paused` (awaiting human approval), in addition to `dr
 
 **Session and activity**
 
+In **engram-harness** mode, the session lifecycle that used to be split across `memory_checkpoint`, `memory_session_flush`, `memory_record_session`, `memory_record_reflection`, and (for some diagnostics) `memory_session_health_check` is handled by the harness **trace bridge** in a single governed commit, so those MCP tools are not registered. Outside a harness, use the remaining semantic tools below and read-only inspection.
+
 | Tool | Description |
 | --- | --- |
-| `memory_checkpoint` | Append a timestamped incremental checkpoint to `CURRENT.md`, optionally tagged with `session_id`. |
-| `memory_session_flush` | Record a committed mid-session recovery checkpoint under the active chat folder when context pressure is too high. |
-| `memory_record_session` | Record a full session: summary, reflection, and access entries. |
 | `memory_record_chat_summary` | Record a single chat session summary to the activity log. |
-| `memory_record_reflection` | Record a session reflection entry. |
 | `memory_log_access` | Log a single memory file access event to ACCESS.jsonl. |
 | `memory_log_access_batch` | Log multiple access events in a batch. |
 | `memory_run_aggregation` | Aggregate hot ACCESS logs into summary updates. |
 | `memory_reset_session_state` | Reset in-process session counters (e.g. identity churn). |
 | `memory_semantic_search` | Hybrid vector + BM25 + freshness + helpfulness search (requires `[search]` extras). |
 | `memory_reindex` | Force rebuild of the semantic search embedding index. |
-
-**`memory_checkpoint` parameters and role**
-
-| Parameter | Type | Description |
-| --- | --- | --- |
-| `content` | str | Required checkpoint body to persist. |
-| `label` | str | Optional heading suffix shown after the timestamp. |
-| `session_id` | str | Optional canonical chat path such as `memory/activity/2026/03/29/chat-001`. |
-
-`memory_checkpoint` is the low-ceremony compaction-defense tool for active work. It appends a timestamped block to `memory/working/CURRENT.md` and stages the file without creating a commit. Prefer it over `memory_append_scratchpad` when you want consistent checkpoint formatting, and prefer it over the heavier mid-session sync protocol when you do not need a chat-folder `checkpoint.md` or a commit yet.
 
 **Scratchpad, skills, and identity**
 
@@ -647,27 +623,25 @@ Hybrid scoring combines four signals with configurable weights (defaults in pare
 
 ## MCP resources
 
-The server exposes four MCP resources — stable read endpoints that clients can bind to without making tool calls:
+The server exposes three MCP resources — stable read endpoints that clients can bind to without making tool calls:
 
 | URI | Backed by | Description |
 | --- | --- | --- |
 | `memory://capabilities/summary` | `memory_get_capabilities` | Load the compact capability and profile snapshot. |
 | `memory://policy/summary` | `memory_get_policy_state` | Inspect change-class, fallback, and profile policy boundaries. |
-| `memory://session/health` | `memory_session_health_check` | Check aggregation pressure, review cadence, and pending queue state. |
 | `memory://plans/active` | `memory_list_plans` | Load a compact summary of active plans and next actions. |
 
 Resources are passive — they provide data the client can read at any time, like a status dashboard. They complement the tools (which perform actions) and prompts (which scaffold workflows).
 
 ## MCP prompts
 
-The server exposes four MCP prompts — reusable workflow scaffolds that guide the agent through recurring multi-step operations:
+The server exposes three MCP prompts — reusable workflow scaffolds that guide the agent through recurring multi-step operations:
 
 | Prompt | Backed by | Description |
 | --- | --- | --- |
 | `memory_prepare_unverified_review_prompt` | `memory_review_unverified` | Guide review of low-trust knowledge before promotion. |
 | `memory_governed_promotion_preview_prompt` | `memory_promote_knowledge_batch` | Structure a governed promotion-preview conversation. |
 | `memory_prepare_periodic_review_prompt` | `memory_prepare_periodic_review` | Guide a protected periodic-review workflow. |
-| `memory_session_wrap_up_prompt` | `memory_record_session` | Guide end-of-session summarization, reflection, and deferred follow-up. |
 
 Prompts are useful for MCP-native clients that support prompt discovery: the client can offer them as one-click workflows, or the agent can invoke them as structured conversation templates.
 
