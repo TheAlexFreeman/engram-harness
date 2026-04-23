@@ -646,6 +646,73 @@ class Workspace:
                         out.append(Project(name=entry.name, root=entry))
         return out
 
+    # -- Project search -----------------------------------------------
+
+    def search_projects(
+        self,
+        query: str,
+        *,
+        project: str | None = None,
+        k: int = 5,
+    ) -> list[dict]:
+        """Keyword search over ``workspace/projects/``.
+
+        Returns up to *k* results sorted by density score (token hits per
+        kb). Each result is a dict with ``path`` (workspace-relative),
+        ``project`` (the project directory name), ``snippet`` (surrounding
+        text), and ``score``. When *project* is set, search is restricted
+        to that project's directory.
+
+        The workspace has no trust / ACCESS metadata — this is a plain
+        keyword match, not the semantic pipeline that ``memory_recall``
+        uses. Notes are intentionally small and project-scoped, so the
+        keyword approach is sufficient.
+        """
+        tokens = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 2]
+        if not tokens:
+            return []
+        if project is not None:
+            _validate_project_name(project)
+            root = self.projects_dir / project
+            if not root.is_dir():
+                return []
+            roots = [root]
+        else:
+            if not self.projects_dir.is_dir():
+                return []
+            roots = [p for p in self.projects_dir.iterdir() if p.is_dir() and p.name != "_archive"]
+
+        excluded = {"SUMMARY.md"}  # auto-generated, always stale relative to source
+        candidates: list[tuple[float, Path, str]] = []
+        for root in roots:
+            for path in root.rglob("*.md"):
+                if path.name in excluded:
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                lower = text.lower()
+                hits = sum(lower.count(t) for t in tokens)
+                if hits == 0:
+                    continue
+                score = hits / max(1, len(text) // 1024 + 1)
+                candidates.append((score, path, text))
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        out: list[dict] = []
+        for score, path, text in candidates[:k]:
+            rel = path.relative_to(self.dir).as_posix()
+            project_name = path.relative_to(self.projects_dir).parts[0]
+            out.append(
+                {
+                    "path": rel,
+                    "project": project_name,
+                    "snippet": _first_match_snippet_ws(text, tokens),
+                    "score": float(score),
+                }
+            )
+        return out
+
     # -- Project CRUD --------------------------------------------------
 
     def project_create(
@@ -839,6 +906,29 @@ class Workspace:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def _first_match_snippet_ws(text: str, tokens: list[str], *, ctx: int = 200) -> str:
+    """Return ``ctx`` chars of context around the first token match."""
+    lower = text.lower()
+    best = -1
+    for t in tokens:
+        idx = lower.find(t)
+        if idx == -1:
+            continue
+        if best == -1 or idx < best:
+            best = idx
+    if best == -1:
+        return text[:ctx]
+    start = max(0, best - ctx // 2)
+    end = min(len(text), best + ctx)
+    snippet = text[start:end].strip()
+    if start > 0:
+        snippet = "…" + snippet
+    if end < len(text):
+        snippet = snippet + "…"
+    return snippet
+
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 

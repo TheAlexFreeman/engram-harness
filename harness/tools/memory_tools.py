@@ -293,7 +293,9 @@ class MemoryContext:
         "skill:<name>, or free-form phrases (semantic search). "
         "Results are cached for the session; the cache invalidates on "
         "memory_remember. Use at the start of complex tasks to front-load "
-        "relevant memory without multiple recall round-trips."
+        "relevant memory without multiple recall round-trips. "
+        "Pass `project` to let the system lift the project's goal and open "
+        "questions into the re-ranking signal automatically."
     )
     input_schema = {
         "type": "object",
@@ -314,6 +316,15 @@ class MemoryContext:
                     "The system uses it to re-rank results within each need."
                 ),
             },
+            "project": {
+                "type": "string",
+                "description": (
+                    "Optional workspace project name. The project's goal "
+                    "and open question topics are appended to the "
+                    "re-ranking purpose so you don't have to rephrase "
+                    "them manually."
+                ),
+            },
             "budget": {
                 "type": "string",
                 "description": (
@@ -330,8 +341,22 @@ class MemoryContext:
         "required": ["needs"],
     }
 
-    def __init__(self, memory: "EngramMemory"):
+    def __init__(self, memory: "EngramMemory", workspace=None):
+        """
+        Parameters
+        ----------
+        memory
+            The Engram backend that executes the context query and owns
+            the session cache.
+        workspace
+            Optional ``Workspace`` instance. When supplied and the caller
+            passes a ``project`` parameter, the tool looks up the
+            project's goal + open questions and folds them into the
+            re-ranking purpose. Omitting workspace makes the project
+            parameter a no-op with a warning suffix.
+        """
         self._memory = memory
+        self._workspace = workspace
 
     def run(self, args: dict) -> str:
         needs = args.get("needs")
@@ -340,23 +365,73 @@ class MemoryContext:
         if not all(isinstance(n, str) for n in needs):
             raise ValueError("every entry in needs must be a string")
         purpose = args.get("purpose")
+        purpose_text = purpose if isinstance(purpose, str) else None
         budget = (args.get("budget") or "M").strip().upper()
         if budget not in _ALLOWED_BUDGETS:
             raise ValueError(f"budget must be one of {_ALLOWED_BUDGETS}; got {budget!r}")
         refresh = bool(args.get("refresh", False))
 
+        project = args.get("project")
+        project_warning = ""
+        if project is not None:
+            if not isinstance(project, str) or not project.strip():
+                raise ValueError("project must be a non-empty string if supplied")
+            project_name = project.strip()
+            if self._workspace is None:
+                project_warning = f"\n(note: `project={project_name}` ignored — no workspace available in this session)\n"
+            else:
+                project_blurb = _project_purpose_blurb(self._workspace, project_name)
+                if project_blurb:
+                    purpose_text = (
+                        f"{purpose_text} — {project_blurb}" if purpose_text else project_blurb
+                    )
+                else:
+                    project_warning = (
+                        f"\n(note: project {project_name!r} has no goal / questions to lift)\n"
+                    )
+
         text = self._memory.context(
             list(needs),
-            purpose=purpose if isinstance(purpose, str) else None,
+            purpose=purpose_text,
             budget=budget,
             refresh=refresh,
         )
+        if project_warning:
+            text = text + project_warning
         if len(text) > _MAX_CONTEXT_CHARS:
             text = (
                 text[:_MAX_CONTEXT_CHARS]
                 + f"\n\n[context output truncated to {_MAX_CONTEXT_CHARS} chars]\n"
             )
         return text
+
+
+def _project_purpose_blurb(workspace, project_name: str) -> str:
+    """Turn a project's goal + open questions into a re-ranking phrase.
+
+    Returns an empty string when the project doesn't exist, has no goal,
+    and no open questions. The blurb is plain text intended to be
+    concatenated onto the caller's ``purpose``; the downstream
+    ``_need_search`` already blends ``purpose`` into its query.
+    """
+    try:
+        project = workspace.project(project_name)
+    except ValueError:
+        return ""
+    if not project.exists():
+        return ""
+    # Local imports so this module doesn't hard-depend on workspace.
+    from harness.workspace import _read_goal, _read_questions
+
+    _created, _modified, goal_body = _read_goal(project.goal_path)
+    open_qs, _resolved = _read_questions(project.questions_path)
+    parts: list[str] = []
+    if goal_body.strip():
+        parts.append(goal_body.strip().splitlines()[0])
+    if open_qs:
+        topics = "; ".join(open_qs[:5])
+        parts.append(f"open questions: {topics}")
+    return " | ".join(parts)
 
 
 # ---------------------------------------------------------------------------

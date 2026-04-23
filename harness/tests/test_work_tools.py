@@ -23,8 +23,10 @@ from harness.tools.work_tools import (
     WorkProjectList,
     WorkProjectResolve,
     WorkProjectStatus,
+    WorkPromote,
     WorkRead,
     WorkScratch,
+    WorkSearch,
     WorkStatus,
     WorkThread,
 )
@@ -316,6 +318,7 @@ def test_work_tools_declare_mutates_flag() -> None:
     expected_read_only = {
         "work_status",
         "work_read",
+        "work_search",
         "work_project_list",
         "work_project_status",
     }
@@ -324,6 +327,7 @@ def test_work_tools_declare_mutates_flag() -> None:
         "work_jot",
         "work_note",
         "work_scratch",
+        "work_promote",
         "work_project_create",
         "work_project_goal",
         "work_project_ask",
@@ -336,7 +340,9 @@ def test_work_tools_declare_mutates_flag() -> None:
         WorkJot,
         WorkNote,
         WorkRead,
+        WorkSearch,
         WorkScratch,
+        WorkPromote,
         WorkProjectCreate,
         WorkProjectGoal,
         WorkProjectAsk,
@@ -388,11 +394,13 @@ def test_build_memory_filters_work_tools_under_read_only(tmp_path: Path) -> None
     assert "work_jot" not in names
     assert "work_note" not in names
     assert "work_scratch" not in names
+    assert "work_promote" not in names
     assert "work_project_create" not in names
     assert "work_project_archive" not in names
     # Read-only ones stay.
     assert "work_status" in names
     assert "work_read" in names
+    assert "work_search" in names
     assert "work_project_list" in names
     assert "work_project_status" in names
     # And the workspace layout wasn't eagerly created.
@@ -420,7 +428,9 @@ def test_build_memory_registers_all_work_tools_under_full(tmp_path: Path) -> Non
         "work_jot",
         "work_note",
         "work_read",
+        "work_search",
         "work_scratch",
+        "work_promote",
         "work_project_create",
         "work_project_goal",
         "work_project_ask",
@@ -432,3 +442,173 @@ def test_build_memory_registers_all_work_tools_under_full(tmp_path: Path) -> Non
         assert expected in names, f"missing in full profile: {expected}"
     # Full profile creates the workspace up-front.
     assert (memory.content_root / "workspace").is_dir()
+
+
+# ---------------------------------------------------------------------------
+# work_search
+# ---------------------------------------------------------------------------
+
+
+def test_search_requires_non_empty_query(ws: Workspace) -> None:
+    with pytest.raises(ValueError):
+        WorkSearch(ws).run({"query": ""})
+
+
+def test_search_returns_manifest_with_matches(ws: Workspace) -> None:
+    ws.project_create("alpha", goal="support token refresh flows")
+    ws.write_note(
+        "auth-notes",
+        content="token refresh relies on the existing session table",
+        project="alpha",
+    )
+    ws.project_create("beta", goal="migration planning for billing")
+    ws.write_note("schema", content="migrate payments table", project="beta")
+
+    out = WorkSearch(ws).run({"query": "token refresh", "k": 5})
+    assert "workspace search" in out
+    assert "projects/alpha/notes/auth-notes.md" in out
+    # beta project doesn't match this query.
+    assert "projects/beta/" not in out
+
+
+def test_search_scoped_to_single_project(ws: Workspace) -> None:
+    ws.project_create("alpha", goal="alpha goal")
+    ws.write_note("a-note", content="useful content about X", project="alpha")
+    ws.project_create("beta", goal="unrelated")
+    ws.write_note("b-note", content="useful content about X", project="beta")
+
+    out_alpha = WorkSearch(ws).run({"query": "useful content", "project": "alpha"})
+    assert "projects/alpha/notes/a-note.md" in out_alpha
+    assert "projects/beta/" not in out_alpha
+
+    out_beta = WorkSearch(ws).run({"query": "useful content", "project": "beta"})
+    assert "projects/beta/notes/b-note.md" in out_beta
+    assert "projects/alpha/" not in out_beta
+
+
+def test_search_no_matches_friendly_message(ws: Workspace) -> None:
+    ws.project_create("alpha", goal="some goal")
+    out = WorkSearch(ws).run({"query": "xyzzy-no-match"})
+    assert "no matches for" in out
+
+
+def test_search_clamps_k(ws: Workspace) -> None:
+    """k out of range should silently clamp, not raise."""
+    ws.project_create("alpha", goal="populate")
+    for i in range(3):
+        ws.write_note(f"note-{i}", content="fill content hit keyword", project="alpha")
+    # k too high: should clamp to max, not raise
+    WorkSearch(ws).run({"query": "keyword", "k": 9999})
+    # k too low: clamps to min
+    WorkSearch(ws).run({"query": "keyword", "k": -1})
+
+
+def test_search_skips_summary_md(ws: Workspace) -> None:
+    """SUMMARY.md is auto-generated and should not appear in results."""
+    ws.project_create("alpha", goal="unique-phrase-only-in-goal and summary")
+    ws.regenerate_summary(ws.project("alpha"))
+    out = WorkSearch(ws).run({"query": "unique-phrase-only-in-goal"})
+    assert "projects/alpha/GOAL.md" in out
+    assert "SUMMARY.md" not in out
+
+
+# ---------------------------------------------------------------------------
+# work_promote
+# ---------------------------------------------------------------------------
+
+
+def test_promote_copies_workspace_note_to_memory(ws: Workspace, engram: EngramMemory) -> None:
+    ws.write_note(
+        "auth-redesign",
+        content="# Auth redesign\n\nToken refresh flow needs a dedicated table.",
+    )
+    tool = WorkPromote(ws, engram)
+    out = tool.run(
+        {
+            "path": "notes/auth-redesign.md",
+            "dest": "knowledge/architecture/auth-redesign.md",
+        }
+    )
+    assert "Promoted" in out
+    dest_abs = engram.content_root / "memory" / "knowledge" / "architecture" / "auth-redesign.md"
+    assert dest_abs.is_file()
+    body = dest_abs.read_text(encoding="utf-8")
+    # Frontmatter applied.
+    assert body.startswith("---\n")
+    assert "source: agent-generated" in body
+    assert "trust: medium" in body
+    assert "origin_workspace: workspace/notes/auth-redesign.md" in body
+    # Body content preserved.
+    assert "Token refresh flow needs a dedicated table." in body
+    # Workspace file remains (one-way copy).
+    assert (ws.notes_dir / "auth-redesign.md").is_file()
+
+
+def test_promote_strips_source_frontmatter(ws: Workspace, engram: EngramMemory) -> None:
+    """If the workspace file has frontmatter, it must be stripped before wrap."""
+    note = ws.write_note(
+        "prefixed",
+        content="---\nsomekey: somevalue\n---\n\n# Real body\n\nContent here.",
+    )
+    assert note.is_file()
+    tool = WorkPromote(ws, engram)
+    tool.run({"path": "notes/prefixed.md", "dest": "knowledge/sample.md"})
+    dest_abs = engram.content_root / "memory" / "knowledge" / "sample.md"
+    body = dest_abs.read_text(encoding="utf-8")
+    # Source frontmatter is gone (only the new fresh one remains).
+    assert "somekey: somevalue" not in body
+    assert "# Real body" in body
+
+
+def test_promote_rejects_missing_workspace_file(ws: Workspace, engram: EngramMemory) -> None:
+    out = WorkPromote(ws, engram).run({"path": "notes/ghost.md", "dest": "knowledge/anywhere.md"})
+    assert "no such workspace file" in out
+
+
+def test_promote_rejects_non_md_dest(ws: Workspace, engram: EngramMemory) -> None:
+    ws.write_note("x", content="body")
+    with pytest.raises(ValueError):
+        WorkPromote(ws, engram).run({"path": "notes/x.md", "dest": "knowledge/x.txt"})
+
+
+def test_promote_rejects_dest_outside_memory(ws: Workspace, engram: EngramMemory) -> None:
+    ws.write_note("x", content="body")
+    with pytest.raises(ValueError):
+        WorkPromote(ws, engram).run({"path": "notes/x.md", "dest": "../escape.md"})
+
+
+def test_promote_refuses_to_overwrite(ws: Workspace, engram: EngramMemory) -> None:
+    """Memory files are governed; promote should never silently clobber."""
+    # Create a memory file directly.
+    dest_rel = "knowledge/existing.md"
+    dest_abs = engram.content_root / "memory" / dest_rel
+    dest_abs.parent.mkdir(parents=True, exist_ok=True)
+    dest_abs.write_text("---\ntrust: high\n---\n\nSomething precious.\n", encoding="utf-8")
+    ws.write_note("fresh", content="new content")
+    with pytest.raises(ValueError):
+        WorkPromote(ws, engram).run({"path": "notes/fresh.md", "dest": dest_rel})
+
+
+def test_promote_rejects_invalid_trust(ws: Workspace, engram: EngramMemory) -> None:
+    ws.write_note("x", content="body")
+    with pytest.raises(ValueError):
+        WorkPromote(ws, engram).run(
+            {"path": "notes/x.md", "dest": "knowledge/x.md", "trust": "banana"}
+        )
+
+
+def test_promote_commits_to_engram_repo(ws: Workspace, engram: EngramMemory) -> None:
+    """The promoted file should land as its own git commit with the [chat] prefix."""
+    import subprocess
+
+    ws.write_note("note", content="new durable knowledge")
+    WorkPromote(ws, engram).run({"path": "notes/note.md", "dest": "knowledge/new.md"})
+    log = subprocess.run(
+        ["git", "log", "-1", "--pretty=%s"],
+        cwd=str(engram.repo_root),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "[chat] promote" in log.stdout
+    assert "knowledge/new.md" in log.stdout

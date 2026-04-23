@@ -110,6 +110,19 @@ Read any workspace file by relative path.
     work: read({"path": "notes/auth-redesign.md"})
     work: read({"path": "projects/auth-redesign/SUMMARY.md"})
 
+### work: search
+
+Keyword search across all projects in the workspace. Returns a compact
+manifest (file path + snippet) for each hit. Use when you don't know
+which project contains the information you need. Set `project` to
+restrict to a single project.
+
+    work: search({"query": "token refresh"})
+    work: search({"query": "migration", "project": "auth-redesign"})
+
+Scope covers `projects/` only — for workspace-level notes, use
+`work: status` or `work: read` to list and inspect files directly.
+
 ### work: scratch
 
 Append to the session's scratch file (`scratch/<session-id>.md`).
@@ -118,6 +131,21 @@ intermediate reasoning, throwaway calculations, hypotheses you don't
 want to persist.
 
     work: scratch({"content": "hypothesis: the 401s are from stale refresh tokens"})
+
+### work: promote
+
+Graduate a working note into durable memory. The file is copied to the
+specified memory path with `source: agent-generated` and
+`trust: medium` frontmatter, and committed via the Engram repo. The
+workspace file stays in place — promotion is a one-way copy. You choose
+the right memory namespace (knowledge, skills, activity, users) and the
+taxonomy placement.
+
+    work: promote({"path": "notes/auth-redesign.md", "dest": "knowledge/architecture/auth-redesign.md"})
+
+Promotion is the graduation gate from desk (workspace) to library
+(memory). Don't promote half-baked content — the memory store is
+governed and accumulates.
 
 ### Projects
 
@@ -201,13 +229,16 @@ round-trips.
 
     memory: context({"needs": ["user_preferences", "recent_sessions"]})
     memory: context({"needs": ["domain:auth"], "purpose": "debugging token refresh", "budget": "M"})
+    memory: context({"needs": ["domain:auth"], "project": "auth-redesign"})
 
 Supported descriptors: `user_preferences`, `recent_sessions`,
 `domain:<topic>`, `skill:<name>`, or any free-form phrase (matched via
 semantic search). `budget` is S (~2k chars/need), M (~6k, default), or
-L (~12k). `purpose` re-ranks results within each need. Results are cached
-for the session; the cache auto-invalidates on `memory: remember`. Pass
-`"refresh": true` to force a fresh fetch.
+L (~12k). `purpose` re-ranks results within each need. Passing
+`project: <name>` lifts the project's goal and open questions into the
+re-ranking signal automatically, so you don't have to rephrase them.
+Results are cached for the session; the cache auto-invalidates on
+`memory: remember`. Pass `"refresh": true` to force a fresh fetch.
 
 Context does not count as a recall event for ACCESS scoring. Use it to
 prime your working context; use recall for targeted follow-up searches.

@@ -125,8 +125,10 @@ def _build_memory(
         WorkProjectList,
         WorkProjectResolve,
         WorkProjectStatus,
+        WorkPromote,
         WorkRead,
         WorkScratch,
+        WorkSearch,
         WorkStatus,
         WorkThread,
     )
@@ -163,20 +165,6 @@ def _build_memory(
         f"[engram] session={engram.session_id} repo={engram.content_root}",
         file=sys.stderr,
     )
-    memory_tools = [
-        MemoryRecall(engram),
-        MemoryRemember(engram),
-        MemoryReview(engram),
-        MemoryContext(engram),
-        MemoryTrace(engram),
-    ]
-    plan_tools = [
-        CreatePlan(engram),
-        ResumePlan(engram),
-        CompletePlan(engram),
-        RecordFailure(engram),
-    ]
-
     # Workspace lives alongside memory inside the Engram content root.
     # For non-read_only profiles we create the layout upfront so that the
     # first mutation doesn't pay an extra directory-scaffold cost. In
@@ -193,13 +181,32 @@ def _build_memory(
                 f"[warning] could not scaffold workspace dir at {workspace.dir}: {exc}",
                 file=sys.stderr,
             )
+
+    memory_tools = [
+        MemoryRecall(engram),
+        MemoryRemember(engram),
+        MemoryReview(engram),
+        # MemoryContext takes an optional Workspace so the agent can pass
+        # `project: <name>` and have the project's goal + open questions
+        # folded into the re-ranking purpose automatically.
+        MemoryContext(engram, workspace=workspace),
+        MemoryTrace(engram),
+    ]
+    plan_tools = [
+        CreatePlan(engram),
+        ResumePlan(engram),
+        CompletePlan(engram),
+        RecordFailure(engram),
+    ]
     work_tools = [
         WorkStatus(workspace),
         WorkThread(workspace, engram=engram),
         WorkJot(workspace),
         WorkNote(workspace),
         WorkRead(workspace),
+        WorkSearch(workspace),
         WorkScratch(workspace),
+        WorkPromote(workspace, engram),
         WorkProjectCreate(workspace, engram=engram),
         WorkProjectGoal(workspace, engram=engram),
         WorkProjectAsk(workspace),
