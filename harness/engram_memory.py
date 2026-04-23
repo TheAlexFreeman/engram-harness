@@ -33,12 +33,15 @@ from harness.memory import Memory
 _log = logging.getLogger(__name__)
 
 # Folders the harness will read for compact bootstrap. Order matters.
+# The workspace's CURRENT.md is deliberately not in this list — it's the
+# `work_status` tool's job to surface, agent-initiated rather than
+# part of the session-start primer. USER-profile content lives under
+# memory/users/SUMMARY.md; the old memory/working/USER.md mirror was
+# redundant and is no longer read.
 _BOOTSTRAP_FILES = (
     "memory/HOME.md",
     "memory/users/SUMMARY.md",
     "memory/activity/SUMMARY.md",
-    "memory/working/USER.md",
-    "memory/working/CURRENT.md",
 )
 
 # Search scopes for recall (matches engram's DEFAULT_SCOPES).
@@ -585,36 +588,69 @@ class EngramMemory:
         return f"memory/activity/{self._session_path_fragment()}/{self.session_id}"
 
     def _active_plan_briefing(self, max_chars: int = 2000) -> str:
-        """Return a brief briefing for the most recently active plan, if any."""
-        try:
-            from harness.tools.plan_tools import _load_plan_yaml, _load_run_state, find_active_plans
-        except ImportError:
-            return ""
-        active = find_active_plans(self.content_root)
-        if not active:
-            return ""
-        plan_dir = active[0]
-        try:
-            state = _load_run_state(plan_dir)
-            plan = _load_plan_yaml(plan_dir)
-        except (FileNotFoundError, Exception):
-            return ""
-        plan_id = state.get("plan_id", plan_dir.name)
-        title = plan.get("title", "?")
-        phases: list[dict] = plan.get("phases", [])
-        current_idx = int(state.get("current_phase", 0))
-        phase_name = phases[current_idx]["name"] if current_idx < len(phases) else "?"
-        rel = plan_dir.relative_to(self.content_root).as_posix()
-        lines = [
-            "\n## Active plan detected",
-            "",
-            f"**{plan_id}** — {title}",
-            f"Current phase ({current_idx + 1}/{len(phases)}): {phase_name}",
-            f"Path: `{rel}/`",
-            "",
-            "Call `resume_plan` with the plan_id above to get a full briefing and continue.",
-        ]
-        return "\n".join(lines) + "\n"
+        """Return a brief briefing for the most recently active workspace plan, if any.
+
+        Scans ``workspace/projects/*/plans/*.run-state.json`` under the
+        Engram content root, picks the most-recently-modified run-state
+        file whose ``status == "active"``, loads the sibling plan YAML,
+        and renders a short pointer that tells the agent to call
+        ``work_project_plan`` with op='brief' for the full briefing.
+        Returns an empty string when no active plan is found; callers
+        treat that as "nothing extra to load into the session primer".
+        """
+        import json
+
+        import yaml
+
+        # Pair paths with their mtimes up front so a race between
+        # glob() and stat() (stale symlink, file removed mid-scan)
+        # doesn't propagate OSError into start_session(). Unreadable
+        # entries are silently skipped, matching the tolerance the
+        # previous find_active_plans implementation had.
+        candidates: list[tuple[float, Path]] = []
+        for p in self.content_root.glob("workspace/projects/*/plans/*.run-state.json"):
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:
+                continue
+            candidates.append((mtime, p))
+        candidates.sort(key=lambda pair: pair[0], reverse=True)
+        state_paths = [p for _, p in candidates]
+        for state_path in state_paths:
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if state.get("status") != "active":
+                continue
+            # <plan_id>.run-state.json → <plan_id>.yaml
+            plan_id = state_path.name[: -len(".run-state.json")]
+            plan_path = state_path.with_name(f"{plan_id}.yaml")
+            project = state_path.parent.parent.name
+            try:
+                plan = yaml.safe_load(plan_path.read_text(encoding="utf-8")) or {}
+            except (OSError, yaml.YAMLError):
+                continue
+            phases: list[dict] = plan.get("phases", [])
+            current_idx = int(state.get("current_phase", 0))
+            phase_title = (
+                phases[current_idx].get("title", "?") if 0 <= current_idx < len(phases) else "?"
+            )
+            purpose = plan.get("purpose", "(no purpose)")
+            rel = state_path.parent.relative_to(self.content_root).as_posix()
+            lines = [
+                "\n## Active plan detected",
+                "",
+                f"**{plan_id}** — {purpose}",
+                f"Current phase ({current_idx + 1}/{len(phases)}): {phase_title}",
+                f"Path: `{rel}/`",
+                "",
+                "Call `work_project_plan` with "
+                f"op='brief', project={project!r}, plan_id={plan_id!r} "
+                "to get a full briefing and continue.",
+            ]
+            return "\n".join(lines) + "\n"
+        return ""
 
     def _resolve_need(self, need: str, *, purpose: str, char_budget: int) -> str:
         """Map a single context descriptor to a budget-bounded excerpt."""
@@ -637,9 +673,11 @@ class EngramMemory:
         return self._need_search(need, purpose=purpose, scope=None, char_budget=char_budget)
 
     def _need_user_preferences(self, char_budget: int) -> str:
+        # User-profile content lives in memory/users/SUMMARY.md. The
+        # legacy memory/working/USER.md mirror was dropped when the
+        # harness stopped reading from memory/working/ in the bootstrap.
         rels = [
             "memory/users/SUMMARY.md",
-            "memory/working/USER.md",
         ]
         pieces = []
         used = 0

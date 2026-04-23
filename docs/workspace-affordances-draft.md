@@ -24,16 +24,18 @@
 >   `harness/tools/work_tools.py`; prompt sections in
 >   `harness/prompts.py::_WORK_SECTION` and
 >   `harness/prompts.py::_MEMORY_SECTION`.
-> - Coexistence: the legacy `plan_tools.py` (backed by
->   `memory/working/projects/…`) is still registered for continuity.
->   `work_project_plan` is the canonical workspace-facing surface going
->   forward; a migration pass can retire `plan_tools.py` once the
->   legacy plans under `memory/working/` have been moved or completed.
-> - Migration from `memory/working/` to `workspace/` is manual for now —
->   both locations coexist. The bootstrap still reads
->   `memory/working/USER.md` and `memory/working/CURRENT.md`; the new
->   `workspace/CURRENT.md` is independent until a migration pass retires
->   `memory/working/`.
+> - Retired: the legacy `plan_tools.py` is gone. `work_project_plan`
+>   is the sole plan surface the harness exposes. The bootstrap
+>   primer no longer reads `memory/working/USER.md` or
+>   `memory/working/CURRENT.md` — user-profile content lives in
+>   `memory/users/SUMMARY.md`, and operational state lives in the
+>   workspace (`work_status` is the entry point).
+> - MCP-side `memory/working/` references (~45 touch points across
+>   `engram/core/tools/agent_memory_mcp/**`) are intentionally
+>   untouched — the Engram MCP layer keeps owning that tree for
+>   standalone use. `memory/working` stays in the harness's
+>   `_SEARCH_SCOPES` so `memory_recall` can still surface
+>   MCP-curated notes via keyword search.
 
 ---
 

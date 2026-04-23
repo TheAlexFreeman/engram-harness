@@ -114,7 +114,6 @@ def _build_memory(
         MemoryReview,
         MemoryTrace,
     )
-    from harness.tools.plan_tools import CompletePlan, CreatePlan, RecordFailure, ResumePlan
     from harness.tools.work_tools import (
         WorkJot,
         WorkNote,
@@ -193,12 +192,6 @@ def _build_memory(
         MemoryContext(engram, workspace=workspace),
         MemoryTrace(engram),
     ]
-    plan_tools = [
-        CreatePlan(engram),
-        ResumePlan(engram),
-        CompletePlan(engram),
-        RecordFailure(engram),
-    ]
     work_tools = [
         WorkStatus(workspace),
         WorkThread(workspace, engram=engram),
@@ -228,7 +221,7 @@ def _build_memory(
         # derived SUMMARY.md but never invents user content, so it
         # respects the "no user writes" intent.
         work_tools = [t for t in work_tools if not getattr(t, "mutates", True)]
-    return engram, engram, memory_tools + plan_tools + work_tools
+    return engram, engram, memory_tools + work_tools
 
 
 def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any) -> Any:
@@ -269,7 +262,6 @@ def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any
             model=config.model,
             tools=tools,
             system=system_prompt_native(
-                with_plan_tools=engram_memory is not None,
                 with_memory_tools=engram_memory is not None,
                 with_work_tools=engram_memory is not None,
             ),

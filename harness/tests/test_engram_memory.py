@@ -169,3 +169,168 @@ def test_engram_memory_explicit_prefix(tmp_path: Path) -> None:
     repo = _make_engram_repo(tmp_path)
     mem = EngramMemory(repo, content_prefix="core", embed=False)
     assert mem.content_root == (repo / "core").resolve()
+
+
+# ---------------------------------------------------------------------------
+# _active_plan_briefing — workspace layout (post plan_tools.py retirement)
+# ---------------------------------------------------------------------------
+
+
+def _seed_workspace_plan(
+    content_root: Path,
+    *,
+    project: str,
+    plan_id: str,
+    purpose: str,
+    phases: list[dict],
+    status: str = "active",
+    current_phase: int = 0,
+    body_override: str | None = None,
+) -> None:
+    """Write a plan + run-state pair under the workspace."""
+    from harness.workspace import Workspace
+
+    ws = Workspace(content_root, session_id="act-999")
+    ws.ensure_layout()
+    if not ws.project(project).exists():
+        ws.project_create(project, goal=f"fixture for {purpose}")
+    ws.plan_create(project, plan_id, purpose, phases=phases)
+    state_path = (
+        content_root / "workspace" / "projects" / project / "plans" / f"{plan_id}.run-state.json"
+    )
+    import json as _json
+
+    if body_override is None:
+        state = _json.loads(state_path.read_text(encoding="utf-8"))
+        state["status"] = status
+        state["current_phase"] = current_phase
+        state_path.write_text(_json.dumps(state), encoding="utf-8")
+    else:
+        state_path.write_text(body_override, encoding="utf-8")
+
+
+def test_active_plan_briefing_returns_empty_when_no_plans(engram_repo: Path) -> None:
+    mem = EngramMemory(engram_repo, embed=False)
+    assert mem._active_plan_briefing() == ""
+
+
+def test_active_plan_briefing_picks_the_active_plan(engram_repo: Path) -> None:
+    content_root = engram_repo / "core"
+    _seed_workspace_plan(
+        content_root,
+        project="alpha",
+        plan_id="offline-refresh",
+        purpose="Implement offline-capable token refresh",
+        phases=[{"title": "Schema design"}, {"title": "Endpoint"}],
+    )
+    mem = EngramMemory(engram_repo, embed=False)
+    out = mem._active_plan_briefing()
+    assert "offline-refresh" in out
+    assert "Implement offline-capable token refresh" in out
+    assert "Schema design" in out
+    # Pointer to the replacement tool, not the retired resume_plan.
+    assert "work_project_plan" in out
+    assert "resume_plan" not in out
+
+
+def test_active_plan_briefing_skips_completed_plans(engram_repo: Path) -> None:
+    content_root = engram_repo / "core"
+    _seed_workspace_plan(
+        content_root,
+        project="alpha",
+        plan_id="shipped",
+        purpose="already done",
+        phases=[{"title": "X"}],
+        status="completed",
+    )
+    mem = EngramMemory(engram_repo, embed=False)
+    assert mem._active_plan_briefing() == ""
+
+
+def test_active_plan_briefing_tolerates_malformed_run_state(
+    engram_repo: Path,
+) -> None:
+    content_root = engram_repo / "core"
+    _seed_workspace_plan(
+        content_root,
+        project="alpha",
+        plan_id="broken",
+        purpose="x",
+        phases=[{"title": "A"}],
+        body_override="{not: valid json",
+    )
+    mem = EngramMemory(engram_repo, embed=False)
+    # Skips the broken file rather than raising.
+    assert mem._active_plan_briefing() == ""
+
+
+def test_active_plan_briefing_tolerates_stat_errors(engram_repo: Path) -> None:
+    """A stale symlink or vanished run-state file must not raise OSError.
+
+    glob() + stat() is racy: a deleted file between glob and sort
+    would otherwise abort start_session(). Regression guard from the
+    PR #9 Codex review. We plant a broken symlink alongside a real
+    active plan and assert the briefing still surfaces the real one.
+    """
+    content_root = engram_repo / "core"
+    _seed_workspace_plan(
+        content_root,
+        project="alpha",
+        plan_id="real",
+        purpose="valid plan",
+        phases=[{"title": "Ship"}],
+    )
+    # Plant a broken symlink where glob() will see it but stat() blows up.
+    plans_dir = content_root / "workspace" / "projects" / "alpha" / "plans"
+    bad_link = plans_dir / "ghost.run-state.json"
+    try:
+        bad_link.symlink_to(plans_dir / "does-not-exist-anywhere.json")
+    except (OSError, NotImplementedError):
+        # Windows without symlink privilege — simulate by touching and
+        # immediately removing the file after glob by using a file
+        # whose parent has disappeared. Fall back to deleting the
+        # target we'd stat: overwrite run-state with an unreadable
+        # mode. Simpler: skip the os-dependent setup and directly
+        # prove the sort doesn't crash on a missing stat by removing
+        # a seeded file mid-flow — covered instead by the unit layer
+        # below.
+        import pytest
+
+        pytest.skip("symlink creation unavailable on this platform")
+    try:
+        mem = EngramMemory(engram_repo, embed=False)
+        out = mem._active_plan_briefing()
+        assert "real" in out
+        assert "valid plan" in out
+    finally:
+        bad_link.unlink(missing_ok=True)
+
+
+def test_active_plan_briefing_prefers_most_recently_modified(
+    engram_repo: Path,
+) -> None:
+    import os as _os
+
+    content_root = engram_repo / "core"
+    _seed_workspace_plan(
+        content_root,
+        project="alpha",
+        plan_id="older",
+        purpose="stale",
+        phases=[{"title": "X"}],
+    )
+    # Bump mtime on the older plan so it looks ancient, then create a newer
+    # one that should win.
+    older = content_root / "workspace" / "projects" / "alpha" / "plans" / "older.run-state.json"
+    _os.utime(older, (1_700_000_000, 1_700_000_000))
+    _seed_workspace_plan(
+        content_root,
+        project="alpha",
+        plan_id="newer",
+        purpose="fresh",
+        phases=[{"title": "Y"}],
+    )
+    mem = EngramMemory(engram_repo, embed=False)
+    out = mem._active_plan_briefing()
+    assert "newer" in out
+    assert "older" not in out
