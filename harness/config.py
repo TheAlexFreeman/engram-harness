@@ -115,6 +115,22 @@ def _build_memory(
         MemoryTrace,
     )
     from harness.tools.plan_tools import CompletePlan, CreatePlan, RecordFailure, ResumePlan
+    from harness.tools.work_tools import (
+        WorkJot,
+        WorkNote,
+        WorkProjectArchive,
+        WorkProjectAsk,
+        WorkProjectCreate,
+        WorkProjectGoal,
+        WorkProjectList,
+        WorkProjectResolve,
+        WorkProjectStatus,
+        WorkRead,
+        WorkScratch,
+        WorkStatus,
+        WorkThread,
+    )
+    from harness.workspace import Workspace
 
     repo_path = config.memory_repo
     if repo_path is None:
@@ -160,7 +176,33 @@ def _build_memory(
         CompletePlan(engram),
         RecordFailure(engram),
     ]
-    return engram, engram, memory_tools + plan_tools
+
+    # Workspace lives alongside memory inside the Engram content root.
+    # Creating it lazily is cheap and idempotent; no warning if absent.
+    workspace = Workspace(engram.content_root, session_id=engram.session_id)
+    try:
+        workspace.ensure_layout()
+    except OSError as exc:
+        print(
+            f"[warning] could not scaffold workspace dir at {workspace.dir}: {exc}",
+            file=sys.stderr,
+        )
+    work_tools = [
+        WorkStatus(workspace),
+        WorkThread(workspace, engram=engram),
+        WorkJot(workspace),
+        WorkNote(workspace),
+        WorkRead(workspace),
+        WorkScratch(workspace),
+        WorkProjectCreate(workspace, engram=engram),
+        WorkProjectGoal(workspace, engram=engram),
+        WorkProjectAsk(workspace),
+        WorkProjectResolve(workspace, engram=engram),
+        WorkProjectList(workspace),
+        WorkProjectStatus(workspace),
+        WorkProjectArchive(workspace, engram=engram),
+    ]
+    return engram, engram, memory_tools + plan_tools + work_tools
 
 
 def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any) -> Any:
@@ -203,6 +245,7 @@ def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any
             system=system_prompt_native(
                 with_plan_tools=engram_memory is not None,
                 with_memory_tools=engram_memory is not None,
+                with_work_tools=engram_memory is not None,
             ),
         )
     raise AssertionError("unreachable")
