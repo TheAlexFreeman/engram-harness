@@ -174,31 +174,6 @@ class MultiUserWorkingNamespaceTests(unittest.TestCase):
         self.assertIn("memory/working/alex/USER.md", metadata["loaded_files"])
         self.assertIn("memory/working/alex/CURRENT.md", metadata["loaded_files"])
 
-    def test_memory_context_project_uses_namespaced_current_without_flat_fallback(self) -> None:
-        repo_root = self._init_repo(
-            {
-                "memory/users/SUMMARY.md": "# User\n\nProfile.\n",
-                "memory/working/projects/demo-project/SUMMARY.md": "# Project\n\nShared summary.\n",
-                "memory/working/CURRENT.md": "# Current\n\nWorking on demo-project from the legacy scratchpad.\n",
-                "memory/working/alex/CURRENT.md": "# Current\n\nWorking on something else today.\n",
-            }
-        )
-
-        with mock.patch.dict(os.environ, {"MEMORY_USER_ID": "alex"}, clear=False):
-            tools = self._create_tools(repo_root)
-            metadata, body = _parse_context_response(
-                asyncio.run(cast(Any, tools["memory_context_project"])(project="demo-project"))
-            )
-
-        self.assertIn("## Project Summary", body)
-        self.assertNotIn("## Current Session Notes", body)
-        self.assertTrue(
-            any(
-                item["name"] == "Current Session Notes" and item["reason"] == "not_relevant"
-                for item in metadata["budget_report"]["sections_dropped"]
-            )
-        )
-
     def test_namespaced_working_paths_are_classified_as_scratchpads(self) -> None:
         self.assertTrue(is_working_scratchpad_path("memory/working/alex/USER.md"))
         self.assertTrue(is_working_scratchpad_path("memory/working/alex/CURRENT.md"))

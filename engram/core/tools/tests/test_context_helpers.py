@@ -16,7 +16,7 @@ from core.tools.agent_memory_mcp.tools.read_tools._context import (  # noqa: E40
     _build_budget_report,
     _is_placeholder,
     _read_file_content,
-    _read_section_with_budget,
+    _read_section_status,
 )
 
 
@@ -40,40 +40,50 @@ class ContextHelperTests(unittest.TestCase):
 
             self.assertEqual(content, "# User\n\nImportant notes.")
 
-    def test_read_section_with_budget_respects_limit_and_missing(self) -> None:
+    def test_read_section_status_respects_limit_and_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "core"
             target = root / "memory" / "activity" / "SUMMARY.md"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("# Activity\n\nRecent continuity.", encoding="utf-8")
 
-            content, chars_used = _read_section_with_budget(root, "memory/activity/SUMMARY.md", 200)
+            content, chars_used, reason = _read_section_status(
+                root, "memory/activity/SUMMARY.md", 200
+            )
             self.assertEqual(content, "# Activity\n\nRecent continuity.")
             self.assertEqual(chars_used, len("# Activity\n\nRecent continuity."))
+            self.assertEqual(reason, "included")
 
-            over_budget, over_budget_chars = _read_section_with_budget(
+            over_budget, over_budget_chars, over_reason = _read_section_status(
                 root,
                 "memory/activity/SUMMARY.md",
                 10,
             )
             self.assertIsNone(over_budget)
             self.assertEqual(over_budget_chars, 0)
+            self.assertEqual(over_reason, "over_budget")
 
-            missing, missing_chars = _read_section_with_budget(root, "memory/missing.md", 200)
+            missing, missing_chars, missing_reason = _read_section_status(
+                root, "memory/missing.md", 200
+            )
             self.assertIsNone(missing)
             self.assertEqual(missing_chars, 0)
+            self.assertEqual(missing_reason, "missing")
 
-    def test_read_section_with_budget_treats_zero_as_unbounded(self) -> None:
+    def test_read_section_status_treats_zero_as_unbounded(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir) / "core"
             target = root / "memory" / "working" / "CURRENT.md"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("# Current\n\nThis content exceeds a tiny budget.", encoding="utf-8")
 
-            content, chars_used = _read_section_with_budget(root, "memory/working/CURRENT.md", 0)
+            content, chars_used, reason = _read_section_status(
+                root, "memory/working/CURRENT.md", 0
+            )
 
             self.assertEqual(content, "# Current\n\nThis content exceeds a tiny budget.")
             self.assertEqual(chars_used, len("# Current\n\nThis content exceeds a tiny budget."))
+            self.assertEqual(reason, "included")
 
     def test_build_budget_report_summarizes_included_and_dropped_sections(self) -> None:
         report = _build_budget_report(

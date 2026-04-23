@@ -41,6 +41,11 @@ _ALLOWED_REMEMBER_KINDS = ("note", "reflection", "error")
 _ALLOWED_BUDGETS = ("S", "M", "L")
 _ALLOWED_SCOPES = ("knowledge", "skills", "activity", "users", "working")
 
+# Approx char budget for the project-context bundle (SUMMARY + active plans),
+# chosen proportional to the overall needs budget. The bundle is prepended to
+# the main needs output and then the whole thing is capped at _MAX_CONTEXT_CHARS.
+_PROJECT_BUNDLE_BUDGETS = {"S": 2_000, "M": 5_000, "L": 10_000}
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -294,8 +299,9 @@ class MemoryContext:
         "Results are cached for the session; the cache invalidates on "
         "memory_remember. Use at the start of complex tasks to front-load "
         "relevant memory without multiple recall round-trips. "
-        "Pass `project` to let the system lift the project's goal and open "
-        "questions into the re-ranking signal automatically."
+        "Pass `project` to lift the project's goal and open questions into "
+        "the re-ranking signal and prepend a compact project bundle "
+        "(SUMMARY.md + active plan names) to the returned text."
     )
     input_schema = {
         "type": "object",
@@ -373,6 +379,7 @@ class MemoryContext:
 
         project = args.get("project")
         project_warning = ""
+        project_bundle = ""
         if project is not None:
             if not isinstance(project, str) or not project.strip():
                 raise ValueError("project must be a non-empty string if supplied")
@@ -385,9 +392,15 @@ class MemoryContext:
                     purpose_text = (
                         f"{purpose_text} — {project_blurb}" if purpose_text else project_blurb
                     )
-                else:
+                project_bundle = _project_context_bundle(
+                    self._workspace,
+                    project_name,
+                    char_budget=_PROJECT_BUNDLE_BUDGETS[budget],
+                )
+                if not project_blurb and not project_bundle:
                     project_warning = (
-                        f"\n(note: project {project_name!r} has no goal / questions to lift)\n"
+                        f"\n(note: project {project_name!r} has no goal, questions, "
+                        "summary, or active plans to surface)\n"
                     )
 
         text = self._memory.context(
@@ -396,6 +409,8 @@ class MemoryContext:
             budget=budget,
             refresh=refresh,
         )
+        if project_bundle:
+            text = f"{project_bundle}\n\n{text}"
         if project_warning:
             text = text + project_warning
         if len(text) > _MAX_CONTEXT_CHARS:
@@ -432,6 +447,94 @@ def _project_purpose_blurb(workspace, project_name: str) -> str:
         topics = "; ".join(open_qs[:5])
         parts.append(f"open questions: {topics}")
     return " | ".join(parts)
+
+
+def _project_context_bundle(workspace, project_name: str, *, char_budget: int) -> str:
+    """Return SUMMARY.md + active plan listing for a project, or empty string.
+
+    The bundle is prepended to the main ``memory_context`` output so the
+    agent sees project-scoped context before the re-ranked per-need results.
+    SUMMARY gets roughly two-thirds of the char budget, plan listing gets the
+    rest; both sections truncate to their sub-budget when too long. Returns
+    an empty string when the project has neither a SUMMARY nor any active
+    plans.
+    """
+    try:
+        project = workspace.project(project_name)
+    except ValueError:
+        return ""
+    if not project.exists():
+        return ""
+
+    chunks: list[str] = []
+
+    summary_text = _read_project_summary(project)
+    if summary_text:
+        summary_budget = max(500, int(char_budget * 0.66))
+        if len(summary_text) > summary_budget:
+            summary_text = (
+                summary_text[:summary_budget].rstrip() + "\n\n[…summary truncated]"
+            )
+        chunks.append(f"## Project SUMMARY — {project_name}\n\n{summary_text.strip()}")
+
+    plan_lines = _active_plan_lines(workspace, project_name)
+    if plan_lines:
+        plan_budget = max(400, char_budget - (len(chunks[0]) if chunks else 0))
+        text = "\n".join(plan_lines)
+        if len(text) > plan_budget:
+            text = text[:plan_budget].rstrip() + "\n[…plans truncated]"
+        chunks.append(f"## Active plans — {project_name}\n\n{text}")
+
+    return "\n\n".join(chunks)
+
+
+def _read_project_summary(project) -> str:
+    summary_path = project.summary_path
+    if not summary_path.is_file():
+        return ""
+    try:
+        return summary_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _active_plan_lines(workspace, project_name: str) -> list[str]:
+    """One compact line per active plan, with current phase + last failure."""
+    try:
+        summaries = workspace.plan_list(project_name)
+    except (ValueError, FileNotFoundError):
+        return []
+    active = [s for s in summaries if s.get("status") == "active"]
+    if not active:
+        return []
+    lines: list[str] = []
+    for summary in active:
+        plan_id = summary.get("plan_id", "?")
+        try:
+            plan_doc, state = workspace.plan_load(project_name, plan_id)
+        except (FileNotFoundError, ValueError):
+            continue
+        purpose = (plan_doc.get("purpose") or "").strip() or "(no purpose)"
+        phases = plan_doc.get("phases") or []
+        current_idx = int(state.get("current_phase", 0))
+        if 0 <= current_idx < len(phases):
+            phase_title = phases[current_idx].get("title", "—")
+        else:
+            phase_title = "—"
+        total = len(phases) or 1
+        line = (
+            f"- **{plan_id}** — {purpose} — "
+            f"Phase {current_idx + 1}/{total}: {phase_title}"
+        )
+        last_failure = ""
+        for f in reversed(state.get("failure_history") or []):
+            if f.get("phase_index") == current_idx:
+                last_failure = (f.get("reason") or "").strip()
+                break
+        if last_failure:
+            line += f" (last failure: {last_failure[:80]})"
+        lines.append(line)
+    return lines
 
 
 # ---------------------------------------------------------------------------
