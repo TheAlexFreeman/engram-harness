@@ -334,28 +334,39 @@ attribution.
 
 ---
 
-### Phase 2 — Recall Tool
+### Phase 2 — Memory Tool Surface
 
-**Goal:** The agent can query memory on demand during a session, with results
-participating in the ACCESS feedback loop.
+**Goal:** The agent has a coherent set of memory affordances — recall,
+remember, review, context, trace — presented as first-class operations in
+the system prompt, with results feeding the ACCESS loop.
 
-- [ ] `harness/tools/recall.py`: `RecallMemory` tool
-  - Input: `{ query: str, k?: int, namespace?: str }`
-  - Output: formatted results with source paths, trust levels, timestamps,
-    provenance (`source` field from frontmatter)
-  - Trust-weighted presentation: high-trust results cited freely; low-trust
-    results presented with provenance caveat
-- [ ] Register in `build_tools()` when `--memory=engram`
-- [ ] ACCESS.jsonl logging: each recall invocation produces ACCESS entries for
-      every result returned — with helpfulness scored after the session based on
-      whether the agent subsequently used the result
-- [ ] System prompt addition: when Engram is active, inform the model that
-      `recall_memory` is available for querying prior sessions, knowledge, and
-      project context
+The design for the expanded surface lives in
+`docs/memory-affordances-draft.md`. It replaces the original
+single-tool `recall_memory` proposal. Tools are registered with
+underscore names (`memory_recall`, `memory_remember`, `memory_review`,
+`memory_context`, `memory_trace`) and documented in the prompt with
+`memory: <op>(...)` prefix syntax for readability.
 
-**Exit criteria:** Agent calls `recall_memory` mid-session, gets trust-annotated
-results from semantic search, and ACCESS.jsonl gains entries that feed the
-aggregation pipeline.
+- [x] `harness/tools/memory_tools.py`: five tool classes backing the
+      affordances, each calling into `EngramMemory`
+- [x] Register the suite in `build_session()` when `--memory=engram`
+- [x] System prompt `## Memory` section (opt-in via
+      `system_prompt_native(with_memory_tools=True)`)
+- [x] Session-scoped cache for `memory_context` keyed on
+      `(sorted(needs), purpose, budget)`; wholesale invalidation on
+      `memory_remember`
+- [x] Trust-weighted recall presentation: high-trust results cited
+      freely; low-trust results presented with provenance caveat
+- [ ] ACCESS.jsonl logging: each recall invocation produces ACCESS
+      entries for every result returned — with helpfulness scored after
+      the session based on whether the agent subsequently used the
+      result. (The backend already logs recall events; the trace bridge
+      already consumes them. This ticket covers strengthening the
+      helpfulness signal from agent follow-through.)
+
+**Exit criteria:** Agent calls `memory_recall` / `memory_context` /
+`memory_review` mid-session, gets trust-annotated results, and
+ACCESS.jsonl gains entries that feed the aggregation pipeline.
 
 ---
 

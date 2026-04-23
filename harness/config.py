@@ -107,8 +107,14 @@ def _build_memory(
         return FileMemory(path=config.workspace / "progress.md"), None, []
 
     from harness.engram_memory import EngramMemory, detect_engram_repo
+    from harness.tools.memory_tools import (
+        MemoryContext,
+        MemoryRecall,
+        MemoryRemember,
+        MemoryReview,
+        MemoryTrace,
+    )
     from harness.tools.plan_tools import CompletePlan, CreatePlan, RecordFailure, ResumePlan
-    from harness.tools.recall import RecallMemory
 
     repo_path = config.memory_repo
     if repo_path is None:
@@ -141,13 +147,20 @@ def _build_memory(
         f"[engram] session={engram.session_id} repo={engram.content_root}",
         file=sys.stderr,
     )
+    memory_tools = [
+        MemoryRecall(engram),
+        MemoryRemember(engram),
+        MemoryReview(engram),
+        MemoryContext(engram),
+        MemoryTrace(engram),
+    ]
     plan_tools = [
         CreatePlan(engram),
         ResumePlan(engram),
         CompletePlan(engram),
         RecordFailure(engram),
     ]
-    return engram, engram, [RecallMemory(engram)] + plan_tools
+    return engram, engram, memory_tools + plan_tools
 
 
 def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any) -> Any:
@@ -187,7 +200,10 @@ def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any
             client=client,
             model=config.model,
             tools=tools,
-            system=system_prompt_native(with_plan_tools=engram_memory is not None),
+            system=system_prompt_native(
+                with_plan_tools=engram_memory is not None,
+                with_memory_tools=engram_memory is not None,
+            ),
         )
     raise AssertionError("unreachable")
 

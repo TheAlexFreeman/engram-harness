@@ -222,7 +222,7 @@ def _parse_args() -> argparse.Namespace:
         metavar="N",
         help=(
             "Adaptive recall: after N consecutive failures from the same tool, inject a "
-            "recall_memory nudge (requires --memory=engram). Use 0 to disable (default)."
+            "memory_recall nudge (requires --memory=engram). Use 0 to disable (default)."
         ),
     )
     parser.add_argument(

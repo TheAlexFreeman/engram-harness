@@ -91,6 +91,23 @@ class _RecallEvent:
     phase: str = "manifest"  # "manifest" (first call) or "fetch" (follow-up by index)
 
 
+@dataclass
+class _TraceEvent:
+    """One agent-annotated trace event. Feeds session summary + reflection."""
+
+    timestamp: datetime
+    event: str
+    reason: str = ""
+    detail: str = ""
+
+
+# Soft per-need character budgets for `memory: context` by tier.
+_CONTEXT_BUDGETS = {"S": 2000, "M": 6000, "L": 12000}
+
+# Maximum number of recent sessions to surface when resolving `recent_sessions`.
+_RECENT_SESSIONS_MAX = 6
+
+
 class EngramMemory:
     """A `MemoryBackend` backed by an Engram git repo.
 
@@ -148,6 +165,10 @@ class EngramMemory:
         self.start_time = datetime.now()
         self._records: list[_BufferedRecord] = []
         self._recall_events: list[_RecallEvent] = []
+        self._trace_events: list[_TraceEvent] = []
+        # `memory: context` session cache, keyed on
+        # (tuple(sorted(needs)), purpose, budget). Invalidates on record().
+        self._context_cache: dict[tuple[tuple[str, ...], str, str], str] = {}
 
         # Embedding backend; defer import — semantic search is optional.
         self._embed_enabled = embed if embed is not None else _embedding_available()
@@ -158,6 +179,24 @@ class EngramMemory:
     # ------------------------------------------------------------------
 
     def start_session(self, task: str) -> str:
+        """Build a task-independent primer for the session.
+
+        The bootstrap intentionally does *not* run a task-based search. That
+        responsibility now lives with the agent-initiated ``memory_context``
+        tool — the agent can call it with the task phrasing (or any other
+        descriptor) once it has judged what it actually needs. This keeps
+        the bootstrap deterministic, avoids duplicate-loading the same
+        files via two different code paths, and lets the agent's own
+        access pattern drive ACCESS helpfulness scoring.
+
+        What the bootstrap still loads:
+
+        - Header: session id, repo root, task (for orientation only).
+        - ``_BOOTSTRAP_FILES``: HOME, user portrait, activity rollup, and
+          the working/USER + working/CURRENT scratchpads. These are
+          task-independent primer material — always useful, cheap, stable.
+        - Active plan briefing (operational state — not knowledge).
+        """
         self.task = task
         sections: list[str] = []
         sections.append(
@@ -178,10 +217,6 @@ class EngramMemory:
             block = f"\n## {rel}\n\n{body.rstrip()}\n"
             sections.append(block)
             used += len(block)
-
-        relevant = self._task_relevant_excerpt(task, char_budget=_BOOTSTRAP_BUDGET_CHARS - used)
-        if relevant:
-            sections.append(relevant)
 
         active_plan = self._active_plan_briefing()
         if active_plan:
@@ -236,7 +271,110 @@ class EngramMemory:
         return results
 
     def record(self, content: str, kind: str = "note") -> None:
+        """Buffer a record for the session's activity log.
+
+        This is internal plumbing — the harness loop calls it on tool errors
+        and other events that the agent didn't explicitly trigger. Such
+        records do not represent new agent-visible state, so they do *not*
+        invalidate the context cache. Explicit ``memory: remember`` calls
+        go through ``remember()`` which does invalidate.
+        """
         self._records.append(_BufferedRecord(timestamp=datetime.now(), kind=kind, content=content))
+
+    def remember(self, content: str, kind: str = "note") -> None:
+        """Agent-facing buffered-record call.
+
+        Equivalent to ``record()`` but additionally clears the
+        ``memory_context`` session cache, since an agent-initiated remember
+        may have buffered content that would change the result of an
+        equivalent ``context()`` query on the next turn.
+        """
+        self.record(content, kind=kind)
+        self._context_cache.clear()
+
+    # ------------------------------------------------------------------
+    # memory: review / context / trace (agent-initiated affordances)
+    # ------------------------------------------------------------------
+
+    def review(self, path: str) -> str:
+        """Read a specific memory file by path (relative to `memory/`).
+
+        The `memory/` prefix is implicit: callers can pass either
+        ``"users/Alex/profile.md"`` or ``"memory/users/Alex/profile.md"``.
+        Raises ValueError on traversal or path-outside-memory; raises
+        FileNotFoundError when the file does not exist.
+        """
+        rel = _normalize_memory_path(path)
+        abs_path = (self.content_root / rel).resolve()
+        memory_root = (self.content_root / "memory").resolve()
+        try:
+            abs_path.relative_to(memory_root)
+        except ValueError as exc:
+            raise ValueError(f"path must resolve under memory/: {path!r}") from exc
+        if not abs_path.is_file():
+            raise FileNotFoundError(rel)
+        return abs_path.read_text(encoding="utf-8")
+
+    def context(
+        self,
+        needs: list[str],
+        *,
+        purpose: str | None = None,
+        budget: str = "M",
+        refresh: bool = False,
+    ) -> str:
+        """Declarative context loading.
+
+        Maps each descriptor in *needs* to memory files and returns a single
+        concatenated block sized to the budget tier. Results are cached for
+        the session keyed on ``(sorted(needs), purpose, budget)``; the cache
+        invalidates wholesale on ``record()`` (the agent-facing
+        ``memory: remember`` op). Pass ``refresh=True`` to force re-evaluation.
+        """
+        cleaned_needs = [n.strip() for n in needs if isinstance(n, str) and n.strip()]
+        if not cleaned_needs:
+            return "(no needs specified)\n"
+        budget_tier = (budget or "M").upper()
+        if budget_tier not in _CONTEXT_BUDGETS:
+            budget_tier = "M"
+        chars_per_need = _CONTEXT_BUDGETS[budget_tier]
+        purpose_str = (purpose or "").strip()
+
+        key = (tuple(sorted(cleaned_needs)), purpose_str, budget_tier)
+        if not refresh and key in self._context_cache:
+            return self._context_cache[key]
+
+        header = ["# Memory context"]
+        if purpose_str:
+            header.append(f"Purpose: {purpose_str}")
+        header.append(f"Budget: {budget_tier} (~{chars_per_need} chars/need)")
+        header.append("")
+        sections: list[str] = ["\n".join(header)]
+
+        for need in cleaned_needs:
+            body = self._resolve_need(need, purpose=purpose_str, char_budget=chars_per_need)
+            sections.append(f"## need: {need}\n\n{body.rstrip()}\n")
+
+        result = "\n".join(sections)
+        self._context_cache[key] = result
+        return result
+
+    def trace_event(
+        self,
+        event: str,
+        *,
+        reason: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        """Buffer an agent-annotated trace event for the session summary."""
+        self._trace_events.append(
+            _TraceEvent(
+                timestamp=datetime.now(),
+                event=event.strip() or "unspecified",
+                reason=(reason or "").strip(),
+                detail=(detail or "").strip(),
+            )
+        )
 
     def end_session(self, summary: str, *, skip_commit: bool = False) -> None:
         rel_dir = self._session_dir_rel()
@@ -275,6 +413,20 @@ class EngramMemory:
                     f"- `{ts}` query={ev.query!r} → {ev.file_path} "
                     f"(trust={ev.trust or '?'} score={ev.score:.3f})"
                 )
+            body_lines.append("")
+
+        if self._trace_events:
+            body_lines.append("## Trace annotations")
+            body_lines.append("")
+            for ev in self._trace_events:
+                ts = ev.timestamp.isoformat(timespec="seconds")
+                tail = []
+                if ev.reason:
+                    tail.append(f"reason={ev.reason!r}")
+                if ev.detail:
+                    tail.append(f"detail={ev.detail!r}")
+                suffix = f" — {' '.join(tail)}" if tail else ""
+                body_lines.append(f"- `{ts}` [{ev.event}]{suffix}")
             body_lines.append("")
 
         body = "\n".join(body_lines)
@@ -330,6 +482,10 @@ class EngramMemory:
     @property
     def buffered_records(self) -> list[_BufferedRecord]:
         return list(self._records)
+
+    @property
+    def trace_events(self) -> list[_TraceEvent]:
+        return list(self._trace_events)
 
     def _tag_last_recall_phase(self, n: int, phase: str) -> None:
         """Tag the last *n* recall events with *phase* ('manifest' or 'fetch')."""
@@ -400,23 +556,136 @@ class EngramMemory:
         ]
         return "\n".join(lines) + "\n"
 
-    def _task_relevant_excerpt(self, task: str, *, char_budget: int) -> str:
-        if char_budget <= 200:
-            return ""
-        hits = self._semantic_recall(task, k=3) if self._embed_enabled else []
+    def _resolve_need(self, need: str, *, purpose: str, char_budget: int) -> str:
+        """Map a single context descriptor to a budget-bounded excerpt."""
+        lowered = need.lower()
+        if lowered == "user_preferences":
+            return self._need_user_preferences(char_budget)
+        if lowered == "recent_sessions":
+            return self._need_recent_sessions(char_budget)
+        if ":" in need:
+            kind, _, arg = need.partition(":")
+            kind = kind.strip().lower()
+            arg = arg.strip()
+            if kind == "domain" and arg:
+                return self._need_search(
+                    arg, purpose=purpose, scope="knowledge", char_budget=char_budget
+                )
+            if kind == "skill" and arg:
+                return self._need_skill(arg, char_budget=char_budget)
+        # Free-form descriptor — semantic/keyword search across all scopes.
+        return self._need_search(need, purpose=purpose, scope=None, char_budget=char_budget)
+
+    def _need_user_preferences(self, char_budget: int) -> str:
+        rels = [
+            "memory/users/SUMMARY.md",
+            "memory/working/USER.md",
+        ]
+        pieces = []
+        used = 0
+        for rel in rels:
+            text = self._read_optional(rel)
+            if not text:
+                continue
+            remaining = char_budget - used
+            if remaining <= 200:
+                break
+            excerpt = _truncate_head(text.strip(), remaining)
+            pieces.append(f"[{rel}]\n{excerpt}")
+            used += len(excerpt) + len(rel) + 4
+        if not pieces:
+            return "(no user profile files found)"
+        return "\n\n".join(pieces)
+
+    def _need_recent_sessions(self, char_budget: int) -> str:
+        activity_root = self.content_root / "memory" / "activity"
+        if not activity_root.is_dir():
+            return "(no activity/ directory)"
+        # Collect session summary.md files from YYYY/MM/DD/act-NNN layout.
+        summaries: list[tuple[Path, float]] = []
+        for md in activity_root.glob("*/*/*/act-*/summary.md"):
+            try:
+                summaries.append((md, md.stat().st_mtime))
+            except OSError:
+                continue
+        summaries.sort(key=lambda pair: pair[1], reverse=True)
+        if not summaries:
+            return "(no session summaries under activity/)"
+
+        pieces: list[str] = []
+        used = 0
+        per_item = max(300, char_budget // max(1, _RECENT_SESSIONS_MAX))
+        for md, _mtime in summaries[:_RECENT_SESSIONS_MAX]:
+            remaining = char_budget - used
+            if remaining <= 200:
+                break
+            try:
+                text = md.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            rel = md.relative_to(self.content_root).as_posix()
+            excerpt = _truncate_head(text.strip(), min(per_item, remaining))
+            pieces.append(f"[{rel}]\n{excerpt}")
+            used += len(excerpt) + len(rel) + 4
+        return "\n\n".join(pieces) or "(no recent sessions)"
+
+    def _need_skill(self, name: str, *, char_budget: int) -> str:
+        # Reject anything that could escape memory/skills/ before building
+        # candidate paths. `_read_optional` doesn't sandbox its input, so a
+        # descriptor like ``skill:../../../README`` would otherwise resolve
+        # to a file outside the skills namespace.
+        safe_name = _sanitize_skill_name(name)
+        if not safe_name:
+            # Fall through to scoped search for anything we won't probe directly.
+            return self._need_search(name, purpose="", scope="skills", char_budget=char_budget)
+        direct_candidates = [
+            f"memory/skills/{safe_name}.md",
+            f"memory/skills/{safe_name}/README.md",
+            f"memory/skills/{safe_name}/SKILL.md",
+        ]
+        for rel in direct_candidates:
+            text = self._read_optional(rel)
+            if text:
+                return f"[{rel}]\n{_truncate_head(text.strip(), char_budget)}"
+        # Fall back to a scoped search using the original descriptor, which
+        # still goes through the scope-filtered recall path.
+        return self._need_search(name, purpose="", scope="skills", char_budget=char_budget)
+
+    def _need_search(
+        self,
+        query: str,
+        *,
+        purpose: str,
+        scope: str | None,
+        char_budget: int,
+    ) -> str:
+        scopes = (f"memory/{scope}",) if scope else _SEARCH_SCOPES
+        # Weight purpose into the embedding query when provided — the
+        # sentence-transformer relevance adapts naturally to longer queries.
+        blended = f"{query} — {purpose}" if purpose else query
+        hits = self._semantic_recall(blended, k=4, scopes=scopes) if self._embed_enabled else []
         if not hits:
-            hits = self._keyword_recall(task, k=3)
+            hits = self._keyword_recall(blended, k=4, scopes=scopes)
         if not hits:
-            return ""
-        block = ["\n## Task-relevant excerpts\n"]
-        for h in hits:
-            chunk = h["content"].strip()
-            chunk = _truncate_head(chunk, 1500)
-            block.append(f"\n### {h['file_path']}\n\n{chunk}\n")
-        joined = "".join(block)
-        if len(joined) > char_budget:
-            joined = _truncate_head(joined, char_budget)
-        return joined
+            suffix = f" scoped to {scope}" if scope else ""
+            return f"(no matches for {query!r}{suffix})"
+        pieces: list[str] = []
+        used = 0
+        per_hit = max(500, char_budget // max(1, len(hits)))
+        for hit in hits:
+            remaining = char_budget - used
+            if remaining <= 200:
+                break
+            rel = hit["file_path"]
+            content = (hit.get("content") or "").strip()
+            excerpt = _truncate_head(content, min(per_hit, remaining))
+            header_bits = [f"[{rel}]"]
+            heading = hit.get("heading")
+            if heading:
+                header_bits.append(heading)
+            pieces.append(" ".join(header_bits) + "\n" + excerpt)
+            used += len(excerpt) + 80
+        return "\n\n".join(pieces)
 
     # ---- recall backends -------------------------------------------------
 
@@ -506,6 +775,56 @@ class EngramMemory:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def _sanitize_skill_name(raw: str) -> str:
+    """Return *raw* if it is safe to interpolate into ``memory/skills/<raw>``.
+
+    A skill name must resolve inside ``memory/skills/`` — no traversal
+    segments, no absolute paths, no drive letters, no NUL bytes. Slashes
+    are permitted so that nested skill folders (``skills/foo/bar``) work,
+    but ``..`` segments, empty segments, and leading ``/`` are rejected.
+    Returns an empty string if anything looks unsafe; callers should
+    interpret that as "don't probe directly, fall back to search".
+    """
+    if not isinstance(raw, str):
+        return ""
+    s = raw.strip().replace("\\", "/")
+    if not s:
+        return ""
+    if "\x00" in s:
+        return ""
+    if s.startswith("/") or (len(s) > 1 and s[1] == ":"):
+        return ""
+    parts = s.split("/")
+    if any(p in ("", "..", ".") for p in parts):
+        return ""
+    return "/".join(parts)
+
+
+def _normalize_memory_path(raw: str) -> str:
+    """Normalize a user-supplied memory path to ``memory/<rest>``.
+
+    Accepts both ``"users/Alex/profile.md"`` and
+    ``"memory/users/Alex/profile.md"``. Rejects traversal segments,
+    absolute paths, empty strings.
+    """
+    if not isinstance(raw, str):
+        raise ValueError("path must be a string")
+    s = raw.strip().replace("\\", "/")
+    if not s:
+        raise ValueError("path must be non-empty")
+    if s.startswith("/") or (len(s) > 1 and s[1] == ":"):
+        raise ValueError(f"path must be relative (got {raw!r})")
+    parts = [p for p in s.split("/") if p]
+    if any(p == ".." for p in parts):
+        raise ValueError(f"path may not contain '..' (got {raw!r})")
+    # Strip leading "memory/" if the caller supplied it.
+    if parts and parts[0] == "memory":
+        parts = parts[1:]
+    if not parts:
+        raise ValueError(f"path must point inside memory/ (got {raw!r})")
+    return "memory/" + "/".join(parts)
 
 
 def _resolve_content_root(repo_root: Path, content_prefix: str | None) -> tuple[str, Path]:
@@ -623,3 +942,7 @@ __all__ = [
     "EngramMemory",
     "detect_engram_repo",
 ]
+
+
+# Re-exported for testability by harness.tools.memory_tools.
+_public_normalize_memory_path = _normalize_memory_path

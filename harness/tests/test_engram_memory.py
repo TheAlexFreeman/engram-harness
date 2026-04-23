@@ -78,6 +78,41 @@ def test_engram_memory_bootstrap(engram_repo: Path) -> None:
     assert mem.task == "optimize the celery worker pool"
 
 
+def test_bootstrap_is_task_independent(engram_repo: Path) -> None:
+    """Bootstrap no longer runs a task-based search — that's memory_context's job.
+
+    The knowledge fixture contains ``celery.md``; the old bootstrap would have
+    surfaced it under a ``## Task-relevant excerpts`` header. Under the new
+    split, that header must be absent and the agent fetches celery context
+    via ``memory_context`` when it decides the task calls for it.
+    """
+    mem = EngramMemory(engram_repo, embed=False)
+    bootstrap = mem.start_session("optimize the celery worker pool")
+    assert "Task-relevant excerpts" not in bootstrap
+    # celery.md from the fixture should not be front-loaded by the bootstrap.
+    assert "celery.md" not in bootstrap
+    # But memory_context can still reach it on demand.
+    ctx_out = mem.context(["domain:celery"], budget="S")
+    assert "celery" in ctx_out.lower()
+
+
+def test_bootstrap_identical_across_tasks(engram_repo: Path) -> None:
+    """Two sessions opened with different tasks get the same primer body.
+
+    The task string is included verbatim in the header; everything else
+    (HOME, users, activity, working scratchpads) is task-independent and
+    must render identically so the agent's bootstrap stays deterministic.
+    """
+    mem_a = EngramMemory(engram_repo, embed=False)
+    mem_b = EngramMemory(engram_repo, embed=False)
+    a = mem_a.start_session("optimize celery worker pool")
+    b = mem_b.start_session("improve ssr caching")
+    # Strip the header's Task line before comparing.
+    body_a = "\n".join(line for line in a.splitlines() if not line.startswith("Task:"))
+    body_b = "\n".join(line for line in b.splitlines() if not line.startswith("Task:"))
+    assert body_a == body_b
+
+
 def test_engram_memory_recall_keyword(engram_repo: Path) -> None:
     mem = EngramMemory(engram_repo, embed=False)
     mem.start_session("celery tuning")
