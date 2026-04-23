@@ -140,11 +140,11 @@ For worktree deployments, set `MEMORY_REPO_ROOT` to the worktree path and `HOST_
 
 ## Tool surface
 
-The MCP server exposes **109 tools by default**: 49 Tier 0 read-only tools plus 60 Tier 1 semantic tools. Enabling `MEMORY_ENABLE_RAW_WRITE_TOOLS=1` adds **7 Tier 2** raw fallback tools for a full surface of **116**. The tier system enforces a deliberate preference order: inspect before mutating, use semantic operations before raw edits, and gate low-level writes behind an explicit opt-in.
+The MCP server exposes **107 tools by default**: 47 Tier 0 read-only tools plus 60 Tier 1 semantic tools. Enabling `MEMORY_ENABLE_RAW_WRITE_TOOLS=1` adds **7 Tier 2** raw fallback tools for a full surface of **114**. The tier system enforces a deliberate preference order: inspect before mutating, use semantic operations before raw edits, and gate low-level writes behind an explicit opt-in.
 
 ### JSON Schema registry (`memory_tool_schema`)
 
-Structured input contracts for complex tools live in [`core/tools/agent_memory_mcp/tool_schemas.py`](../../core/tools/agent_memory_mcp/tool_schemas.py) (`TOOL_INPUT_SCHEMAS`). The `memory_tool_schema` tool returns JSON Schema for every name in that registry: Tier 1 semantic tools (nested objects, enums, preview flows), Tier 2 raw tools when you need an explicit contract, and selected Tier 0 tools where the maintainers added registry entries (for example `memory_read_file`, `memory_extract_file`, `memory_search`, and the context injectors). Most other Tier 0 tools expose only FastMCP-generated schemas derived from their Python type hints; calling `memory_tool_schema` for those names raises a validation error that lists the registry tool names. Use `memory_plan_schema` when you specifically want the `memory_plan_create` contract without passing the tool name.
+Structured input contracts for complex tools live in [`core/tools/agent_memory_mcp/tool_schemas.py`](../../core/tools/agent_memory_mcp/tool_schemas.py) (`TOOL_INPUT_SCHEMAS`). The `memory_tool_schema` tool returns JSON Schema for every name in that registry: Tier 1 semantic tools (nested objects, enums, preview flows), Tier 2 raw tools when you need an explicit contract, and selected Tier 0 tools where the maintainers added registry entries (for example `memory_read_file`, `memory_extract_file`, `memory_search`, and `memory_context_home`). Most other Tier 0 tools expose only FastMCP-generated schemas derived from their Python type hints; calling `memory_tool_schema` for those names raises a validation error that lists the registry tool names. Use `memory_plan_schema` when you specifically want the `memory_plan_create` contract without passing the tool name.
 
 ### Tier 0: Read-only tools
 
@@ -184,25 +184,25 @@ These tools inspect, analyze, and report on the repo without changing it. Always
 | `memory_score_links_by_access` | Score links using ACCESS.jsonl co-retrieval patterns. |
 | `memory_session_bootstrap` | Return compact bootstrap context for session initialization. |
 | `memory_context_home` | Return home-context Markdown with a JSON metadata header under a soft character budget. |
-| `memory_context_project` | Return project-focused Markdown with plan state, staged-file manifest, and optional sources. |
 | `memory_prepare_unverified_review` | Prepare a structured review packet for unverified knowledge files. |
 | `memory_prepare_promotion_batch` | Prepare a batch of knowledge files for promotion review. |
 | `memory_prepare_periodic_review` | Assemble the full periodic review analysis packet. |
 
 ### Context injectors
 
-**These are the primary session entrypoints when the MCP surface is available.** Prefer them over the equivalent file-based sequences; fall back to files only when the MCP surface is unavailable or lacks the needed operation.
+**This is a primary session entrypoint when the MCP surface is available.** Prefer it over the equivalent file-based sequences; fall back to files only when the MCP surface is unavailable or lacks the needed operation.
 
-`memory_context_home` and `memory_context_project` are Tier 0 read-only context injectors. They are designed to replace the most common file-based bootstrap patterns with a single MCP call that returns native Markdown plus a JSON metadata header.
+`memory_context_home` is a Tier 0 read-only context injector. It is designed to replace the most common file-based bootstrap patterns with a single MCP call that returns native Markdown plus a JSON metadata header.
+
+**Project-scoped context** is not exposed as a dedicated MCP tool in this layout. The old `memory_context_project` / `memory_context_project_lite` tools were removed from the Engram MCP server; in **engram-harness** their behavior is folded into the harness-native `memory_context` tool (use `project=<slug>`). Outside a harness, read project and plan material with `memory_read_file` and related Tier 0 tools.
 
 Return format:
 
 - A leading `json` code fence containing metadata such as `tool`, `loaded_files`, and `budget_report`.
 - Metadata also includes `format_version` and `body_sections`, so hosts can identify the included top-level sections and their source paths without re-parsing the Markdown body.
-- `memory_context_project` metadata also includes a compact `next_action` object when a selected plan has an actionable phase.
 - Markdown sections below the header for the included context blocks.
 - Each body section includes a `_Source: ..._` provenance line and comment delimiters (`<!-- context-section: ... -->`) to make section boundaries explicit even when the embedded Markdown contains its own headings.
-- Soft character budgets: sections are either included whole or dropped by priority; the tools never truncate mid-file.
+- Soft character budgets: sections are either included whole or dropped by priority; the tool never truncates mid-file.
 
 `memory_context_home` parameters:
 
@@ -213,18 +213,7 @@ Return format:
 
 Use `memory_context_home` for general session startup when an agent needs the same sequence prescribed by `memory/HOME.md`: user portrait, recent activity, working state, and optional indexes.
 
-`memory_context_project` parameters:
-
-- `project`: target project slug under `memory/working/projects/`.
-- `max_context_chars` (default `24000`): soft character budget; `0` means unbounded.
-- `include_plan_sources` (default `true`): include whole-file source content for the current plan phase when budget permits.
-- `include_user_profile` (default `null` / auto): include `memory/users/SUMMARY.md` only when no plan is selected. Set `true` to force inclusion or `false` to force omission.
-
-Use `memory_context_project` when an automation or execution agent is resuming work on one named project and needs the project summary, current plan state, staged IN/ manifest, relevant working notes, and a lightweight `next_action` hint in metadata.
-
-When callers start from `memory_session_bootstrap`, active plan entries use the same compact `next_action` shape and include a `resume_context` object that points directly to `memory_context_project` for that plan's project.
-
-When strict plan validation fails but the YAML is still readable, `memory_context_project` falls back to a raw-YAML summary for draft or partially specified plans and reports `plan_source: "raw_yaml_fallback"` in metadata. This keeps the injector useful during planning, before every postcondition or source has been fully normalized.
+When callers start from `memory_session_bootstrap`, active plan entries use the same compact `next_action` shape and include a `resume_context` object that names how to open project context (harness: `memory_context` with `project=`, or in any layout: the governed file paths the bootstrap lists).
 
 Roadmap note:
 

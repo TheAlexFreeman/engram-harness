@@ -3585,8 +3585,6 @@ __all__ = [
     "checkpoint_input_schema",
     "commit_input_schema",
     "context_home_input_schema",
-    "context_project_input_schema",
-    "context_project_lite_input_schema",
     "delete_input_schema",
     "demote_knowledge_input_schema",
     "edit_input_schema",

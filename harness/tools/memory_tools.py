@@ -472,9 +472,7 @@ def _project_context_bundle(workspace, project_name: str, *, char_budget: int) -
     if summary_text:
         summary_budget = max(500, int(char_budget * 0.66))
         if len(summary_text) > summary_budget:
-            summary_text = (
-                summary_text[:summary_budget].rstrip() + "\n\n[…summary truncated]"
-            )
+            summary_text = summary_text[:summary_budget].rstrip() + "\n\n[…summary truncated]"
         chunks.append(f"## Project SUMMARY — {project_name}\n\n{summary_text.strip()}")
 
     plan_lines = _active_plan_lines(workspace, project_name)
@@ -522,10 +520,7 @@ def _active_plan_lines(workspace, project_name: str) -> list[str]:
         else:
             phase_title = "—"
         total = len(phases) or 1
-        line = (
-            f"- **{plan_id}** — {purpose} — "
-            f"Phase {current_idx + 1}/{total}: {phase_title}"
-        )
+        line = f"- **{plan_id}** — {purpose} — Phase {current_idx + 1}/{total}: {phase_title}"
         last_failure = ""
         for f in reversed(state.get("failure_history") or []):
             if f.get("phase_index") == current_idx:
