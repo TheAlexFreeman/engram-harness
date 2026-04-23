@@ -22,7 +22,7 @@ _DEFAULT_REPEAT_GUARD_MESSAGE = (
 
 _DEFAULT_ERROR_RECALL_MESSAGE_TEMPLATE = (
     "[harness] {tool_name} has failed {streak} consecutive times. "
-    "Use recall_memory with a query describing your goal or the error to retrieve "
+    "Use memory_recall with a query describing your goal or the error to retrieve "
     "relevant context from prior sessions that might help resolve this."
 )
 
@@ -207,11 +207,11 @@ def run_until_idle(
         else:
             messages.append(tool_results_msg)
 
-        # Adaptive recall: when a tool has failed repeatedly and recall_memory is
+        # Adaptive recall: when a tool has failed repeatedly and memory_recall is
         # available, inject a nudge prompting the agent to query prior context.
         # Must come AFTER tool_results to satisfy the API contract that tool_result
         # immediately follows tool_use.
-        if error_recall_threshold > 0 and "recall_memory" in tools:
+        if error_recall_threshold > 0 and "memory_recall" in tools:
             for tool_name, streak in list(tool_error_streaks.items()):
                 if streak >= error_recall_threshold:
                     tracer.event(

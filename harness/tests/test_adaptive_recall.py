@@ -1,4 +1,4 @@
-"""Tests for adaptive recall: error-streak detection and recall_memory nudge injection."""
+"""Tests for adaptive recall: error-streak detection and memory_recall nudge injection."""  # noqa: E501
 
 from __future__ import annotations
 
@@ -63,9 +63,9 @@ class FailCountTool:
 
 
 class NullRecallTool:
-    """Stub for recall_memory — returns empty results."""
+    """Stub for memory_recall — returns empty results."""
 
-    name = "recall_memory"
+    name = "memory_recall"
     description = "recall memory"
     input_schema = {"type": "object", "properties": {"query": {"type": "string"}}}
 
@@ -109,7 +109,7 @@ def test_adaptive_recall_triggers_after_threshold():
     """After N consecutive errors from the same tool, a recall nudge is injected."""
     fail = ErrorTool("bad_tool")
     recall = NullRecallTool()
-    tools: dict[str, Tool] = {"bad_tool": fail, "recall_memory": recall}
+    tools: dict[str, Tool] = {"bad_tool": fail, "memory_recall": recall}
 
     call = ToolCall(name="bad_tool", args={}, id="c0")
     mode = CaptureScriptedMode(
@@ -143,7 +143,7 @@ def test_adaptive_recall_nudge_injected_into_messages():
     """The nudge message is visible to the model on the next complete() call."""
     fail = ErrorTool("bad_tool")
     recall = NullRecallTool()
-    tools: dict[str, Tool] = {"bad_tool": fail, "recall_memory": recall}
+    tools: dict[str, Tool] = {"bad_tool": fail, "memory_recall": recall}
 
     call = ToolCall(name="bad_tool", args={}, id="c0")
     mode = CaptureScriptedMode(
@@ -171,13 +171,13 @@ def test_adaptive_recall_nudge_injected_into_messages():
         for m in mode.last_messages
         if m.get("role") == "user" and isinstance(m.get("content"), str)
     ]
-    assert any("[harness]" in t and "recall_memory" in t for t in user_texts)
+    assert any("[harness]" in t and "memory_recall" in t for t in user_texts)
 
 
 def test_adaptive_recall_disabled_by_default():
     """error_recall_threshold=0 means no nudge, even after many errors."""
     fail = ErrorTool("bad_tool")
-    tools: dict[str, Tool] = {"bad_tool": fail, "recall_memory": NullRecallTool()}
+    tools: dict[str, Tool] = {"bad_tool": fail, "memory_recall": NullRecallTool()}
 
     call = ToolCall(name="bad_tool", args={}, id="c0")
     mode = ScriptedMode(
@@ -204,9 +204,9 @@ def test_adaptive_recall_disabled_by_default():
 
 
 def test_adaptive_recall_no_trigger_without_recall_tool():
-    """Even if threshold is set, no nudge if recall_memory is not in tools."""
+    """Even if threshold is set, no nudge if memory_recall is not in tools."""
     fail = ErrorTool("bad_tool")
-    tools: dict[str, Tool] = {"bad_tool": fail}  # no recall_memory
+    tools: dict[str, Tool] = {"bad_tool": fail}  # no memory_recall
 
     call = ToolCall(name="bad_tool", args={}, id="c0")
     mode = ScriptedMode(
@@ -237,7 +237,7 @@ def test_adaptive_recall_streak_resets_on_success():
     # Fails on calls 1, 2, 4, 5; succeeds on call 3.
     tool = FailCountTool("bad_tool", fail_on_calls=(1, 2, 4, 5))
     recall = NullRecallTool()
-    tools: dict[str, Tool] = {"bad_tool": tool, "recall_memory": recall}
+    tools: dict[str, Tool] = {"bad_tool": tool, "memory_recall": recall}
 
     call = ToolCall(name="bad_tool", args={}, id="c0")
     mode = ScriptedMode(
@@ -269,7 +269,7 @@ def test_adaptive_recall_streak_resets_after_nudge():
     """After a nudge fires the streak is reset; same tool must fail N more times."""
     fail = ErrorTool("bad_tool")
     recall = NullRecallTool()
-    tools: dict[str, Tool] = {"bad_tool": fail, "recall_memory": recall}
+    tools: dict[str, Tool] = {"bad_tool": fail, "memory_recall": recall}
 
     call = ToolCall(name="bad_tool", args={}, id="c0")
     # 3 fails → nudge; then 2 more fails (not enough to re-trigger); then done
@@ -307,7 +307,7 @@ def test_adaptive_recall_one_nudge_per_turn():
     tools: dict[str, Tool] = {
         "tool_a": fail_a,
         "tool_b": fail_b,
-        "recall_memory": recall,
+        "memory_recall": recall,
     }
 
     call_a = ToolCall(name="tool_a", args={}, id="ca")
@@ -342,7 +342,7 @@ def test_adaptive_recall_nudge_after_tool_results():
     """Nudge must appear AFTER tool_results, never between assistant and tool_results."""
     fail = ErrorTool("bad_tool")
     recall = NullRecallTool()
-    tools: dict[str, Tool] = {"bad_tool": fail, "recall_memory": recall}
+    tools: dict[str, Tool] = {"bad_tool": fail, "memory_recall": recall}
 
     call = ToolCall(name="bad_tool", args={}, id="c0")
     mode = CaptureScriptedMode(
@@ -398,7 +398,7 @@ def test_adaptive_recall_nudge_contains_tool_name():
     """The nudge message names the failing tool so the model knows what failed."""
     fail = ErrorTool("my_special_tool")
     recall = NullRecallTool()
-    tools: dict[str, Tool] = {"my_special_tool": fail, "recall_memory": recall}
+    tools: dict[str, Tool] = {"my_special_tool": fail, "memory_recall": recall}
 
     call = ToolCall(name="my_special_tool", args={}, id="c0")
     mode = CaptureScriptedMode(
