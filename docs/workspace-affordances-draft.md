@@ -7,24 +7,28 @@
 > Companion to `memory-affordances-draft.md`, which covers the `memory:`
 > family for the durable, git-backed memory system.
 >
-> **Status:** almost fully wired.
+> **Status:** fully wired (16 tools shipped).
 >
-> - Shipped: `work_status`, `work_thread`, `work_jot`, `work_note`,
->   `work_read`, `work_search`, `work_scratch`, `work_promote`, and the
->   project CRUD operations (`work_project_create`, `_goal`, `_ask`,
->   `_resolve`, `_list`, `_status`, `_archive`) with auto-generated
->   SUMMARY.md and trace-event emission on state changes.
->   `memory_context` also accepts the documented `project` parameter —
->   the tool folds the project's goal and open questions into the
->   re-ranking purpose automatically. Backend lives in
->   `harness/workspace.py` / `harness/engram_memory.py`; tools in
+> - Shipped: every tool in this doc — `work_status`, `work_thread`,
+>   `work_jot`, `work_note`, `work_read`, `work_search`, `work_scratch`,
+>   `work_promote`, the project CRUD operations
+>   (`work_project_create`, `_goal`, `_ask`, `_resolve`, `_list`,
+>   `_status`, `_archive`), and `work_project_plan` with
+>   op-dispatched `create` / `brief` / `advance` / `list`. Auto-generated
+>   SUMMARY.md pulls the active plan into a per-project summary block,
+>   and state changes across threads / projects / plans emit
+>   `memory_trace` events. `memory_context` also accepts the documented
+>   `project` parameter — the tool folds the project's goal and open
+>   questions into the re-ranking purpose automatically. Backend lives
+>   in `harness/workspace.py` / `harness/engram_memory.py`; tools in
 >   `harness/tools/work_tools.py`; prompt sections in
 >   `harness/prompts.py::_WORK_SECTION` and
 >   `harness/prompts.py::_MEMORY_SECTION`.
-> - Deferred: `work_project_plan` (op-dispatched
->   create/brief/advance/list). Existing `plan_tools.py` continues to
->   handle multi-session plans unchanged until `work_project_plan`
->   lands.
+> - Coexistence: the legacy `plan_tools.py` (backed by
+>   `memory/working/projects/…`) is still registered for continuity.
+>   `work_project_plan` is the canonical workspace-facing surface going
+>   forward; a migration pass can retire `plan_tools.py` once the
+>   legacy plans under `memory/working/` have been moved or completed.
 > - Migration from `memory/working/` to `workspace/` is manual for now —
 >   both locations coexist. The bootstrap still reads
 >   `memory/working/USER.md` and `memory/working/CURRENT.md`; the new
