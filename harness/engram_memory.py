@@ -179,6 +179,24 @@ class EngramMemory:
     # ------------------------------------------------------------------
 
     def start_session(self, task: str) -> str:
+        """Build a task-independent primer for the session.
+
+        The bootstrap intentionally does *not* run a task-based search. That
+        responsibility now lives with the agent-initiated ``memory_context``
+        tool — the agent can call it with the task phrasing (or any other
+        descriptor) once it has judged what it actually needs. This keeps
+        the bootstrap deterministic, avoids duplicate-loading the same
+        files via two different code paths, and lets the agent's own
+        access pattern drive ACCESS helpfulness scoring.
+
+        What the bootstrap still loads:
+
+        - Header: session id, repo root, task (for orientation only).
+        - ``_BOOTSTRAP_FILES``: HOME, user portrait, activity rollup, and
+          the working/USER + working/CURRENT scratchpads. These are
+          task-independent primer material — always useful, cheap, stable.
+        - Active plan briefing (operational state — not knowledge).
+        """
         self.task = task
         sections: list[str] = []
         sections.append(
@@ -199,10 +217,6 @@ class EngramMemory:
             block = f"\n## {rel}\n\n{body.rstrip()}\n"
             sections.append(block)
             used += len(block)
-
-        relevant = self._task_relevant_excerpt(task, char_budget=_BOOTSTRAP_BUDGET_CHARS - used)
-        if relevant:
-            sections.append(relevant)
 
         active_plan = self._active_plan_briefing()
         if active_plan:
@@ -658,24 +672,6 @@ class EngramMemory:
             pieces.append(" ".join(header_bits) + "\n" + excerpt)
             used += len(excerpt) + 80
         return "\n\n".join(pieces)
-
-    def _task_relevant_excerpt(self, task: str, *, char_budget: int) -> str:
-        if char_budget <= 200:
-            return ""
-        hits = self._semantic_recall(task, k=3) if self._embed_enabled else []
-        if not hits:
-            hits = self._keyword_recall(task, k=3)
-        if not hits:
-            return ""
-        block = ["\n## Task-relevant excerpts\n"]
-        for h in hits:
-            chunk = h["content"].strip()
-            chunk = _truncate_head(chunk, 1500)
-            block.append(f"\n### {h['file_path']}\n\n{chunk}\n")
-        joined = "".join(block)
-        if len(joined) > char_budget:
-            joined = _truncate_head(joined, char_budget)
-        return joined
 
     # ---- recall backends -------------------------------------------------
 
