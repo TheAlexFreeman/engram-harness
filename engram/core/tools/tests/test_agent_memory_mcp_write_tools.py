@@ -5812,7 +5812,6 @@ Direct and concise.
                 )
             )
 
-
     def test_memory_append_scratchpad_accepts_dated_slug_and_creates_file(self) -> None:
         repo_root = self._init_repo({"memory/working/CURRENT.md": "# Current\n"})
         tools = self._create_tools(repo_root)

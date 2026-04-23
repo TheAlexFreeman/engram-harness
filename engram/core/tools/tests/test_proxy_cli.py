@@ -142,4 +142,3 @@ class ProxyCliTests(unittest.TestCase):
                 "memory/activity/alex/2026/03/29/chat-001"
             )
         )
-

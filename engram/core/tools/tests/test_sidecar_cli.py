@@ -210,4 +210,3 @@ class SidecarCliTests(unittest.TestCase):
             session_id = allocator.session_id_for(observed, platform="claude-code")
 
         self.assertEqual(session_id, "memory/activity/alex/2026/03/29/chat-002")
-

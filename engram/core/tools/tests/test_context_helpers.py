@@ -77,9 +77,7 @@ class ContextHelperTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("# Current\n\nThis content exceeds a tiny budget.", encoding="utf-8")
 
-            content, chars_used, reason = _read_section_status(
-                root, "memory/working/CURRENT.md", 0
-            )
+            content, chars_used, reason = _read_section_status(root, "memory/working/CURRENT.md", 0)
 
             self.assertEqual(content, "# Current\n\nThis content exceeds a tiny budget.")
             self.assertEqual(chars_used, len("# Current\n\nThis content exceeds a tiny budget."))
