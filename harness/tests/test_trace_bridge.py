@@ -177,6 +177,53 @@ def test_run_trace_bridge_minimal_session(repo: Path, memory: EngramMemory, tmp_
     assert rec["session_id"] == f"core/{memory._session_dir_rel()}"
 
 
+def test_reflection_surfaces_agent_trace_events(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """Agent-annotated trace events land in the reflection's dedicated section."""
+    memory.trace_event(
+        "approach_change",
+        reason="keyword recall empty",
+        detail="switched to semantic",
+    )
+    memory.trace_event("key_finding", detail="worker pool is 2x too small")
+
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    _write_trace(
+        trace,
+        [
+            {"ts": ts, "kind": "session_start", "task": "tune celery"},
+            {"ts": ts, "kind": "session_end", "turns": 1},
+        ],
+    )
+    result = run_trace_bridge(trace, memory)
+    reflection = result.reflection_path.read_text(encoding="utf-8")
+    assert "Agent-annotated events" in reflection
+    assert "approach_change" in reflection
+    assert "keyword recall empty" in reflection
+    assert "key_finding" in reflection
+    assert "worker pool is 2x too small" in reflection
+
+
+def test_reflection_omits_trace_section_when_empty(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """Sessions with no agent trace events don't get an empty section."""
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    _write_trace(
+        trace,
+        [
+            {"ts": ts, "kind": "session_start", "task": "nothing to annotate"},
+            {"ts": ts, "kind": "session_end", "turns": 0},
+        ],
+    )
+    result = run_trace_bridge(trace, memory)
+    reflection = result.reflection_path.read_text(encoding="utf-8")
+    assert "Agent-annotated events" not in reflection
+
+
 def test_run_trace_bridge_dedupe_safe_to_rerun(
     repo: Path, memory: EngramMemory, tmp_path: Path
 ) -> None:

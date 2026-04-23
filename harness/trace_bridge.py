@@ -572,6 +572,20 @@ def _render_reflection(
         body_lines.append("- (none)")
     body_lines.append("")
 
+    trace_events = memory.trace_events
+    if trace_events:
+        body_lines.append("## Agent-annotated events")
+        body_lines.append("")
+        for ev in trace_events:
+            tail_bits = []
+            if ev.reason:
+                tail_bits.append(ev.reason)
+            if ev.detail:
+                tail_bits.append(f"({ev.detail})")
+            tail = f" — {' '.join(tail_bits)}" if tail_bits else ""
+            body_lines.append(f"- **{ev.event}**{tail}")
+        body_lines.append("")
+
     body = "\n".join(body_lines)
     return _serialize_with_frontmatter(fm, body)
 

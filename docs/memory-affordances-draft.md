@@ -1,8 +1,15 @@
 # Memory Affordances — System Prompt Draft
 
-> Design document. Not wired into code yet. Describes how memory operations
-> should be presented in the system prompt so the model treats them as
-> first-class affordances rather than generic tool calls.
+> Design document. Describes how memory operations should be presented in
+> the system prompt so the model treats them as first-class affordances
+> rather than generic tool calls.
+>
+> **Status:** wired. The five-operation surface lives in
+> `harness/tools/memory_tools.py` and is documented in
+> `harness/prompts.py::_MEMORY_SECTION`. The ROADMAP's Phase 2 tracks
+> remaining work (mainly ACCESS helpfulness scoring). The open question
+> about a minimal `start_session` bootstrap remains unresolved and needs
+> its own design pass.
 
 ---
 
