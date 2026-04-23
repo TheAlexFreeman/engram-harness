@@ -42,6 +42,104 @@ You have access to multi-session plan management tools:
 Use plans for tasks that span multiple sessions or have distinct verifiable phases."""
 
 
+_WORK_SECTION = """\
+## Workspace
+
+You have a persistent workspace for managing active work. The workspace is
+git-tracked and survives across sessions, but unlike memory it is freely
+mutable — you can create, update, and delete workspace files without
+governance constraints.
+
+The workspace contains:
+
+  CURRENT.md  — your orientation document: active threads + freeform notes
+  notes/      — persistent working documents (analysis, design notes, etc.)
+  projects/   — isolated work contexts, each with a goal and questions
+  scratch/    — session-scoped ephemeral notes (gitignored, auto-cleaned)
+
+Workspace operations use the `work` prefix. The prompt shows the prefix
+syntax (`work: status`, `work: project.create`) for readability; the
+native tool names use underscores (`work_status`, `work_project_create`).
+
+### work: status
+
+Read your current orientation — CURRENT.md's active threads and freeform
+notes. Pass `project` to also include that project's auto-generated
+SUMMARY.md. Call at the start of a session to orient yourself.
+
+    work: status({})
+    work: status({"project": "auth-redesign"})
+
+### work: thread
+
+Manage a named thread in CURRENT.md. Threads track active lines of work
+with a status (active | blocked | paused — conventional, free-form) and a
+next-action summary. Operations are atomic — the system rewrites
+CURRENT.md so you cannot clobber other threads or the freeform notes.
+Every state change emits a `memory_trace` event.
+
+    work: thread({"name": "auth-redesign", "open": true, "status": "active", "next": "draft token refresh flow"})
+    work: thread({"name": "auth-redesign", "status": "blocked", "next": "waiting on schema decision"})
+    work: thread({"name": "auth-redesign", "close": true, "summary": "merged in PR #42"})
+
+Closed threads older than 7 days auto-move to `archive/threads.md`.
+
+### work: jot
+
+Append a timestamped line to the freeform Notes section. For
+observations, reminders, or anything that doesn't belong to a specific
+thread. Keep this section small — open a thread or a working note if a
+jot grows into a substantial topic.
+
+    work: jot({"content": "user prefers kebab-case for all filenames"})
+
+### work: note
+
+Create or update a persistent working document. Writes to
+`notes/<title>.md`, or to `projects/<project>/notes/<title>.md` when
+`project` is set. Exactly one of `content` (create or overwrite) or
+`append` (requires existing file) is required.
+
+    work: note({"title": "auth-redesign", "content": "..."})
+    work: note({"title": "token-analysis", "project": "auth-redesign", "content": "..."})
+
+### work: read
+
+Read any workspace file by relative path.
+
+    work: read({"path": "notes/auth-redesign.md"})
+    work: read({"path": "projects/auth-redesign/SUMMARY.md"})
+
+### work: scratch
+
+Append to the session's scratch file (`scratch/<session-id>.md`).
+Scratch is gitignored and auto-cleaned at session end. Use for
+intermediate reasoning, throwaway calculations, hypotheses you don't
+want to persist.
+
+    work: scratch({"content": "hypothesis: the 401s are from stale refresh tokens"})
+
+### Projects
+
+Projects are isolated work contexts in `projects/`. Each project has a
+goal and optionally a set of open questions. SUMMARY.md is
+auto-generated — never write it directly. Project operations use dot
+syntax under the `work` prefix.
+
+    work: project.create({"name": "auth-redesign", "goal": "Support offline token refresh", "questions": ["Reuse session table?"]})
+    work: project.goal({"name": "auth-redesign"})                        # read
+    work: project.goal({"name": "auth-redesign", "goal": "..."})         # update
+    work: project.ask({"name": "auth-redesign", "question": "..."})
+    work: project.resolve({"name": "auth-redesign", "index": 1, "answer": "..."})
+    work: project.list({})
+    work: project.status({"name": "auth-redesign"})
+    work: project.archive({"name": "auth-redesign", "summary": "Shipped in v2.3"})
+
+Create a project when a line of work has enough structure to benefit
+from a goal + questions record. Use threads (not projects) for lighter
+lines of work that fit in CURRENT.md."""
+
+
 _MEMORY_SECTION = """\
 ## Memory
 
@@ -135,10 +233,13 @@ def system_prompt_native(
     *,
     with_plan_tools: bool = False,
     with_memory_tools: bool = False,
+    with_work_tools: bool = False,
 ) -> str:
     extras: list[str] = []
     if with_memory_tools:
         extras.append(_MEMORY_SECTION)
+    if with_work_tools:
+        extras.append(_WORK_SECTION)
     if with_plan_tools:
         extras.append(_PLAN_TOOLS_SECTION)
     tail = ("\n\n" + "\n\n".join(extras)) if extras else ""

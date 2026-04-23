@@ -115,6 +115,22 @@ def _build_memory(
         MemoryTrace,
     )
     from harness.tools.plan_tools import CompletePlan, CreatePlan, RecordFailure, ResumePlan
+    from harness.tools.work_tools import (
+        WorkJot,
+        WorkNote,
+        WorkProjectArchive,
+        WorkProjectAsk,
+        WorkProjectCreate,
+        WorkProjectGoal,
+        WorkProjectList,
+        WorkProjectResolve,
+        WorkProjectStatus,
+        WorkRead,
+        WorkScratch,
+        WorkStatus,
+        WorkThread,
+    )
+    from harness.workspace import Workspace
 
     repo_path = config.memory_repo
     if repo_path is None:
@@ -160,7 +176,46 @@ def _build_memory(
         CompletePlan(engram),
         RecordFailure(engram),
     ]
-    return engram, engram, memory_tools + plan_tools
+
+    # Workspace lives alongside memory inside the Engram content root.
+    # For non-read_only profiles we create the layout upfront so that the
+    # first mutation doesn't pay an extra directory-scaffold cost. In
+    # read_only we skip layout creation — the read-only work tools
+    # tolerate a missing workspace and return an uninitialized state
+    # message instead.
+    workspace = Workspace(engram.content_root, session_id=engram.session_id)
+    read_only = config.tool_profile == ToolProfile.READ_ONLY
+    if not read_only:
+        try:
+            workspace.ensure_layout()
+        except OSError as exc:
+            print(
+                f"[warning] could not scaffold workspace dir at {workspace.dir}: {exc}",
+                file=sys.stderr,
+            )
+    work_tools = [
+        WorkStatus(workspace),
+        WorkThread(workspace, engram=engram),
+        WorkJot(workspace),
+        WorkNote(workspace),
+        WorkRead(workspace),
+        WorkScratch(workspace),
+        WorkProjectCreate(workspace, engram=engram),
+        WorkProjectGoal(workspace, engram=engram),
+        WorkProjectAsk(workspace),
+        WorkProjectResolve(workspace, engram=engram),
+        WorkProjectList(workspace),
+        WorkProjectStatus(workspace),
+        WorkProjectArchive(workspace, engram=engram),
+    ]
+    if read_only:
+        # Honour the --tool-profile=read_only contract: drop every work
+        # tool that can write to disk. Read-only tools (status, read,
+        # list, project_status) are kept — project_status regenerates
+        # derived SUMMARY.md but never invents user content, so it
+        # respects the "no user writes" intent.
+        work_tools = [t for t in work_tools if not getattr(t, "mutates", True)]
+    return engram, engram, memory_tools + plan_tools + work_tools
 
 
 def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any) -> Any:
@@ -203,6 +258,7 @@ def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any
             system=system_prompt_native(
                 with_plan_tools=engram_memory is not None,
                 with_memory_tools=engram_memory is not None,
+                with_work_tools=engram_memory is not None,
             ),
         )
     raise AssertionError("unreachable")
