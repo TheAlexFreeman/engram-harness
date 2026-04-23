@@ -914,7 +914,15 @@ class Workspace:
             "status": PLAN_STATUS_ACTIVE,
             "current_phase": 0,
             "phases_completed": [],
-            "sessions_used": 1,
+            # sessions_used counts distinct harness sessions that have
+            # advanced the plan (complete or fail). Creation alone does
+            # not count — otherwise a plan with max_sessions: 1 would
+            # look fully consumed before any work is done. The
+            # companion sessions_touched list dedupes repeated advance
+            # calls from the same session so budget tracking stays
+            # accurate under the intuitive "sessions used" definition.
+            "sessions_used": 0,
+            "sessions_touched": [],
             "failure_history": [],
             "last_checkpoint": None,
             "created": now,
@@ -1031,6 +1039,7 @@ class Workspace:
             }
             state.setdefault("failure_history", []).append(failure)
             state["modified"] = datetime.now().isoformat(timespec="seconds")
+            self._mark_plan_session_touched(state)
             report["action"] = "fail"
             report["failure"] = failure
             report["failure_count_on_phase"] = sum(
@@ -1045,12 +1054,15 @@ class Workspace:
             verification = self.plan_verify_postconditions(phase, cwd=cwd)
             report["verification"] = verification
             if any(not v["passed"] for v in verification if v["kind"] != "manual"):
+                # verify_failed does not persist — session touch applies
+                # only to state changes that land on disk.
                 report["action"] = "verify_failed"
                 return {"state": state, "report": report}
 
         if phase.get("requires_approval") and not approved:
             state["status"] = PLAN_STATUS_AWAITING_APPROVAL
             state["modified"] = datetime.now().isoformat(timespec="seconds")
+            self._mark_plan_session_touched(state)
             report["action"] = "awaiting_approval"
             self._save_run_state(_plan_run_state_path(self.project(project), plan_id), state)
             return {"state": state, "report": report}
@@ -1065,12 +1077,31 @@ class Workspace:
         else:
             state["status"] = PLAN_STATUS_ACTIVE
         state["modified"] = datetime.now().isoformat(timespec="seconds")
+        self._mark_plan_session_touched(state)
 
         report["action"] = "complete"
         report["new_phase_index"] = state["current_phase"]
         report["new_status"] = state["status"]
         self._save_run_state(_plan_run_state_path(self.project(project), plan_id), state)
         return {"state": state, "report": report}
+
+    def _mark_plan_session_touched(self, state: dict) -> None:
+        """Bump sessions_used when the current session first touches this plan.
+
+        The budget's ``max_sessions`` is "how many harness sessions the
+        plan has consumed", so repeated ``plan_advance`` calls within the
+        same session must count once — not per call. We dedupe by
+        session_id in a small ``sessions_touched`` list stored alongside
+        ``sessions_used``. Callers outside a harness session (no
+        ``self.session_id``) skip tracking entirely; sessions_used stays
+        at its last known value.
+        """
+        if not self.session_id:
+            return
+        touched = state.setdefault("sessions_touched", [])
+        if self.session_id not in touched:
+            touched.append(self.session_id)
+            state["sessions_used"] = len(touched)
 
     def plan_verify_postconditions(self, phase: dict, *, cwd: Path | None = None) -> list[dict]:
         """Run all postcondition checks for *phase*.

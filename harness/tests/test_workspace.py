@@ -620,3 +620,74 @@ def test_summary_auto_includes_active_plan(ws: Workspace) -> None:
     assert "Active plan" in body
     assert "plan-a" in body
     assert "active plan description" in body
+
+
+def test_plan_create_starts_sessions_used_at_zero(ws: Workspace) -> None:
+    """A freshly-created plan has done no work yet.
+
+    If sessions_used were 1 at creation, a plan with max_sessions: 1
+    would look fully consumed before any phase advanced. Codex P2 on
+    PR #8.
+    """
+    ws.project_create("p", goal="g")
+    ws.plan_create(
+        "p",
+        "plan-a",
+        "purpose",
+        phases=[{"title": "P1"}],
+        budget={"max_sessions": 1},
+    )
+    _, state = ws.plan_load("p", "plan-a")
+    assert state["sessions_used"] == 0
+    assert state["sessions_touched"] == []
+
+
+def test_plan_advance_increments_sessions_used_once_per_session(
+    tmp_path: Path,
+) -> None:
+    """Repeated advances in the same session must not double-count.
+
+    Budget tracking interprets max_sessions as "distinct harness
+    sessions that interacted with the plan". Incrementing per
+    advance call would make a 4-phase plan look like 4 sessions of
+    work done in a single sitting.
+    """
+    ws_a = Workspace(tmp_path, session_id="act-A")
+    ws_a.ensure_layout()
+    ws_a.project_create("p", goal="g")
+    ws_a.plan_create(
+        "p",
+        "plan-a",
+        "purpose",
+        phases=[{"title": "P1"}, {"title": "P2"}, {"title": "P3"}],
+    )
+    ws_a.plan_advance("p", "plan-a", "complete")
+    ws_a.plan_advance("p", "plan-a", "fail", reason="oops")
+    ws_a.plan_advance("p", "plan-a", "complete")
+    _, state = ws_a.plan_load("p", "plan-a")
+    assert state["sessions_used"] == 1
+    assert state["sessions_touched"] == ["act-A"]
+
+    # Second session takes over — sessions_used goes to 2.
+    ws_b = Workspace(tmp_path, session_id="act-B")
+    ws_b.plan_advance("p", "plan-a", "complete")
+    _, state = ws_b.plan_load("p", "plan-a")
+    assert state["sessions_used"] == 2
+    assert state["sessions_touched"] == ["act-A", "act-B"]
+
+
+def test_plan_advance_without_session_id_does_not_track(tmp_path: Path) -> None:
+    """Workspaces without a session_id (standalone smoke tests) skip tracking.
+
+    sessions_used stays at its last known value rather than growing
+    unboundedly with every advance.
+    """
+    ws = Workspace(tmp_path, session_id=None)
+    ws.ensure_layout()
+    ws.project_create("p", goal="g")
+    ws.plan_create("p", "plan-a", "purpose", phases=[{"title": "P1"}, {"title": "P2"}])
+    ws.plan_advance("p", "plan-a", "complete")
+    ws.plan_advance("p", "plan-a", "complete")
+    _, state = ws.plan_load("p", "plan-a")
+    assert state["sessions_used"] == 0
+    assert state["sessions_touched"] == []
