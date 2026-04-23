@@ -264,6 +264,48 @@ def test_active_plan_briefing_tolerates_malformed_run_state(
     assert mem._active_plan_briefing() == ""
 
 
+def test_active_plan_briefing_tolerates_stat_errors(engram_repo: Path) -> None:
+    """A stale symlink or vanished run-state file must not raise OSError.
+
+    glob() + stat() is racy: a deleted file between glob and sort
+    would otherwise abort start_session(). Regression guard from the
+    PR #9 Codex review. We plant a broken symlink alongside a real
+    active plan and assert the briefing still surfaces the real one.
+    """
+    content_root = engram_repo / "core"
+    _seed_workspace_plan(
+        content_root,
+        project="alpha",
+        plan_id="real",
+        purpose="valid plan",
+        phases=[{"title": "Ship"}],
+    )
+    # Plant a broken symlink where glob() will see it but stat() blows up.
+    plans_dir = content_root / "workspace" / "projects" / "alpha" / "plans"
+    bad_link = plans_dir / "ghost.run-state.json"
+    try:
+        bad_link.symlink_to(plans_dir / "does-not-exist-anywhere.json")
+    except (OSError, NotImplementedError):
+        # Windows without symlink privilege — simulate by touching and
+        # immediately removing the file after glob by using a file
+        # whose parent has disappeared. Fall back to deleting the
+        # target we'd stat: overwrite run-state with an unreadable
+        # mode. Simpler: skip the os-dependent setup and directly
+        # prove the sort doesn't crash on a missing stat by removing
+        # a seeded file mid-flow — covered instead by the unit layer
+        # below.
+        import pytest
+
+        pytest.skip("symlink creation unavailable on this platform")
+    try:
+        mem = EngramMemory(engram_repo, embed=False)
+        out = mem._active_plan_briefing()
+        assert "real" in out
+        assert "valid plan" in out
+    finally:
+        bad_link.unlink(missing_ok=True)
+
+
 def test_active_plan_briefing_prefers_most_recently_modified(
     engram_repo: Path,
 ) -> None:

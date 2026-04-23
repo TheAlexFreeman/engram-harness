@@ -794,14 +794,23 @@ def _access_namespace(file_path: str, content_prefix: str = "core") -> str | Non
 
 
 def _normalize_for_access(file_path: str, content_prefix: str = "core") -> str:
-    """Store ACCESS file paths with the content_prefix to match the repo's convention."""
+    """Store ACCESS file paths with the content_prefix to match the repo's convention.
+
+    Both ``memory/...`` and ``workspace/...`` paths are canonicalized —
+    without the workspace branch, `_ACCESS_ROOTS` entries under
+    ``workspace/projects`` would record mixed path shapes depending on
+    how the tool argument was written, and the dedupe key (which uses
+    the raw ``file`` string) would double-count the same file. Consumers
+    that resolve ``root / file`` from the git root would also miss
+    unprefixed workspace records when ``content_prefix`` is ``"core"``.
+    """
     norm = _norm(file_path).strip("/")
     prefix = content_prefix.strip("/")
     if not prefix:
         return norm
     if norm.startswith(prefix + "/"):
         return norm  # already prefixed
-    if norm.startswith("memory/"):
+    if norm.startswith("memory/") or norm.startswith("workspace/"):
         return f"{prefix}/{norm}"
     return norm
 

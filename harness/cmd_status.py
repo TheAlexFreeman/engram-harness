@@ -37,11 +37,16 @@ def _print_active_plans(content_root: Path) -> None:
     import yaml
 
     print(f"\nMemory repo content root: {content_root}")
-    state_paths = sorted(
-        content_root.glob("workspace/projects/*/plans/*.run-state.json"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
+    # Guard stat() against stale symlinks / files deleted between glob and
+    # sort, matching the tolerance in _active_plan_briefing.
+    _candidates: list[tuple[float, Path]] = []
+    for p in content_root.glob("workspace/projects/*/plans/*.run-state.json"):
+        try:
+            _candidates.append((p.stat().st_mtime, p))
+        except OSError:
+            continue
+    _candidates.sort(key=lambda pair: pair[0], reverse=True)
+    state_paths = [p for _, p in _candidates]
     active: list[tuple[Path, dict, dict]] = []
     for state_path in state_paths:
         try:

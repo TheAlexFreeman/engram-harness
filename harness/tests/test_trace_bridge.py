@@ -85,6 +85,26 @@ def test_normalize_for_access_empty_prefix() -> None:
     assert _normalize_for_access("memory/knowledge/foo.md", "") == "memory/knowledge/foo.md"
 
 
+def test_normalize_for_access_workspace_paths_get_prefix() -> None:
+    """workspace/... paths need the same content_prefix canonicalization
+    that memory/... paths get. Without this, dedupe would double-count
+    the same workspace file when it's referenced with and without the
+    prefix (e.g. ``workspace/projects/x/foo.md`` vs
+    ``core/workspace/projects/x/foo.md``).
+    """
+    assert (
+        _normalize_for_access("workspace/projects/x/foo.md", "core")
+        == "core/workspace/projects/x/foo.md"
+    )
+    # Already-prefixed paths round-trip unchanged.
+    assert (
+        _normalize_for_access("core/workspace/projects/x/foo.md", "core")
+        == "core/workspace/projects/x/foo.md"
+    )
+    # Empty prefix — no prepending.
+    assert _normalize_for_access("workspace/projects/x/foo.md", "") == "workspace/projects/x/foo.md"
+
+
 def test_derive_read_helpfulness_then_edit() -> None:
     calls = [
         _ToolCall(

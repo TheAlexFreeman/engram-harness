@@ -602,11 +602,20 @@ class EngramMemory:
 
         import yaml
 
-        state_paths = sorted(
-            self.content_root.glob("workspace/projects/*/plans/*.run-state.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
+        # Pair paths with their mtimes up front so a race between
+        # glob() and stat() (stale symlink, file removed mid-scan)
+        # doesn't propagate OSError into start_session(). Unreadable
+        # entries are silently skipped, matching the tolerance the
+        # previous find_active_plans implementation had.
+        candidates: list[tuple[float, Path]] = []
+        for p in self.content_root.glob("workspace/projects/*/plans/*.run-state.json"):
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:
+                continue
+            candidates.append((mtime, p))
+        candidates.sort(key=lambda pair: pair[0], reverse=True)
+        state_paths = [p for _, p in candidates]
         for state_path in state_paths:
             try:
                 state = json.loads(state_path.read_text(encoding="utf-8"))
