@@ -52,7 +52,6 @@ read_support = [
   # clips matches before the date window is exhausted.
   "memory_git_log",
   "memory_git_health",
-  "memory_session_health_check",
   "memory_session_bootstrap",
   "memory_context_home",
   "memory_prepare_unverified_review",
@@ -115,9 +114,7 @@ semantic_extensions = [
   "memory_update_names_index",
   "memory_demote_knowledge",
   "memory_archive_knowledge",
-  "memory_checkpoint",
   "memory_reset_session_state",
-  "memory_session_flush",
   "memory_append_scratchpad",
   "memory_update_skill",
   "memory_skill_manifest_read",
@@ -129,10 +126,8 @@ semantic_extensions = [
   "memory_skill_remove",
   "memory_skill_sync",
   "memory_update_user_trait",
-  "memory_record_session",
   "memory_run_aggregation",
   "memory_record_chat_summary",
-  "memory_record_reflection",
   "memory_record_periodic_review",
   "memory_log_access",
   "memory_log_access_batch",
@@ -251,11 +246,6 @@ uri = "memory://policy/summary"
 backed_by = "memory_get_policy_state"
 when_to_use = "Inspect stable change-class, fallback, and profile policy boundaries before path-specific compilation."
 
-[mcp_native_surface.resources.session_health]
-uri = "memory://session/health"
-backed_by = "memory_session_health_check"
-when_to_use = "Check aggregation pressure, review cadence, and pending queue state at session start."
-
 [mcp_native_surface.resources.active_plans]
 uri = "memory://plans/active"
 backed_by = "memory_list_plans"
@@ -275,11 +265,6 @@ when_to_use = "Structure a governed promotion-preview conversation before applyi
 name = "memory_prepare_periodic_review_prompt"
 backed_by = "memory_prepare_periodic_review"
 when_to_use = "Guide a protected periodic-review workflow using the compact review bundle."
-
-[mcp_native_surface.prompts.session_wrap_up]
-name = "memory_session_wrap_up_prompt"
-backed_by = "memory_record_session"
-when_to_use = "Guide end-of-session summarization, reflection, and deferred follow-up capture."
 
 [provenance_schema]
 optional_fields = [
@@ -708,14 +693,6 @@ preview_support = true
 preview_mode = "preview"
 preview_argument = "preview"
 
-[desktop_operations.checkpoint]
-status = "implemented"
-tool = "memory_checkpoint"
-tier = "semantic"
-operation_group = "scratchpad"
-change_class = "automatic"
-notes = "Timestamped incremental checkpoint to CURRENT.md; stages state for a later batch commit."
-
 [desktop_operations.append_scratchpad]
 status = "implemented"
 tool = "memory_append_scratchpad"
@@ -747,14 +724,6 @@ preview_argument = "preview"
 [desktop_operations.record_chat_summary]
 status = "implemented"
 tool = "memory_record_chat_summary"
-tier = "semantic"
-operation_group = "chat"
-change_class = "automatic"
-notes = "Superseded for full wrap-up by memory_record_session; kept for summary-only writes."
-
-[desktop_operations.record_session]
-status = "implemented"
-tool = "memory_record_session"
 tier = "semantic"
 operation_group = "chat"
 change_class = "automatic"
@@ -795,14 +764,6 @@ tool = "memory_log_access"
 tier = "semantic"
 operation_group = "chat"
 change_class = "automatic"
-
-[desktop_operations.record_session_reflection]
-status = "implemented"
-tool = "memory_record_reflection"
-tier = "semantic"
-operation_group = "chat"
-change_class = "automatic"
-notes = "Superseded for full wrap-up by memory_record_session; kept for reflection-only writes."
 
 [desktop_operations.record_periodic_review]
 status = "implemented"
@@ -1513,22 +1474,6 @@ result_fields = ["folder_path", "log_path", "counts"]
 fallback_tools = []
 error_kinds = ["ValidationError"]
 
-[operations.memory_checkpoint]
-group = "scratchpad"
-tier = "semantic"
-change_class = "automatic"
-commit_model = "none"
-commit_category_hint = "scratchpad"
-writes = ["memory/working/CURRENT.md"]
-owns_frontmatter = []
-owns_summaries = []
-owns_access_logs = []
-owns_review_queue = []
-result_fields = ["target", "entry_count", "session_id"]
-fallback_tools = ["memory_edit", "memory_write"]
-error_kinds = ["ValidationError", "StagingError"]
-notes = "Appends a timestamped checkpoint block to CURRENT.md and stages it for a later batch commit; the tool does not create a commit on its own."
-
 [operations.memory_reset_session_state]
 group = "chat"
 tier = "semantic"
@@ -1544,22 +1489,6 @@ result_fields = ["reset", "identity_updates_this_session"]
 fallback_tools = []
 error_kinds = []
 notes = "Resets in-process session counters for long-running MCP server processes; no repo files are modified."
-
-[operations.memory_session_flush]
-group = "chat"
-tier = "semantic"
-change_class = "automatic"
-commit_model = "auto_commit"
-commit_category_hint = "chat"
-writes = ["memory/activity/YYYY/MM/DD/chat-NNN/checkpoint.md"]
-owns_frontmatter = []
-owns_summaries = []
-owns_access_logs = []
-owns_review_queue = []
-result_fields = ["session_id", "checkpoint_path", "entry_count", "trigger"]
-fallback_tools = ["memory_write", "memory_commit"]
-error_kinds = ["ValidationError", "StagingError"]
-notes = "Writes a mid-session checkpoint under the active chat folder and commits it immediately for context-pressure recovery."
 
 [operations.memory_append_scratchpad]
 group = "scratchpad"
@@ -1894,27 +1823,6 @@ owns_review_queue = []
 result_fields = ["session_id"]
 fallback_tools = ["memory_write", "memory_commit"]
 error_kinds = ["StagingError"]
-superseded_by = "memory_record_session"
-
-[operations.memory_record_session]
-group = "chat"
-tier = "semantic"
-change_class = "automatic"
-commit_model = "auto_commit"
-commit_category_hint = "chat"
-writes = [
-  "memory/activity/YYYY/MM/DD/chat-NNN/SUMMARY.md",
-  "memory/activity/YYYY/MM/DD/chat-NNN/reflection.md",
-  "memory/activity/SUMMARY.md",
-  "{folder}/ACCESS.jsonl",
-]
-owns_frontmatter = ["memory/activity/YYYY/MM/DD/chat-NNN/SUMMARY.md"]
-owns_summaries = ["memory/activity/SUMMARY.md"]
-owns_access_logs = ["{folder}/ACCESS.jsonl"]
-owns_review_queue = []
-result_fields = ["session_id"]
-fallback_tools = ["memory_write", "memory_commit"]
-error_kinds = ["ValidationError", "StagingError"]
 
 [operations.memory_run_aggregation]
 group = "governance"
@@ -2017,22 +1925,6 @@ result_fields = ["access_jsonls", "entry_count", "scan_entry_count"]
 fallback_tools = ["memory_write", "memory_commit"]
 error_kinds = ["ValidationError", "StagingError"]
 notes = "Batches multiple ACCESS entries into one auto-commit. Each entry may carry an optional mode (`read`, `write`, `update`, `create`) and optional task_id from access_logging.task_ids; the call may also set an optional min_helpfulness threshold that routes below-threshold entries to {folder}/ACCESS_SCANS.jsonl. Uses the same optional session_id injection contract as memory_log_access via MEMORY_SESSION_ID, then memory/activity/CURRENT_SESSION."
-
-[operations.memory_record_reflection]
-group = "chat"
-tier = "semantic"
-change_class = "automatic"
-commit_model = "auto_commit"
-commit_category_hint = "chat"
-writes = ["memory/activity/YYYY/MM/DD/chat-NNN/reflection.md"]
-owns_frontmatter = []
-owns_summaries = []
-owns_access_logs = []
-owns_review_queue = []
-result_fields = ["reflection_path"]
-fallback_tools = ["memory_write", "memory_commit"]
-error_kinds = ["ValidationError", "StagingError"]
-superseded_by = "memory_record_session"
 
 [operations.memory_record_periodic_review]
 group = "governance"

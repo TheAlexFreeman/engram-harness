@@ -89,26 +89,6 @@ class MultiUserWorkingNamespaceTests(unittest.TestCase):
             return cast(dict[str, Any], payload["result"])
         return payload
 
-    def test_memory_checkpoint_writes_namespaced_current_file(self) -> None:
-        repo_root = self._init_repo({"memory/working/CURRENT.md": "# Legacy Current\n"})
-
-        with mock.patch.dict(os.environ, {"MEMORY_USER_ID": "alex"}, clear=False):
-            tools = self._create_tools(repo_root)
-            payload = self._load_tool_payload(
-                asyncio.run(cast(Any, tools["memory_checkpoint"])(content="Namespaced note."))
-            )
-
-        namespaced_current = (repo_root / "memory" / "working" / "alex" / "CURRENT.md").read_text(
-            encoding="utf-8"
-        )
-        legacy_current = (repo_root / "memory" / "working" / "CURRENT.md").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertEqual(payload["new_state"]["target"], "memory/working/alex/CURRENT.md")
-        self.assertIn("Namespaced note.", namespaced_current)
-        self.assertEqual(legacy_current, "# Legacy Current\n")
-
     def test_memory_append_scratchpad_routes_aliases_and_notes_to_user_scope(self) -> None:
         repo_root = self._init_repo({"memory/working/USER.md": "# Legacy User\n"})
 

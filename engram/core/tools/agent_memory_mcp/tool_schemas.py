@@ -347,103 +347,6 @@ def log_access_batch_input_schema() -> dict[str, Any]:
     )
 
 
-def record_session_input_schema() -> dict[str, Any]:
-    return _base_schema(
-        tool_name="memory_record_session",
-        title="memory_record_session input schema",
-        required=["session_id", "summary"],
-        notes=[
-            "Replays are idempotent only when summary, reflection, and ACCESS entries match the already-recorded session content.",
-            "access_entries uses the same payload shape as memory_log_access_batch.",
-        ],
-        properties={
-            "session_id": _session_id_string_schema(
-                description="Canonical memory/activity/YYYY/MM/DD/chat-NNN id.",
-            ),
-            "summary": {
-                "type": "string",
-                "description": "Markdown session summary body written to SUMMARY.md.",
-            },
-            "reflection": {
-                "oneOf": [
-                    {"type": "string"},
-                    {"type": "null"},
-                ],
-                "description": "Optional session reflection body written to reflection.md.",
-            },
-            "key_topics": {
-                "type": "string",
-                "default": "",
-                "description": "Comma-separated topics included in the session summary frontmatter.",
-            },
-            "access_entries": {
-                "oneOf": [
-                    {
-                        "type": "array",
-                        "items": access_entry_input_schema(),
-                    },
-                    {"type": "null"},
-                ],
-                "description": "Optional ACCESS entries recorded atomically with the session summary.",
-            },
-            "metrics": {
-                "oneOf": [
-                    {"type": "object", "additionalProperties": True},
-                    {"type": "null"},
-                ],
-                "description": (
-                    "Optional activity metrics merged into SUMMARY.md frontmatter "
-                    "(sidecar fields take precedence over trace-file counters when both exist)."
-                ),
-            },
-            "dialogue_entries": {
-                "oneOf": [
-                    {
-                        "type": "array",
-                        "items": {"type": "object", "additionalProperties": True},
-                    },
-                    {"type": "null"},
-                ],
-                "description": "Optional compressed dialogue rows written to session dialogue.jsonl.",
-            },
-        },
-    )
-
-
-def session_flush_input_schema() -> dict[str, Any]:
-    return _base_schema(
-        tool_name="memory_session_flush",
-        title="memory_session_flush input schema",
-        required=["summary"],
-        notes=[
-            "session_id resolves from the explicit argument first, then MEMORY_SESSION_ID, then memory/activity/CURRENT_SESSION.",
-            "trigger accepts underscore or hyphen separators; underscores are normalized to hyphens before slug validation.",
-        ],
-        properties={
-            "summary": {
-                "type": "string",
-                "minLength": 1,
-                "description": "Non-empty checkpoint summary written to {session_id}/checkpoint.md.",
-            },
-            "session_id": _session_id_string_schema(
-                description="Optional canonical session id override for the checkpoint target.",
-                allow_empty=True,
-            ),
-            "label": {
-                "type": "string",
-                "default": "",
-                "description": "Optional checkpoint label. When empty, a default context-pressure label is used.",
-            },
-            "trigger": {
-                "type": "string",
-                "pattern": r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$",
-                "default": "context_pressure",
-                "description": "Flush trigger slug. Underscores are normalized to hyphens before validation.",
-            },
-        },
-    )
-
-
 def log_access_input_schema() -> dict[str, Any]:
     return _base_schema(
         tool_name="memory_log_access",
@@ -692,33 +595,6 @@ def prune_weak_links_input_schema() -> dict[str, Any]:
     )
 
 
-def checkpoint_input_schema() -> dict[str, Any]:
-    return _base_schema(
-        tool_name="memory_checkpoint",
-        title="memory_checkpoint input schema",
-        required=["content"],
-        notes=[
-            "Writes a timestamped entry to memory/working/CURRENT.md, or memory/working/{user_id}/CURRENT.md when MEMORY_USER_ID is set, and stages the file without creating a commit.",
-            "session_id is optional but must be canonical when supplied.",
-        ],
-        properties={
-            "content": {
-                "type": "string",
-                "description": "Checkpoint body appended under a timestamped heading in the active CURRENT.md scratchpad for the resolved user scope.",
-            },
-            "label": {
-                "type": "string",
-                "default": "",
-                "description": "Optional heading suffix shown after the timestamp.",
-            },
-            "session_id": _session_id_string_schema(
-                description="Optional canonical session id embedded in the checkpoint entry.",
-                allow_empty=True,
-            ),
-        },
-    )
-
-
 def append_scratchpad_input_schema() -> dict[str, Any]:
     return _base_schema(
         tool_name="memory_append_scratchpad",
@@ -764,7 +640,6 @@ def record_chat_summary_input_schema() -> dict[str, Any]:
         required=["session_id", "summary"],
         notes=[
             "Idempotent replay succeeds only when the existing SUMMARY.md content already matches session_id, summary, and key_topics.",
-            "Use memory_record_session instead when summary, reflection, and ACCESS writes should land in one commit.",
         ],
         properties={
             "session_id": _session_id_string_schema(
@@ -778,50 +653,6 @@ def record_chat_summary_input_schema() -> dict[str, Any]:
                 "type": "string",
                 "default": "",
                 "description": "Comma-separated topic list written into the session summary frontmatter.",
-            },
-        },
-    )
-
-
-def record_reflection_input_schema() -> dict[str, Any]:
-    return _base_schema(
-        tool_name="memory_record_reflection",
-        title="memory_record_reflection input schema",
-        required=[
-            "session_id",
-            "memory_retrieved",
-            "memory_influence",
-            "outcome_quality",
-            "gaps_noticed",
-        ],
-        notes=[
-            "The target session folder must already exist; record the chat summary first if needed.",
-            "Only one structured reflection is created per session; later edits should use direct editing tools.",
-        ],
-        properties={
-            "session_id": _session_id_string_schema(
-                description="Canonical memory/activity/YYYY/MM/DD/chat-NNN id whose reflection should be written.",
-            ),
-            "memory_retrieved": {
-                "type": "string",
-                "description": "What memory was retrieved during the session.",
-            },
-            "memory_influence": {
-                "type": "string",
-                "description": "How retrieved memory influenced the work.",
-            },
-            "outcome_quality": {
-                "type": "string",
-                "description": "Assessment of the session outcome quality.",
-            },
-            "gaps_noticed": {
-                "type": "string",
-                "description": "Observed memory or workflow gaps from the session.",
-            },
-            "system_observations": {
-                "type": "string",
-                "default": "",
-                "description": "Optional additional system observations for the reflection.",
             },
         },
     )
@@ -3481,7 +3312,6 @@ TOOL_INPUT_SCHEMAS: dict[str, ToolSchemaBuilder] = {
     "memory_append_scratchpad": append_scratchpad_input_schema,
     "memory_archive_knowledge": archive_knowledge_input_schema,
     "memory_audit_link_density": audit_link_density_input_schema,
-    "memory_checkpoint": checkpoint_input_schema,
     "memory_commit": commit_input_schema,
     "memory_context_home": context_home_input_schema,
     "memory_delete": delete_input_schema,
@@ -3514,8 +3344,6 @@ TOOL_INPUT_SCHEMAS: dict[str, ToolSchemaBuilder] = {
     "memory_reindex": reindex_input_schema,
     "memory_record_chat_summary": record_chat_summary_input_schema,
     "memory_record_periodic_review": record_periodic_review_input_schema,
-    "memory_record_reflection": record_reflection_input_schema,
-    "memory_record_session": record_session_input_schema,
     "memory_record_trace": record_trace_input_schema,
     "memory_register_tool": register_tool_input_schema,
     "memory_reset_session_state": reset_session_state_input_schema,
@@ -3529,7 +3357,6 @@ TOOL_INPUT_SCHEMAS: dict[str, ToolSchemaBuilder] = {
     "memory_scan_drop_zone": scan_drop_zone_input_schema,
     "memory_search": grep_search_input_schema,
     "memory_semantic_search": semantic_search_input_schema,
-    "memory_session_flush": session_flush_input_schema,
     "memory_skill_add": skill_add_input_schema,
     "memory_skill_install": skill_install_input_schema,
     "memory_skill_list": skill_list_input_schema,
@@ -3582,11 +3409,8 @@ __all__ = [
     "append_scratchpad_input_schema",
     "archive_knowledge_input_schema",
     "audit_link_density_input_schema",
-    "checkpoint_input_schema",
     "commit_input_schema",
     "context_home_input_schema",
-    "context_project_input_schema",
-    "context_project_lite_input_schema",
     "delete_input_schema",
     "demote_knowledge_input_schema",
     "edit_input_schema",
@@ -3619,8 +3443,6 @@ __all__ = [
     "request_approval_input_schema",
     "record_chat_summary_input_schema",
     "record_periodic_review_input_schema",
-    "record_reflection_input_schema",
-    "record_session_input_schema",
     "record_trace_input_schema",
     "register_tool_input_schema",
     "reset_session_state_input_schema",
@@ -3632,7 +3454,6 @@ __all__ = [
     "run_eval_input_schema",
     "scan_drop_zone_input_schema",
     "semantic_search_input_schema",
-    "session_flush_input_schema",
     "skill_install_input_schema",
     "skill_list_input_schema",
     "skill_route_input_schema",

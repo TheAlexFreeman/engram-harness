@@ -87,43 +87,6 @@ class MultiUserCompatTests(unittest.TestCase):
             return cast(dict[str, Any], payload["result"])
         return payload
 
-    def test_working_tools_keep_flat_paths_without_memory_user_id(self) -> None:
-        repo_root = self._init_repo(
-            {
-                "memory/working/USER.md": "# User\n",
-                "memory/working/CURRENT.md": "# Current\n",
-            }
-        )
-        tools = self._create_tools(repo_root)
-
-        checkpoint_payload = self._load_tool_payload(
-            asyncio.run(cast(Any, tools["memory_checkpoint"])(content="Flat checkpoint."))
-        )
-        user_payload = self._load_tool_payload(
-            asyncio.run(
-                cast(Any, tools["memory_append_scratchpad"])(
-                    target="user",
-                    content="Flat priorities.",
-                )
-            )
-        )
-        note_payload = self._load_tool_payload(
-            asyncio.run(
-                cast(Any, tools["memory_append_scratchpad"])(
-                    target="memory/working/notes/2026-03-30-log.md",
-                    content="Flat notes.",
-                )
-            )
-        )
-
-        self.assertEqual(checkpoint_payload["new_state"]["target"], "memory/working/CURRENT.md")
-        self.assertEqual(user_payload["new_state"]["target"], "memory/working/USER.md")
-        self.assertEqual(
-            note_payload["new_state"]["target"],
-            "memory/working/notes/2026-03-30-log.md",
-        )
-        self.assertFalse((repo_root / "memory" / "working" / "alex").exists())
-
     def test_memory_context_home_uses_flat_working_files_without_memory_user_id(self) -> None:
         repo_root = self._init_repo(
             {
@@ -149,47 +112,6 @@ class MultiUserCompatTests(unittest.TestCase):
         self.assertNotIn("Alex current state.", body)
         self.assertIn("memory/working/USER.md", metadata["loaded_files"])
         self.assertIn("memory/working/CURRENT.md", metadata["loaded_files"])
-
-    def test_memory_record_session_keeps_flat_activity_paths_without_memory_user_id(self) -> None:
-        repo_root = self._init_repo(
-            {
-                "memory/activity/SUMMARY.md": "# Chats\n## Structure\n",
-                "memory/knowledge/topic.md": "# Topic\n",
-            }
-        )
-        tools = self._create_tools(repo_root)
-
-        payload = self._load_tool_payload(
-            asyncio.run(
-                cast(Any, tools["memory_record_session"])(
-                    session_id="memory/activity/2026/03/30/chat-001",
-                    summary="# Session Summary\n\nFlat layout.\n",
-                    key_topics="compat",
-                    access_entries=[
-                        {
-                            "file": "memory/knowledge/topic.md",
-                            "task": "compat check",
-                            "helpfulness": 0.7,
-                            "note": "Flat session remained valid.",
-                        }
-                    ],
-                )
-            )
-        )
-
-        summary_path = (
-            repo_root / "memory" / "activity" / "2026" / "03" / "30" / "chat-001" / "SUMMARY.md"
-        )
-        access_entry = json.loads(
-            (repo_root / "memory" / "knowledge" / "ACCESS.jsonl")
-            .read_text(encoding="utf-8")
-            .strip()
-        )
-
-        self.assertEqual(payload["new_state"]["session_id"], "memory/activity/2026/03/30/chat-001")
-        self.assertTrue(summary_path.exists())
-        self.assertNotIn("user_id", access_entry)
-        self.assertEqual(access_entry["session_id"], "memory/activity/2026/03/30/chat-001")
 
     def test_access_tools_default_to_repo_wide_scope_without_user_filter(self) -> None:
         repo_root = self._init_repo(

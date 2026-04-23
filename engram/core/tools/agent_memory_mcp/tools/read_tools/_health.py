@@ -121,31 +121,6 @@ def register_health(
         }
 
     # ------------------------------------------------------------------
-    @mcp.tool(
-        name="memory_session_health_check",
-        annotations=_tool_annotations(
-            title="Session Health Check",
-            readOnlyHint=True,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=False,
-        ),
-    )
-    async def memory_session_health_check() -> str:
-        """Return session-start maintenance status for ACCESS, review queue, and review cadence.
-
-        Reads the active aggregation trigger and last periodic review date from
-        the live router file, counts hot ACCESS.jsonl entries, and summarizes
-        pending review-queue items.
-
-        Returns:
-            JSON envelope with result and _session metadata. result contains
-            aggregation_due, aggregation_threshold, review_queue_pending,
-            periodic_review_due, days_since_review, last_periodic_review, checked_at.
-        """
-        return _dump_payload(_build_session_health_payload())
-
-    # ------------------------------------------------------------------
     # memory_check_aggregation_triggers
 
     # ------------------------------------------------------------------
@@ -1287,7 +1262,6 @@ def register_health(
     # MCP-native resources
 
     return {
-        "memory_session_health_check": memory_session_health_check,
         "memory_check_aggregation_triggers": memory_check_aggregation_triggers,
         "memory_aggregate_access": memory_aggregate_access,
         "memory_run_periodic_review": memory_run_periodic_review,
