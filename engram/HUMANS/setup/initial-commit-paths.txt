@@ -934,7 +934,6 @@ core/tools/agent_memory_mcp/tools/semantic/graph_tools.py
 core/tools/agent_memory_mcp/tools/semantic/knowledge_tools.py
 core/tools/agent_memory_mcp/tools/semantic/plan_tools.py
 core/tools/agent_memory_mcp/tools/semantic/search_tools.py
-core/tools/agent_memory_mcp/tools/semantic/session_tools.py
 core/tools/agent_memory_mcp/tools/semantic/skill_tools.py
 core/tools/agent_memory_mcp/tools/semantic/user_tools.py
 core/tools/agent_memory_mcp/tools/write_tools.py
@@ -946,7 +945,6 @@ core/tools/tests/fixtures/engram-overlay/.github/workflows/ci.yml
 core/tools/tests/fixtures/engram-overlay/.github/workflows/pages.yml
 core/tools/tests/fixtures/engram-overlay/pyproject.toml
 core/tools/tests/test_access_logger.py
-core/tools/tests/test_agent_memory_mcp_write_tools.py
 core/tools/tests/test_claude_code_parser.py
 core/tools/tests/test_cli_add.py
 core/tools/tests/test_cli_aggregate.py
@@ -967,9 +965,7 @@ core/tools/tests/test_cli_setup_venv.py
 core/tools/tests/test_cli_status.py
 core/tools/tests/test_cli_trace.py
 core/tools/tests/test_cli_validate.py
-core/tools/tests/test_context_helpers.py
 core/tools/tests/test_context_home.py
-core/tools/tests/test_context_project.py
 core/tools/tests/test_core_boundary.py
 core/tools/tests/test_detect_content_prefix.py
 core/tools/tests/test_eval_scenarios.py
@@ -988,18 +984,13 @@ core/tools/tests/test_multi_user_env_identity.py
 core/tools/tests/test_multi_user_working_namespace.py
 core/tools/tests/test_plan_schema_extensions.py
 core/tools/tests/test_plan_validation.py
-core/tools/tests/test_proxy_checkpoint.py
-core/tools/tests/test_proxy_cli.py
 core/tools/tests/test_proxy_core.py
-core/tools/tests/test_proxy_flush.py
 core/tools/tests/test_proxy_injection.py
 core/tools/tests/test_search_freshness.py
 core/tools/tests/test_semantic_search.py
 core/tools/tests/test_server_main.py
-core/tools/tests/test_session_lifecycle.py
 core/tools/tests/test_session_state.py
 core/tools/tests/test_sidecar_capture.py
-core/tools/tests/test_sidecar_cli.py
 core/tools/tests/test_skill_distribution_integration.py
 core/tools/tests/test_skill_distributor.py
 core/tools/tests/test_skill_install_tool.py
