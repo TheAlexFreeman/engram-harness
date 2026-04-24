@@ -138,7 +138,7 @@ class EngramMemory:
             session_id: Override the auto-allocated `act-NNN` session id.
             embed: Force semantic search on/off (default: detect at runtime).
         """
-        from engram_mcp.agent_memory_mcp.git_repo import GitRepo
+        from harness._engram_fs import GitRepo
 
         repo_root = Path(repo_root).resolve()
         if not repo_root.exists():
@@ -434,7 +434,7 @@ class EngramMemory:
 
         body = "\n".join(body_lines)
 
-        from engram_mcp.agent_memory_mcp.core.frontmatter_utils import write_with_frontmatter
+        from harness._engram_fs import write_with_frontmatter
 
         fm = {
             "session": f"memory/activity/{self._session_path_fragment()}/{self.session_id}",
@@ -516,7 +516,7 @@ class EngramMemory:
         if self.session_id:
             fm["session_id"] = self.session_id
 
-        from engram_mcp.agent_memory_mcp.core.frontmatter_utils import write_with_frontmatter
+        from harness._engram_fs import write_with_frontmatter
 
         write_with_frontmatter(abs_path, fm, body.strip())
         try:
@@ -825,7 +825,7 @@ class EngramMemory:
 
     def _get_embed_index(self):
         if self._embed_index is None:
-            from engram_mcp.agent_memory_mcp.tools.semantic.search_tools import EmbeddingIndex
+            from harness._engram_fs.embedding_index import EmbeddingIndex
 
             self._embed_index = EmbeddingIndex(self.repo.root, self.content_root)
         return self._embed_index
@@ -989,7 +989,7 @@ def _read_trust(abs_path: Path) -> str:
     if not abs_path.is_file():
         return ""
     try:
-        from engram_mcp.agent_memory_mcp.core.frontmatter_utils import read_with_frontmatter
+        from harness._engram_fs import read_with_frontmatter
 
         fm, _ = read_with_frontmatter(abs_path)
         return str(fm.get("trust", "")).lower()
