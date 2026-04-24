@@ -199,6 +199,22 @@ def test_validate_workspace_within_root(tmp_path, monkeypatch):
         assert exc_info.value.status_code == 400
 
 
+def test_validate_memory_repo_accepts_engram_and_rejects_plain_dir(tmp_path):
+    srv = _import_server()
+    from fastapi import HTTPException
+
+    valid = tmp_path / "engram"
+    (valid / "core" / "memory").mkdir(parents=True)
+    (valid / "core" / "memory" / "HOME.md").write_text("# Home\n", encoding="utf-8")
+    assert srv._validate_memory_repo(str(valid)) == valid.resolve()
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with pytest.raises(HTTPException) as exc_info:
+        srv._validate_memory_repo(str(plain))
+    assert exc_info.value.status_code == 400
+
+
 # ---------------------------------------------------------------------------
 # S4 — graceful shutdown signals running sessions
 # ---------------------------------------------------------------------------
@@ -335,6 +351,56 @@ def test_emit_control_event_survives_full_queue(tmp_path):
         assert errors == []
 
     asyncio.run(_run())
+
+
+def test_approval_endpoint_grants_pending_plan_request(tmp_path):
+    srv = _import_server()
+    from fastapi.testclient import TestClient
+
+    from harness.tools.work_tools import WorkProjectPlan
+    from harness.workspace import Workspace
+
+    ws = Workspace(tmp_path, session_id="act-001")
+    ws.ensure_layout()
+    ws.project_create("auth", goal="g")
+    ws.plan_create(
+        "auth",
+        "p",
+        "requires approval",
+        phases=[{"title": "gate", "requires_approval": True}],
+    )
+    first = ws.plan_advance("auth", "p", "complete")
+    approval_id = first["report"]["approval_request_id"]
+
+    fake_id = "approval_test_ses"
+    session = srv.ManagedSession(
+        id=fake_id,
+        config=SessionConfig(workspace=tmp_path),
+        components=SimpleNamespace(tools={"work_project_plan": WorkProjectPlan(ws)}),
+        queue=asyncio.Queue(),
+        task="approval test",
+    )
+    with srv._sessions_lock:
+        srv._sessions[fake_id] = session
+    try:
+        client = TestClient(srv.app)
+        resp = client.post(
+            f"/sessions/{fake_id}/approvals",
+            json={
+                "project": "auth",
+                "plan_id": "p",
+                "approval_request_id": approval_id,
+                "approved_by": "tester",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["approval_request_id"] == approval_id
+        _plan, state = ws.plan_load("auth", "p")
+        assert state["pending_approval"]["granted"] is True
+        assert state["pending_approval"]["granted_by"] == "tester"
+    finally:
+        with srv._sessions_lock:
+            srv._sessions.pop(fake_id, None)
 
 
 def test_list_sessions_fallback_honors_filters_and_pagination(tmp_path):

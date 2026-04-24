@@ -137,8 +137,8 @@ def test_namespace_filter_users_returns_no_match(engram: EngramMemory) -> None:
     assert "no memory matched" in out
 
 
-def test_namespace_invalid_returns_no_match(engram: EngramMemory) -> None:
-    """Unknown namespace produces no results, not an error."""
+def test_namespace_invalid_rejected(engram: EngramMemory) -> None:
+    """Unknown namespace is rejected before it can become a path scope."""
     tool = RecallMemory(engram)
-    out = tool.run({"query": "celery", "namespace": "nonexistent_namespace"})
-    assert "no memory matched" in out
+    with pytest.raises(ValueError, match="scope must be one of"):
+        tool.run({"query": "celery", "namespace": "nonexistent_namespace"})

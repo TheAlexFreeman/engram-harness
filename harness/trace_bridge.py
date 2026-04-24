@@ -699,12 +699,12 @@ def _emit_access_entries(
     for ev in memory.recall_events:
         if getattr(ev, "phase", "manifest") == "fetch":
             continue  # skip fetch-phase duplicates; manifest already registered this access
-        access_dir_rel = _access_namespace(ev.file_path)
+        access_dir_rel = _access_namespace(ev.file_path, content_prefix)
         if not access_dir_rel:
             continue
         helpfulness, note = _derive_recall_helpfulness(ev.file_path, ev.timestamp, tool_calls)
         entry = {
-            "file": _normalize_for_access(ev.file_path),
+            "file": _normalize_for_access(ev.file_path, content_prefix),
             "date": access_date,
             "task": task_slug,
             "helpfulness": round(helpfulness, 3),

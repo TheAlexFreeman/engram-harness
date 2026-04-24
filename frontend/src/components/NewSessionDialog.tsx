@@ -18,6 +18,11 @@ export function NewSessionDialog({ onClose }: Props) {
   const [model, setModel] = useState(MODELS[0]);
   const [interactive, setInteractive] = useState(true);
   const [maxTurns, setMaxTurns] = useState(100);
+  const [memory, setMemory] = useState<"file" | "engram">("file");
+  const [memoryRepo, setMemoryRepo] = useState("");
+  const [toolProfile, setToolProfile] = useState<"full" | "no_shell" | "read_only">("full");
+  const [traceLive, setTraceLive] = useState(false);
+  const [traceToEngram, setTraceToEngram] = useState<"auto" | "on" | "off">("auto");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +33,21 @@ export function NewSessionDialog({ onClose }: Props) {
     setSubmitting(true);
     setError(null);
     try {
-      await startSession({ task: task.trim(), workspace: workspace.trim(), model, interactive, maxTurns });
+      await startSession({
+        task: task.trim(),
+        workspace: workspace.trim(),
+        model: model.trim(),
+        interactive,
+        maxTurns,
+        memory,
+        memoryRepo: memory === "engram" ? memoryRepo : "",
+        toolProfile,
+        traceLive,
+        traceToEngram:
+          traceToEngram === "auto"
+            ? null
+            : traceToEngram === "on",
+      });
       onClose();
     } catch (err) {
       setError(String(err));
@@ -73,15 +92,17 @@ export function NewSessionDialog({ onClose }: Props) {
 
         <div className="flex gap-4">
           <Field label="Model" className="flex-1">
-            <select
+            <input
               className="input w-full"
+              list="model-suggestions"
               value={model}
               onChange={(e) => setModel(e.target.value)}
-            >
+            />
+            <datalist id="model-suggestions">
               {MODELS.map((m) => (
                 <option key={m} value={m}>{m}</option>
               ))}
-            </select>
+            </datalist>
           </Field>
 
           <Field label="Interactive">
@@ -108,16 +129,84 @@ export function NewSessionDialog({ onClose }: Props) {
         </button>
 
         {showAdvanced && (
-          <Field label={`Max turns (${maxTurns})`}>
-            <input
-              type="range"
-              min={1}
-              max={200}
-              value={maxTurns}
-              onChange={(e) => setMaxTurns(Number(e.target.value))}
-              className="w-full mt-1"
-            />
-          </Field>
+          <div className="space-y-4">
+            <Field label={`Max turns (${maxTurns})`}>
+              <input
+                type="range"
+                min={1}
+                max={200}
+                value={maxTurns}
+                onChange={(e) => setMaxTurns(Number(e.target.value))}
+                className="w-full mt-1"
+              />
+            </Field>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label="Memory">
+                <select
+                  className="input w-full"
+                  value={memory}
+                  onChange={(e) => setMemory(e.target.value as "file" | "engram")}
+                >
+                  <option value="file">File</option>
+                  <option value="engram">Engram</option>
+                </select>
+              </Field>
+
+              <Field label="Tool profile">
+                <select
+                  className="input w-full"
+                  value={toolProfile}
+                  onChange={(e) =>
+                    setToolProfile(e.target.value as "full" | "no_shell" | "read_only")
+                  }
+                >
+                  <option value="full">Full</option>
+                  <option value="no_shell">No shell</option>
+                  <option value="read_only">Read only</option>
+                </select>
+              </Field>
+            </div>
+
+            {memory === "engram" && (
+              <Field label="Memory repo">
+                <input
+                  className="input w-full"
+                  placeholder="/path/to/engram"
+                  value={memoryRepo}
+                  onChange={(e) => setMemoryRepo(e.target.value)}
+                />
+              </Field>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label="Trace live">
+                <button
+                  type="button"
+                  className={`mt-1 px-3 py-1.5 rounded text-xs font-mono border ${
+                    traceLive
+                      ? "bg-blue-900 border-blue-700 text-blue-200"
+                      : "bg-gray-800 border-gray-700 text-gray-400"
+                  }`}
+                  onClick={() => setTraceLive((v) => !v)}
+                >
+                  {traceLive ? "On" : "Off"}
+                </button>
+              </Field>
+
+              <Field label="Trace to Engram">
+                <select
+                  className="input w-full"
+                  value={traceToEngram}
+                  onChange={(e) => setTraceToEngram(e.target.value as "auto" | "on" | "off")}
+                >
+                  <option value="auto">Auto</option>
+                  <option value="on">On</option>
+                  <option value="off">Off</option>
+                </select>
+              </Field>
+            </div>
+          </div>
         )}
 
         {error && <p className="text-red-400 text-xs">{error}</p>}

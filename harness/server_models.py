@@ -83,6 +83,19 @@ class SendMessageRequest(BaseModel):
     content: str
 
 
+class GrantApprovalRequest(BaseModel):
+    project: str
+    plan_id: str
+    approval_request_id: str
+    approved_by: str = "user"
+
+
+class GrantApprovalResponse(BaseModel):
+    status: str
+    approval_request_id: str
+    granted_at: str | None = None
+
+
 class SendMessageResponse(BaseModel):
     status: str
     turn_number: int

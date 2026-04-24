@@ -49,33 +49,35 @@ in the repo root — the harness loads it via `python-dotenv`.
 ## Project structure
 
 - `harness/` — Agent loop, tools, modes, tracing, CLI. The integration seam
-  (`engram_memory.py`, `trace_bridge.py`, `tools/recall.py`) lives here because
-  the harness is the consumer.
-- `engram/` — Memory system: `core/memory/` (markdown content), `core/tools/`
-  (MCP server + format layer), `core/governance/` (rules), `HUMANS/` (docs and
-  views). `engram/` is still self-contained enough to function as a standalone
-  memory repo when checked out separately.
+  (`engram_memory.py`, `trace_bridge.py`, `tools/memory_tools.py`) lives here
+  because the harness is the consumer.
+- `harness/_engram_fs/` — Harness-owned Engram-format primitives for
+  frontmatter, path policy, git-backed writes, and optional embedding indexes.
+- `engram/` — Bundled Engram memory content and historical standalone-Engram
+  docs. The harness reads `engram/core/memory/`; it no longer imports or ships
+  the old MCP server from this tree.
 - `CLAUDE.md` / `AGENTS.md` — Agent bootstrap for the merged repo.
 - `ROADMAP.md` — Motivation, design principles, and phased integration plan.
 
-### The `engram_mcp` import alias
+### Engram integration
 
-`engram/core/tools/agent_memory_mcp/` is exposed to Python as
-`engram_mcp.agent_memory_mcp.*` via `[tool.setuptools.package-dir]` in the root
-`pyproject.toml`. This is how the harness imports Engram's format layer
-without disturbing `engram/`'s on-disk layout (which has to stay compatible
-with the standalone-Engram layout its own tests assume).
+The harness owns the small format layer it needs under `harness/_engram_fs/`.
+Agent-callable memory operations live in `harness/tools/memory_tools.py`; the
+legacy `harness/tools/recall.py` module remains only as a compatibility alias.
 
 ### Install variants
 
-The base install (`pip install -e .`) pulls only the harness CLI + Engram's
-format layer — no MCP runtime, no embeddings. Optional extras:
+The base install (`pip install -e .`) pulls only the harness CLI and local
+Engram-format support — no HTTP server and no embeddings. Optional extras:
 
-- `.[server]` — adds `mcp` so `engram-mcp`, `engram-proxy`, `engram-sidecar`
-  can run standalone for other clients (Cursor, Claude Desktop).
+- `.[api]` — adds FastAPI, Uvicorn, and SSE support for `harness serve`.
 - `.[search]` — adds `sentence-transformers` + `numpy` for semantic recall.
   Without this extra, `EngramMemory` falls back to keyword grep.
-- `.[dev]` — everything above plus pytest, ruff, pre-commit, time-machine.
+- `.[dev]` — test/lint tooling plus semantic-search dependencies.
+
+Root CI intentionally lints the active harness Python surface. Historical
+standalone-Engram support files under `engram/` are preserved for reference and
+are excluded where they do not match the harness lint policy.
 
 See [CLAUDE.md](CLAUDE.md) for agent-facing orientation and
 [ROADMAP.md](ROADMAP.md) for the full integration plan.

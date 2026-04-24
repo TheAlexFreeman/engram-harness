@@ -39,7 +39,7 @@ _MAX_CONTEXT_CHARS = 48_000
 _MAX_REMEMBER_CHARS = 8_000
 _ALLOWED_REMEMBER_KINDS = ("note", "reflection", "error")
 _ALLOWED_BUDGETS = ("S", "M", "L")
-_ALLOWED_SCOPES = ("knowledge", "skills", "activity", "users", "working")
+_ALLOWED_SCOPES = ("knowledge", "skills", "activity", "users")
 
 # Approx char budget for the project-context bundle (SUMMARY + active plans),
 # chosen proportional to the overall needs budget. The bundle is prepended to
@@ -75,6 +75,20 @@ def _format_single(result, idx: int, total: int) -> str:
             content[:_MAX_OUTPUT_CHARS] + f"\n\n[output truncated to {_MAX_OUTPUT_CHARS} chars]\n"
         )
     return f"# Memory result {idx}/{total}\n\n{content}\n"
+
+
+def _normalize_recall_scope(scope: object) -> str | None:
+    if scope is None:
+        return None
+    if not isinstance(scope, str):
+        raise ValueError("scope must be a string")
+    normalized = scope.strip().lower()
+    if not normalized:
+        return None
+    if normalized not in _ALLOWED_SCOPES:
+        allowed = ", ".join(_ALLOWED_SCOPES)
+        raise ValueError(f"scope must be one of: {allowed}; got {scope!r}")
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +164,7 @@ class MemoryRecall:
             raise ValueError("k must be an integer") from e
         k = max(_MIN_K, min(k, _MAX_K))
 
-        scope = (args.get("scope") or args.get("namespace") or "").strip().lower() or None
+        scope = _normalize_recall_scope(args.get("scope") or args.get("namespace"))
 
         results = self._memory.recall(query, k=k, namespace=scope)
 

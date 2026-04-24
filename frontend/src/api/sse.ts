@@ -11,8 +11,58 @@ const INITIAL_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;
 const MAX_RETRIES = 5;
 
+interface SSEFrameState {
+  eventType: string;
+  dataLines: string[];
+  eventId: string;
+}
+
+function freshFrameState(): SSEFrameState {
+  return { eventType: "message", dataLines: [], eventId: "" };
+}
+
+function processSSELine(
+  rawLine: string,
+  state: SSEFrameState,
+  handler: SSEHandler,
+  onEventId: (id: string) => void,
+): boolean {
+  const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+
+  if (line.startsWith("id:")) {
+    state.eventId = line.slice(3).replace(/^ /, "");
+  } else if (line.startsWith("event:")) {
+    state.eventType = line.slice(6).trim();
+  } else if (line.startsWith("data:")) {
+    state.dataLines.push(line.slice(5).replace(/^ /, ""));
+  } else if (line === "") {
+    if (state.dataLines.length > 0) {
+      if (state.eventId) onEventId(state.eventId);
+      const dataLine = state.dataLines.join("\n");
+      try {
+        const payload = JSON.parse(dataLine) as SSEPayload;
+        handler(payload);
+      } catch {
+        // skip malformed frames
+      }
+      const ended =
+        state.eventType === "done" ||
+        (state.eventType === "error" && dataLine.includes('"channel":"control"'));
+      state.eventType = "message";
+      state.dataLines = [];
+      state.eventId = "";
+      return ended;
+    }
+    state.eventType = "message";
+    state.dataLines = [];
+    state.eventId = "";
+  }
+
+  return false;
+}
+
 /** Read one SSE stream to completion. Returns true if the stream ended cleanly (done/error control event). */
-async function readSSEStream(
+export async function readSSEStream(
   body: ReadableStream<Uint8Array>,
   handler: SSEHandler,
   signal: AbortSignal,
@@ -21,6 +71,7 @@ async function readSSEStream(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const state = freshFrameState();
 
   try {
     while (true) {
@@ -31,39 +82,8 @@ async function readSSEStream(
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
 
-      let eventType = "message";
-      let dataLines: string[] = [];
-      let eventId = "";
-
       for (const line of lines) {
-        if (line.startsWith("id:")) {
-          eventId = line.slice(3).replace(/^ /, "");
-        } else if (line.startsWith("event:")) {
-          eventType = line.slice(6).trim();
-        } else if (line.startsWith("data:")) {
-          dataLines.push(line.slice(5).replace(/^ /, ""));
-        } else if (line === "") {
-          if (dataLines.length > 0) {
-            if (eventId) onEventId(eventId);
-            const dataLine = dataLines.join("\n");
-            try {
-              const payload = JSON.parse(dataLine) as SSEPayload;
-              handler(payload);
-            } catch {
-              // skip malformed frames
-            }
-            // Clean termination — don't reconnect
-            if (
-              eventType === "done" ||
-              (eventType === "error" && dataLine.includes('"channel":"control"'))
-            ) {
-              return true;
-            }
-          }
-          eventType = "message";
-          dataLines = [];
-          eventId = "";
-        }
+        if (processSSELine(line, state, handler, onEventId)) return true;
       }
 
       if (signal.aborted) break;

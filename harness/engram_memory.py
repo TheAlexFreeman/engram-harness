@@ -52,6 +52,7 @@ _SEARCH_SCOPES = (
     "memory/working",
     "memory/activity",
 )
+_RECALL_NAMESPACES = frozenset({"knowledge", "skills", "activity", "users"})
 
 # Soft cap on individual file body returned in start_session output. Files
 # below this fit raw; larger files get a head-only excerpt.
@@ -231,7 +232,7 @@ class EngramMemory:
         q = (query or "").strip()
         if not q:
             return []
-        scopes = (f"memory/{namespace}",) if namespace else _SEARCH_SCOPES
+        scopes = _recall_scopes(namespace)
         hits = self._semantic_recall(q, k=k, scopes=scopes) if self._embed_enabled else []
         if not hits:
             hits = self._keyword_recall(q, k=k, scopes=scopes)
@@ -807,7 +808,7 @@ class EngramMemory:
             fp = r["file_path"]
             if fp in seen:
                 continue
-            if not any(fp.startswith(s) for s in scopes):
+            if not any(_rel_path_in_scope(fp, s) for s in scopes):
                 continue
             seen.add(fp)
             out.append(
@@ -840,13 +841,17 @@ class EngramMemory:
         if not tokens:
             return []
         candidates: list[tuple[float, Path, str]] = []
-        for scope in scopes:
-            scope_dir = self.content_root / scope
+        for _scope, scope_dir in self._resolved_scope_dirs(scopes):
             if not scope_dir.is_dir():
                 continue
             for md_file in scope_dir.rglob("*.md"):
                 try:
-                    text = md_file.read_text(encoding="utf-8")
+                    resolved_file = md_file.resolve()
+                    resolved_file.relative_to(self.content_root.resolve())
+                except (OSError, ValueError):
+                    continue
+                try:
+                    text = resolved_file.read_text(encoding="utf-8")
                 except OSError:
                     continue
                 lower = text.lower()
@@ -855,7 +860,7 @@ class EngramMemory:
                     continue
                 # cheap density score: hits per kb
                 score = hits / max(1, len(text) // 1024 + 1)
-                candidates.append((score, md_file, text))
+                candidates.append((score, resolved_file, text))
         candidates.sort(key=lambda c: c[0], reverse=True)
         out: list[dict[str, Any]] = []
         for score, md_file, text in candidates[:k]:
@@ -872,10 +877,42 @@ class EngramMemory:
             )
         return out
 
+    def _resolved_scope_dirs(self, scopes: tuple[str, ...]) -> list[tuple[str, Path]]:
+        content_root = self.content_root.resolve()
+        resolved: list[tuple[str, Path]] = []
+        for scope in scopes:
+            if "\x00" in scope or Path(scope).is_absolute():
+                raise ValueError(f"recall scope must be relative to memory root: {scope!r}")
+            scope_dir = (content_root / scope).resolve()
+            try:
+                scope_dir.relative_to(content_root)
+            except ValueError as exc:
+                raise ValueError(f"recall scope escapes memory root: {scope!r}") from exc
+            resolved.append((scope, scope_dir))
+        return resolved
+
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def _recall_scopes(namespace: str | None) -> tuple[str, ...]:
+    if namespace is None:
+        return _SEARCH_SCOPES
+    normalized = str(namespace).strip().lower()
+    if not normalized:
+        return _SEARCH_SCOPES
+    if normalized not in _RECALL_NAMESPACES:
+        allowed = ", ".join(sorted(_RECALL_NAMESPACES))
+        raise ValueError(f"recall namespace must be one of: {allowed}; got {namespace!r}")
+    return (f"memory/{normalized}",)
+
+
+def _rel_path_in_scope(rel_path: str, scope: str) -> bool:
+    cleaned = rel_path.strip("/")
+    scope_clean = scope.strip("/")
+    return cleaned == scope_clean or cleaned.startswith(f"{scope_clean}/")
 
 
 def _sanitize_skill_name(raw: str) -> str:

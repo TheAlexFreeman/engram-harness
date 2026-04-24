@@ -27,8 +27,9 @@ from this project; what the harness needs it owns at `harness/_engram_fs/`.
 bootstrap, semantic or keyword recall, buffered records flushed at
 `end_session`). `harness/trace_bridge.py` turns a post-run JSONL trace into
 activity records, reflection notes, ACCESS entries, and trace spans — then commits
-them. `harness/tools/recall.py` exposes `recall()` as an agent-callable tool when
-`--memory=engram` is selected.
+them. `harness/tools/memory_tools.py` exposes `memory_recall`, `memory_context`,
+and the rest of the agent-callable memory tools when `--memory=engram` is
+selected; `harness/tools/recall.py` is only a legacy compatibility alias.
 
 ## Harness-owned format primitives
 
@@ -42,10 +43,10 @@ from harness._engram_fs import GitRepo, read_with_frontmatter
 from harness._engram_fs.embedding_index import EmbeddingIndex
 ```
 
-The `engram_mcp` package still ships from `engram/core/tools/agent_memory_mcp/`
-via `[tool.setuptools.package-dir]` for historical-reference purposes and to
-keep `engram/core/tools/tests/` runnable, but nothing in `harness/` imports
-from it. Authoritative Engram code lives in a separate standalone repo.
+The old `engram_mcp` package does not ship from this merged harness package.
+Historical references to MCP tool names remain under `engram/` because those
+files mirror the standalone Engram repo, but nothing in `harness/` imports from
+them. Authoritative Engram code lives in a separate standalone repo.
 
 ## Setup and run
 

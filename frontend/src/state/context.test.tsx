@@ -58,6 +58,24 @@ function Controls() {
       >
         Start Second
       </button>
+      <button
+        onClick={() =>
+          void startSession({
+            task: "engram task",
+            workspace: "/workspace/engram",
+            model: "custom-model",
+            interactive: false,
+            maxTurns: 20,
+            memory: "engram",
+            memoryRepo: "/memory/repo",
+            toolProfile: "no_shell",
+            traceLive: true,
+            traceToEngram: false,
+          })
+        }
+      >
+        Start Engram
+      </button>
       <button onClick={() => void stopSession()}>Stop</button>
     </>
   );
@@ -212,5 +230,40 @@ describe("SessionProvider", () => {
     expect(order).toEqual(["create:first task", "stop:sess-1", "create:second task"]);
     expect(firstRegistration.signal.aborted).toBe(true);
     expect(sseRegistrations[1]?.url).toBe("/sessions/sess-2/events");
+  });
+
+  it("passes memory and tool-profile options when starting a session", async () => {
+    vi.mocked(api.createSession)
+      .mockReset()
+      .mockResolvedValue({
+        created_at: "2026-04-21T10:00:00.000",
+        session_id: "sess-engram",
+        status: "running",
+      });
+
+    render(
+      <SessionProvider>
+        <Controls />
+      </SessionProvider>
+    );
+
+    fireEvent.click(screen.getByText("Start Engram"));
+
+    await waitFor(() => {
+      expect(api.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task: "engram task",
+          workspace: "/workspace/engram",
+          model: "custom-model",
+          interactive: false,
+          max_turns: 20,
+          memory: "engram",
+          memory_repo: "/memory/repo",
+          tool_profile: "no_shell",
+          trace_live: true,
+          trace_to_engram: false,
+        })
+      );
+    });
   });
 });

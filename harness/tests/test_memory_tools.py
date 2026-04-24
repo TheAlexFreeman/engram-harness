@@ -73,6 +73,20 @@ def test_recall_scope_takes_precedence_over_namespace(engram: EngramMemory) -> N
     assert "no memory matched" not in out
 
 
+def test_recall_rejects_unknown_or_traversal_scope(engram: EngramMemory) -> None:
+    tool = MemoryRecall(engram)
+    for scope in ("working", "../../..", "knowledge/.."):
+        with pytest.raises(ValueError, match="scope must be one of"):
+            tool.run({"query": "celery", "scope": scope})
+
+
+def test_recall_backend_rejects_scope_escape(engram: EngramMemory) -> None:
+    with pytest.raises(ValueError, match="recall namespace"):
+        engram.recall("celery", namespace="../../..")
+    with pytest.raises(ValueError, match="escapes memory root"):
+        engram._keyword_recall("celery", k=1, scopes=("memory/../../outside",))
+
+
 # ---------------------------------------------------------------------------
 # memory_remember — buffering and cache invalidation
 # ---------------------------------------------------------------------------

@@ -27,6 +27,8 @@ from harness.loop import RunResult, run, run_until_idle
 from harness.server_models import (
     CreateSessionRequest,
     CreateSessionResponse,
+    GrantApprovalRequest,
+    GrantApprovalResponse,
     SendMessageRequest,
     SendMessageResponse,
     SessionDetail,
@@ -123,6 +125,11 @@ _WORKSPACE_ROOT: Path | None = (
     if "HARNESS_WORKSPACE_ROOT" in os.environ
     else None
 )
+_MEMORY_ROOT: Path | None = (
+    Path(os.environ["HARNESS_MEMORY_ROOT"]).resolve()
+    if "HARNESS_MEMORY_ROOT" in os.environ
+    else None
+)
 
 _FORBIDDEN_PATHS: frozenset[str] = frozenset(
     str(Path(p).resolve())
@@ -157,6 +164,32 @@ def _validate_workspace(workspace_str: str) -> Path:
                 status_code=400,
                 detail=f"Workspace must be under {_WORKSPACE_ROOT}",
             )
+    return p
+
+
+def _validate_memory_repo(memory_repo_str: str) -> Path:
+    """Resolve and validate a caller-provided Engram memory repo path."""
+    p = Path(memory_repo_str).resolve()
+    if str(p) in _FORBIDDEN_PATHS:
+        raise HTTPException(status_code=400, detail=f"Memory repo '{p}' is a restricted path")
+    boundary = _MEMORY_ROOT or _WORKSPACE_ROOT
+    if boundary is not None:
+        try:
+            p.relative_to(boundary)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Memory repo must be under {boundary}",
+            )
+    if not any(
+        (p / rel / "memory" / "HOME.md").is_file()
+        for rel in (Path("."), Path("core"), Path("engram") / "core")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Memory repo must contain memory/HOME.md, core/memory/HOME.md, "
+            "or engram/core/memory/HOME.md",
+        )
     return p
 
 
@@ -622,13 +655,14 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
 
     session_id = f"ses_{uuid.uuid4().hex[:8]}"
     workspace = _validate_workspace(req.workspace)
+    memory_repo = _validate_memory_repo(req.memory_repo) if req.memory_repo else None
     tool_profile = ToolProfile(req.tool_profile)
     config = SessionConfig(
         workspace=workspace,
         model=req.model,
         mode=req.mode,
         memory_backend=req.memory,
-        memory_repo=Path(req.memory_repo) if req.memory_repo else None,
+        memory_repo=memory_repo,
         max_turns=req.max_turns,
         max_parallel_tools=req.max_parallel_tools,
         repeat_guard_threshold=req.repeat_guard_threshold,
@@ -802,6 +836,37 @@ async def stop_session(session_id: str) -> StopResponse:
     session = _get_session(session_id)
     session.stop_event.set()
     return StopResponse(status="stop_requested")
+
+
+@app.post("/sessions/{session_id}/approvals", response_model=GrantApprovalResponse)
+async def grant_approval(
+    session_id: str,
+    req: GrantApprovalRequest,
+) -> GrantApprovalResponse:
+    session = _get_session(session_id)
+    plan_tool = session.components.tools.get("work_project_plan")
+    workspace = getattr(plan_tool, "_workspace", None)
+    if workspace is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Session does not have work_project_plan approvals available",
+        )
+    try:
+        approval = workspace.plan_grant_approval(
+            req.project,
+            req.plan_id,
+            req.approval_request_id,
+            approved_by=req.approved_by,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GrantApprovalResponse(
+        status="approved",
+        approval_request_id=str(approval.get("id", req.approval_request_id)),
+        granted_at=approval.get("granted_at"),
+    )
 
 
 @app.post("/sessions/{session_id}/messages", response_model=SendMessageResponse)

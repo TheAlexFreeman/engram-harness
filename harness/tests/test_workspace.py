@@ -536,10 +536,16 @@ def test_plan_advance_requires_approval_pauses(ws: Workspace) -> None:
     r = ws.plan_advance("p", "plan-a", "complete")
     assert r["report"]["action"] == "awaiting_approval"
     assert r["state"]["status"] == "awaiting_approval"
-    # Second call with approved=True completes.
+    approval_id = r["report"]["approval_request_id"]
+
+    # A model-supplied approved=True flag cannot complete the gate by itself.
     r2 = ws.plan_advance("p", "plan-a", "complete", approved=True)
-    assert r2["report"]["action"] == "complete"
-    assert r2["state"]["status"] == "completed"
+    assert r2["report"]["action"] == "awaiting_approval"
+
+    ws.plan_grant_approval("p", "plan-a", approval_id, approved_by="tester")
+    r3 = ws.plan_advance("p", "plan-a", "complete", approved=True)
+    assert r3["report"]["action"] == "complete"
+    assert r3["state"]["status"] == "completed"
 
 
 def test_plan_advance_verify_blocks_on_failed_check(ws: Workspace, tmp_path: Path) -> None:

@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -111,6 +112,7 @@ _PC_PREFIX_TEST = "test:"
 # Soft cap on subprocess test commands so a misconfigured postcondition
 # can't hang the session.
 _PC_TEST_TIMEOUT_SECS = 120
+_APPROVAL_ID_PREFIX = "apr_"
 
 
 # ---------------------------------------------------------------------------
@@ -992,6 +994,7 @@ class Workspace:
         reason: str | None = None,
         verify: bool = False,
         approved: bool = False,
+        allow_test_postconditions: bool = True,
         cwd: Path | None = None,
     ) -> dict:
         """Apply ``action`` ("complete" | "fail") to the current phase.
@@ -1006,9 +1009,10 @@ class Workspace:
         ``_PLAN_FAILURE_WARN_THRESHOLD`` failures the briefing nudges the
         agent to revise.
 
-        ``requires_approval: true`` phases stop here unless
-        ``approved=True`` — the tool layer surfaces the pause as an
-        in-conversation message for the user.
+        ``requires_approval: true`` phases stop here until an out-of-band
+        approval grant is recorded on the run state. The legacy
+        ``approved`` flag remains accepted for API compatibility, but it
+        cannot advance a phase by itself.
         """
         if action not in ("complete", "fail"):
             raise ValueError(f"action must be 'complete' or 'fail'; got {action!r}")
@@ -1051,7 +1055,11 @@ class Workspace:
         # action == "complete"
         verification: list[dict] | None = None
         if verify:
-            verification = self.plan_verify_postconditions(phase, cwd=cwd)
+            verification = self.plan_verify_postconditions(
+                phase,
+                cwd=cwd,
+                allow_test_postconditions=allow_test_postconditions,
+            )
             report["verification"] = verification
             if any(not v["passed"] for v in verification if v["kind"] != "manual"):
                 # verify_failed does not persist — session touch applies
@@ -1059,13 +1067,22 @@ class Workspace:
                 report["action"] = "verify_failed"
                 return {"state": state, "report": report}
 
-        if phase.get("requires_approval") and not approved:
-            state["status"] = PLAN_STATUS_AWAITING_APPROVAL
-            state["modified"] = datetime.now().isoformat(timespec="seconds")
-            self._mark_plan_session_touched(state)
-            report["action"] = "awaiting_approval"
-            self._save_run_state(_plan_run_state_path(self.project(project), plan_id), state)
-            return {"state": state, "report": report}
+        if phase.get("requires_approval"):
+            pending = _current_pending_approval(state, current_idx)
+            if pending is None:
+                pending = _new_approval_request(current_idx, phase.get("title", ""))
+                state["pending_approval"] = pending
+            if not pending.get("granted"):
+                state["status"] = PLAN_STATUS_AWAITING_APPROVAL
+                state["modified"] = datetime.now().isoformat(timespec="seconds")
+                self._mark_plan_session_touched(state)
+                report["action"] = "awaiting_approval"
+                report["approval_request_id"] = pending["id"]
+                report["approved_argument_ignored"] = bool(approved)
+                self._save_run_state(_plan_run_state_path(self.project(project), plan_id), state)
+                return {"state": state, "report": report}
+            state.setdefault("approval_history", []).append(pending)
+            state.pop("pending_approval", None)
 
         # Mark phase complete and advance.
         state.setdefault("phases_completed", []).append(current_idx)
@@ -1085,6 +1102,38 @@ class Workspace:
         self._save_run_state(_plan_run_state_path(self.project(project), plan_id), state)
         return {"state": state, "report": report}
 
+    def plan_grant_approval(
+        self,
+        project: str,
+        plan_id: str,
+        approval_request_id: str,
+        *,
+        approved_by: str = "user",
+    ) -> dict:
+        """Grant a pending approval request through a user-owned API path."""
+        plan_doc, state = self.plan_load(project, plan_id)
+        phases = plan_doc.get("phases", [])
+        current_idx = int(state.get("current_phase", 0))
+        phase = phases[current_idx] if 0 <= current_idx < len(phases) else {}
+        if not phase.get("requires_approval"):
+            raise ValueError(f"current phase of plan {plan_id!r} does not require approval")
+
+        pending = _current_pending_approval(state, current_idx)
+        if pending is None:
+            raise ValueError(f"plan {plan_id!r} has no pending approval request")
+        if pending.get("id") != approval_request_id:
+            raise ValueError("approval_request_id does not match the pending approval")
+
+        now = datetime.now().isoformat(timespec="seconds")
+        pending["granted"] = True
+        pending["granted_at"] = now
+        pending["granted_by"] = str(approved_by or "user")[:80]
+        state["pending_approval"] = pending
+        state["status"] = PLAN_STATUS_AWAITING_APPROVAL
+        state["modified"] = now
+        self._save_run_state(_plan_run_state_path(self.project(project), plan_id), state)
+        return pending
+
     def _mark_plan_session_touched(self, state: dict) -> None:
         """Bump sessions_used when the current session first touches this plan.
 
@@ -1103,7 +1152,13 @@ class Workspace:
             touched.append(self.session_id)
             state["sessions_used"] = len(touched)
 
-    def plan_verify_postconditions(self, phase: dict, *, cwd: Path | None = None) -> list[dict]:
+    def plan_verify_postconditions(
+        self,
+        phase: dict,
+        *,
+        cwd: Path | None = None,
+        allow_test_postconditions: bool = True,
+    ) -> list[dict]:
         """Run all postcondition checks for *phase*.
 
         Each entry: ``check`` (the original string), ``kind``
@@ -1115,9 +1170,9 @@ class Workspace:
           ``<path>``. Path is resolved relative to *cwd* (or the
           process cwd when None). Passes when ``re.search`` finds a
           match.
-        - ``test:<command>`` — shell command via ``subprocess.run``.
-          Passes on exit code 0. Timeout
-          ``_PC_TEST_TIMEOUT_SECS`` seconds; a timeout counts as
+        - ``test:<command>`` — shell command via ``subprocess.run`` when
+          allowed by the current tool profile. Passes on exit code 0.
+          Timeout ``_PC_TEST_TIMEOUT_SECS`` seconds; a timeout counts as
           failure with a timeout detail.
 
         Manual checks are echoed back with ``passed=True`` and a detail
@@ -1130,7 +1185,17 @@ class Workspace:
             if check.startswith(_PC_PREFIX_GREP):
                 out.append(_verify_grep_check(check, cwd=cwd))
             elif check.startswith(_PC_PREFIX_TEST):
-                out.append(_verify_test_check(check, cwd=cwd))
+                if allow_test_postconditions:
+                    out.append(_verify_test_check(check, cwd=cwd))
+                else:
+                    out.append(
+                        {
+                            "check": check,
+                            "kind": "test",
+                            "passed": False,
+                            "detail": "test postconditions are disabled by the current tool profile",
+                        }
+                    )
             else:
                 out.append(
                     {
@@ -1319,6 +1384,34 @@ def _first_match_snippet_ws(text: str, tokens: list[str], *, ctx: int = 200) -> 
 
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+def _new_approval_request(phase_index: int, phase_title: str) -> dict[str, Any]:
+    return {
+        "id": f"{_APPROVAL_ID_PREFIX}{uuid.uuid4().hex[:12]}",
+        "phase_index": phase_index,
+        "phase_title": str(phase_title or ""),
+        "created": datetime.now().isoformat(timespec="seconds"),
+        "granted": False,
+        "granted_at": None,
+        "granted_by": None,
+    }
+
+
+def _current_pending_approval(state: dict, phase_index: int) -> dict[str, Any] | None:
+    pending = state.get("pending_approval")
+    if not isinstance(pending, dict):
+        return None
+    try:
+        pending_phase = int(pending.get("phase_index", -1))
+    except (TypeError, ValueError):
+        return None
+    if pending_phase != phase_index:
+        return None
+    approval_id = pending.get("id")
+    if not isinstance(approval_id, str) or not approval_id.startswith(_APPROVAL_ID_PREFIX):
+        return None
+    return pending
 
 
 def _validate_thread_name(name: str) -> None:

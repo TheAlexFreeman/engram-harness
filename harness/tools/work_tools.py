@@ -96,7 +96,7 @@ class WorkStatus:
     """``work_status`` — read the agent's orientation document."""
 
     name = "work_status"
-    mutates = False  # reads CURRENT.md; only regenerates derived SUMMARY.md
+    mutates = False
     description = (
         "Read your current orientation: CURRENT.md (active threads, their "
         "status, and the freeform notes section). Pass `project` to also "
@@ -135,12 +135,10 @@ class WorkStatus:
             if not p.exists():
                 parts.extend(["", f"(project {project!r} does not exist)"])
             else:
-                # Regenerate SUMMARY.md before reading so the output is
-                # fresh. This is a derived-content write — it rebuilds
-                # from GOAL.md / questions.md / file listing, never
-                # invents user content. Read-only profiles deliberately
-                # accept this to keep SUMMARY truthful.
-                self._workspace.regenerate_summary(p)
+                if not p.summary_path.is_file():
+                    parts.extend(["", f"(project {project!r} has no SUMMARY.md yet)"])
+                    out = "\n".join(parts) + "\n"
+                    return _truncate(out, _MAX_STATUS_CHARS)
                 parts.extend(
                     [
                         "",
@@ -908,7 +906,7 @@ class WorkProjectStatus:
     """``work_project_status`` — return a project's auto-generated SUMMARY.md."""
 
     name = "work_project_status"
-    mutates = False  # regenerates derived SUMMARY.md; no user content
+    mutates = False
     description = (
         "Read a project's full context via its auto-generated SUMMARY.md "
         "(goal with dates, open questions, resolved questions, file "
@@ -933,7 +931,8 @@ class WorkProjectStatus:
         p = self._workspace.project(name)
         if not p.exists():
             return f"(project {name!r} does not exist)\n"
-        self._workspace.regenerate_summary(p)
+        if not p.summary_path.is_file():
+            return f"(project {name!r} has no SUMMARY.md yet)\n"
         body = p.summary_path.read_text(encoding="utf-8")
         return f"# projects/{name}/SUMMARY.md\n\n{body.rstrip()}\n"
 
@@ -1011,10 +1010,10 @@ class WorkProjectPlan:
     - ``list``     — one-line summary per plan in the project
       (``project``).
 
-    Approval gates are conversational: phases with
-    ``requires_approval: true`` pause on ``advance`` unless ``approved``
-    is passed, and return a message telling the agent to wait for user
-    approval in chat. No approval documents.
+    Approval gates are harness-mediated: phases with
+    ``requires_approval: true`` pause on ``advance`` and create an
+    approval request. A user-owned API path must grant that request
+    before the phase can complete.
     """
 
     name = "work_project_plan"
@@ -1026,9 +1025,9 @@ class WorkProjectPlan:
         "current phase briefing, 'advance' completes or fails the current "
         "phase, 'list' summarises all plans in the project. Plans live at "
         "workspace/projects/<project>/plans/<plan_id>.yaml. Approval gates "
-        "are in-conversation: a phase with requires_approval: true pauses "
-        "until the user approves in chat, then call advance with approved: "
-        "true. Postcondition prefixes: grep:<pattern>::<path> (regex), "
+        "are harness-mediated: a phase with requires_approval: true pauses "
+        "until the user grants the emitted approval request. Postcondition "
+        "prefixes: grep:<pattern>::<path> (regex), "
         "test:<command> (shell, exit 0 = pass), plain text (manual)."
     )
     input_schema = {
@@ -1103,9 +1102,9 @@ class WorkProjectPlan:
             "approved": {
                 "type": "boolean",
                 "description": (
-                    "advance op, optional. Set true to pass a "
-                    "requires_approval gate. Omit unless you have "
-                    "explicit user approval in chat."
+                    "advance op, optional legacy flag. A requires_approval "
+                    "gate still requires an out-of-band approval grant; this "
+                    "flag alone cannot complete the phase."
                 ),
             },
         },
@@ -1118,6 +1117,7 @@ class WorkProjectPlan:
         engram: "EngramMemory | None" = None,
         *,
         verify_cwd: "Path | None" = None,
+        allow_test_postconditions: bool = True,
     ):
         self._workspace = workspace
         self._engram = engram
@@ -1127,6 +1127,7 @@ class WorkProjectPlan:
         # development, not inside the Engram repo. None falls back to
         # the process cwd.
         self._verify_cwd = verify_cwd
+        self._allow_test_postconditions = allow_test_postconditions
 
     def run(self, args: dict) -> str:
         op = (args.get("op") or "").strip().lower()
@@ -1223,10 +1224,11 @@ class WorkProjectPlan:
 
         if status == PLAN_STATUS_AWAITING_APPROVAL:
             phase = phases[current_idx] if current_idx < len(phases) else {}
+            pending = state.get("pending_approval") or {}
+            approval_id = pending.get("id") or "(unknown request)"
             lines.append(
                 f"⚠️  Phase **{phase.get('title', '?')}** requires user approval "
-                "before completion. Ask the user in chat; once approved, call "
-                "advance with `approved: true`."
+                f"before completion. Approval request: `{approval_id}`."
             )
             return "\n".join(lines) + "\n"
 
@@ -1295,6 +1297,7 @@ class WorkProjectPlan:
                 reason=reason,
                 verify=verify,
                 approved=approved,
+                allow_test_postconditions=self._allow_test_postconditions,
                 cwd=self._verify_cwd,
             )
         except FileNotFoundError as exc:
@@ -1318,11 +1321,12 @@ class WorkProjectPlan:
         if report["action"] == "verify_failed":
             return _format_verify_failure(report)
         if report["action"] == "awaiting_approval":
+            approval_id = report.get("approval_request_id") or "(unknown request)"
             return (
                 f"Phase **{report['phase_title']}** in plan {plan_id!r} requires user "
                 f"approval before completion.\n"
-                f"Ask the user in chat; once approved, call advance again with "
-                f"`approved: true`."
+                f"Approval request: `{approval_id}`. Ask the user to grant this request "
+                f"through the harness approval API, then call advance again."
             )
         if report["action"] == "fail":
             failures = report.get("failure_count_on_phase", 1)

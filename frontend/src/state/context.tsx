@@ -20,6 +20,11 @@ interface SessionContextValue {
     model: string;
     interactive: boolean;
     maxTurns: number;
+    memory?: "file" | "engram";
+    memoryRepo?: string;
+    toolProfile?: "full" | "no_shell" | "read_only";
+    traceLive?: boolean;
+    traceToEngram?: boolean | null;
   }) => Promise<void>;
   sendMessage: (content: string) => Promise<void>;
   stopSession: () => Promise<void>;
@@ -153,7 +158,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const startSession = useCallback(
-    async (req: { task: string; workspace: string; model: string; interactive: boolean; maxTurns: number }) => {
+    async (req: {
+      task: string;
+      workspace: string;
+      model: string;
+      interactive: boolean;
+      maxTurns: number;
+      memory?: "file" | "engram";
+      memoryRepo?: string;
+      toolProfile?: "full" | "no_shell" | "read_only";
+      traceLive?: boolean;
+      traceToEngram?: boolean | null;
+    }) => {
       const previousSessionId = stateRef.current.sessionId;
       const previousStatus = stateRef.current.status;
       const previousController = abortRef.current;
@@ -177,6 +193,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         model: req.model,
         interactive: req.interactive,
         max_turns: req.maxTurns,
+        memory: req.memory,
+        memory_repo: req.memoryRepo?.trim() || undefined,
+        tool_profile: req.toolProfile,
+        trace_live: req.traceLive,
+        trace_to_engram: req.traceToEngram,
       });
 
       dispatch({

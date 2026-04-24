@@ -284,6 +284,19 @@ def test_project_status_returns_summary(ws: Workspace) -> None:
     assert "Q1" in out
 
 
+def test_project_status_reads_existing_summary_without_regenerating(ws: Workspace) -> None:
+    WorkProjectCreate(ws).run({"name": "alpha", "goal": "explore alpha", "questions": ["Q1"]})
+    summary = ws.project("alpha").summary_path
+    summary.write_text("# stale\n\nDo not overwrite this read.\n", encoding="utf-8")
+
+    out_project = WorkProjectStatus(ws).run({"name": "alpha"})
+    out_status = WorkStatus(ws).run({"project": "alpha"})
+
+    assert "Do not overwrite this read" in out_project
+    assert "Do not overwrite this read" in out_status
+    assert summary.read_text(encoding="utf-8").startswith("# stale")
+
+
 def test_project_status_missing_graceful(ws: Workspace) -> None:
     out = WorkProjectStatus(ws).run({"name": "ghost"})
     assert "does not exist" in out
@@ -447,6 +460,22 @@ def test_build_memory_registers_all_work_tools_under_full(tmp_path: Path) -> Non
         assert expected in names, f"missing in full profile: {expected}"
     # Full profile creates the workspace up-front.
     assert (memory.content_root / "workspace").is_dir()
+
+
+def test_build_memory_disables_test_postconditions_under_no_shell(tmp_path: Path) -> None:
+    from harness.config import SessionConfig, ToolProfile, _build_memory
+    from harness.tests.test_engram_memory import _make_engram_repo
+
+    repo = _make_engram_repo(tmp_path)
+    config = SessionConfig(
+        workspace=tmp_path / "scratch-ws",
+        memory_backend="engram",
+        memory_repo=repo,
+        tool_profile=ToolProfile.NO_SHELL,
+    )
+    _memory, _engram, extras = _build_memory(config)
+    plan_tool = next(t for t in extras if t.name == "work_project_plan")
+    assert plan_tool._allow_test_postconditions is False
 
 
 # ---------------------------------------------------------------------------
@@ -820,7 +849,10 @@ def test_plan_tool_advance_awaiting_approval_message(ws: Workspace, engram: Engr
         {"op": "advance", "project": "auth", "plan_id": "p", "action": "complete"}
     )
     assert "requires user approval" in out
-    # And a second call with approved=True completes.
+    _plan, state = ws.plan_load("auth", "p")
+    approval_id = state["pending_approval"]["id"]
+
+    # A model-supplied approved=True flag does not complete the gate by itself.
     out2 = _mk_plan_tool(ws, engram).run(
         {
             "op": "advance",
@@ -830,7 +862,13 @@ def test_plan_tool_advance_awaiting_approval_message(ws: Workspace, engram: Engr
             "approved": True,
         }
     )
-    assert "complete" in out2.lower()
+    assert "requires user approval" in out2
+
+    ws.plan_grant_approval("auth", "p", approval_id, approved_by="test-user")
+    out3 = _mk_plan_tool(ws, engram).run(
+        {"op": "advance", "project": "auth", "plan_id": "p", "action": "complete"}
+    )
+    assert "complete" in out3.lower()
 
 
 def test_plan_tool_advance_verify_failure_blocks(
@@ -864,6 +902,51 @@ def test_plan_tool_advance_verify_failure_blocks(
     )
     assert "not advanced" in out
     assert "grep" in out
+
+
+def test_plan_tool_no_shell_profile_blocks_test_postcondition(
+    ws: Workspace,
+    engram: EngramMemory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws.project_create("auth", goal="g")
+    _mk_plan_tool(ws, engram).run(
+        {
+            "op": "create",
+            "project": "auth",
+            "plan_id": "p",
+            "purpose": "x",
+            "phases": [{"title": "verifier", "postconditions": ["test:echo should-not-run"]}],
+        }
+    )
+
+    called = False
+
+    def _fake_run(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("subprocess.run must not be called")
+
+    monkeypatch.setattr("harness.workspace.subprocess.run", _fake_run)
+    tool = WorkProjectPlan(
+        ws,
+        engram=engram,
+        verify_cwd=tmp_path,
+        allow_test_postconditions=False,
+    )
+    out = tool.run(
+        {
+            "op": "advance",
+            "project": "auth",
+            "plan_id": "p",
+            "action": "complete",
+            "verify": True,
+        }
+    )
+    assert "not advanced" in out
+    assert "disabled by the current tool profile" in out
+    assert called is False
 
 
 def test_plan_tool_list_shows_progress(ws: Workspace, engram: EngramMemory) -> None:

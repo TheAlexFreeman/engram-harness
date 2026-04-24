@@ -24,9 +24,19 @@ def normalize_workspace_relative(relative: str) -> str:
 
     s = str(relative).strip()
 
-    # Remove common XML/parameter wrappers that sometimes leak into args
-    s = re.sub(r"<[^>]+>(.*?)</[^>]+>", r"\1", s, flags=re.DOTALL)
-    s = re.sub(r'path["\s:=]*', "", s, flags=re.IGNORECASE)
+    # Remove common XML/parameter wrappers that sometimes leak into args,
+    # but only when the entire argument is the wrapper. Path components like
+    # "path_policy.py" must pass through unchanged.
+    for _ in range(3):
+        match = re.fullmatch(r"<([A-Za-z_][\w.-]*)\b[^>]*>(.*?)</\1>", s, flags=re.DOTALL)
+        if not match:
+            break
+        s = match.group(2).strip()
+
+    # Unwrap leading labels such as path: "src/app.py" or "file_path"=foo.
+    s = re.sub(
+        r"""^(?:"|')?(?:path|file_path)(?:"|')?\s*(?::|=|\s+)\s*""", "", s, flags=re.IGNORECASE
+    )
 
     # Unescape common JSON/string escapes (in reverse order of application)
     for _ in range(3):  # handle multiple layers

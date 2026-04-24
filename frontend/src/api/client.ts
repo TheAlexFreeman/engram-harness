@@ -6,9 +6,16 @@ export interface CreateSessionRequest {
   model?: string;
   mode?: "native";
   memory?: "file" | "engram";
+  memory_repo?: string | null;
   max_turns?: number;
   max_parallel_tools?: number;
+  repeat_guard_threshold?: number;
+  error_recall_threshold?: number;
+  stream?: boolean;
+  trace_live?: boolean;
+  trace_to_engram?: boolean | null;
   interactive?: boolean;
+  tool_profile?: "full" | "no_shell" | "read_only";
 }
 
 export interface SessionSummary {
@@ -84,6 +91,20 @@ export const api = {
   getSession: (id: string) => get<SessionDetail>(`/sessions/${id}`),
 
   stopSession: (id: string) => post<{ status: string }>(`/sessions/${id}/stop`, {}),
+
+  grantApproval: (
+    id: string,
+    req: {
+      project: string;
+      plan_id: string;
+      approval_request_id: string;
+      approved_by?: string;
+    }
+  ) =>
+    post<{ status: string; approval_request_id: string; granted_at?: string }>(
+      `/sessions/${id}/approvals`,
+      req
+    ),
 
   sendMessage: (id: string, content: string) =>
     post<{ status: string; turn_number: number }>(`/sessions/${id}/messages`, { content }),

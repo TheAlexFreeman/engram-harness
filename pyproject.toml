@@ -73,6 +73,9 @@ harness = ["pricing.json", "py.typed"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+extend-exclude = [
+    "engram/HUMANS/tooling/scripts/validate_memory_repo.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]

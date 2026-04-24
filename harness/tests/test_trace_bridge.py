@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from harness.engram_memory import EngramMemory
-from harness.tests.test_engram_memory import _make_engram_repo
+from harness.tests.test_engram_memory import _git_init, _make_engram_repo
 from harness.trace_bridge import (
     HELPFULNESS_READ_NEVER_USED,
     HELPFULNESS_READ_THEN_EDIT,
@@ -43,6 +44,24 @@ def memory(repo: Path) -> EngramMemory:
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="milliseconds")
+
+
+def _make_no_prefix_engram_repo(tmp: Path) -> Path:
+    repo = tmp / "no-prefix"
+    mem = repo / "memory"
+    (mem / "knowledge").mkdir(parents=True)
+    (mem / "skills").mkdir()
+    (mem / "activity").mkdir()
+    (mem / "users").mkdir()
+    (mem / "HOME.md").write_text("# Home\n", encoding="utf-8")
+    (mem / "knowledge" / "celery.md").write_text(
+        "---\ntrust: medium\n---\n\n# Celery\n\nDistributed task queue notes.\n",
+        encoding="utf-8",
+    )
+    _git_init(repo)
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=str(repo), check=True)
+    return repo
 
 
 def test_access_namespace_normalises_paths() -> None:
@@ -311,6 +330,31 @@ def test_run_trace_bridge_handles_recall_events(
     result = run_trace_bridge(trace, memory)
     # Each recall event also produces an ACCESS entry.
     assert result.access_entries >= 1
+
+
+def test_run_trace_bridge_recall_access_respects_empty_content_prefix(tmp_path: Path) -> None:
+    repo = _make_no_prefix_engram_repo(tmp_path)
+    memory = EngramMemory(repo, content_prefix="", embed=False)
+    memory.start_session("test empty prefix")
+    memory.recall("celery", k=1)
+
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    _write_trace(
+        trace,
+        [
+            {"ts": ts, "kind": "session_start", "task": "x"},
+            {"ts": ts, "kind": "session_end", "turns": 1, "reason": "complete"},
+        ],
+    )
+
+    result = run_trace_bridge(trace, memory, commit=False)
+    access_path = repo / "memory" / "knowledge" / "ACCESS.jsonl"
+    rec = json.loads(access_path.read_text(encoding="utf-8").splitlines()[-1])
+
+    assert result.access_entries == 1
+    assert rec["file"] == "memory/knowledge/celery.md"
+    assert rec["session_id"] == memory._session_dir_rel()
 
 
 def test_run_trace_bridge_no_commit_when_disabled(

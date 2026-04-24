@@ -173,6 +173,7 @@ def _build_memory(
     # message instead.
     workspace = Workspace(engram.content_root, session_id=engram.session_id)
     read_only = config.tool_profile == ToolProfile.READ_ONLY
+    allow_test_postconditions = config.tool_profile != ToolProfile.NO_SHELL
     if not read_only:
         try:
             workspace.ensure_layout()
@@ -212,14 +213,17 @@ def _build_memory(
         # agent's --workspace (where the code under development lives),
         # not the Engram repo. ``grep:…`` checks resolve their paths the
         # same way.
-        WorkProjectPlan(workspace, engram=engram, verify_cwd=config.workspace),
+        WorkProjectPlan(
+            workspace,
+            engram=engram,
+            verify_cwd=config.workspace,
+            allow_test_postconditions=allow_test_postconditions,
+        ),
     ]
     if read_only:
         # Honour the --tool-profile=read_only contract: drop every work
         # tool that can write to disk. Read-only tools (status, read,
-        # list, project_status) are kept — project_status regenerates
-        # derived SUMMARY.md but never invents user content, so it
-        # respects the "no user writes" intent.
+        # list, project_status) are kept and read existing files only.
         work_tools = [t for t in work_tools if not getattr(t, "mutates", True)]
     return engram, engram, memory_tools + work_tools
 
