@@ -183,7 +183,8 @@ native_fallback_owns = [
 well_known_paths = ["HUMANS/tooling/agent-memory-capabilities.toml"]
 requires_kind = "agent-memory-capabilities"
 supported_versions = [1]
-requires_mcp_entrypoint = true
+# False in engram-harness: the `engram_mcp` server is not installed here. Standalone Engram sets true.
+requires_mcp_entrypoint = false
 minimum_read_tools = [
   "memory_read_file",
   "memory_list_folder",
