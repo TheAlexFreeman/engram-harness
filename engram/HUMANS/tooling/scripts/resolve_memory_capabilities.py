@@ -844,9 +844,20 @@ def resolve_capabilities(repo_root: Path, *, include_runtime: bool = True) -> di
     discovery_mode = "manifest_only"
     selected_strategy = capability_discovery.get("semantic_result")
     discovery_reason = "Runtime inspection was skipped."
-    if include_runtime:
-        runtime_tool_names = runtime_tools(repo_root)
-        runtime_readonly_hints = runtime_tool_readonly_hints(repo_root, runtime_tool_names)
+    runtime_readonly_hints: dict[str, bool | None] = {}
+    runtime_inspection_ran = False
+    mcp_entry_eligible = include_runtime and (not requires_mcp_entrypoint or entrypoint_exists)
+    if mcp_entry_eligible:
+        try:
+            runtime_tool_names = runtime_tools(repo_root)
+            runtime_readonly_hints = runtime_tool_readonly_hints(repo_root, runtime_tool_names)
+            runtime_inspection_ran = True
+        except ImportError as err:
+            warnings.append(
+                "MCP server implementation is not importable in this layout "
+                f"({err!r}); using manifest-only discovery."
+            )
+    if include_runtime and runtime_inspection_ran:
         available_read_tools = sorted(read_support & runtime_tool_names)
         available_raw_tools = sorted(raw_fallback & runtime_tool_names)
         available_semantic_tools = sorted(semantic_extensions & runtime_tool_names)

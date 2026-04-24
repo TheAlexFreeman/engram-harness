@@ -19,9 +19,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Engram MCP server (for standalone serving to other clients)
-server = ["mcp>=1.0"]
-
 # Harness HTTP API server (FastAPI + SSE)
 api = [
     "fastapi>=0.111",
@@ -40,7 +37,6 @@ otel = [
 
 # Full development: all optional deps + test/lint tooling
 dev = [
-    "mcp>=1.0",
     "sentence-transformers>=2.6",
     "numpy>=1.24",
     "pre-commit>=3.7",
@@ -56,16 +52,8 @@ dev = [
 harness = "harness.cli:main"
 harness-report = "harness.report:main"
 
-# Engram standalone tools (preserved from upstream)
-engram = "engram_mcp.agent_memory_mcp.cli.main:main"
-engram-mcp = "engram_mcp.agent_memory_mcp.server_main:main"
-engram-proxy = "engram_mcp.agent_memory_mcp.proxy.cli:main"
-engram-sidecar = "engram_mcp.agent_memory_mcp.sidecar.cli:main"
-engram-distribute-skills = "engram_mcp.agent_memory_mcp.skill_distributor:main"
-
 [tool.setuptools]
 packages = [
-    # Harness
     "harness",
     "harness._engram_fs",
     "harness.modes",
@@ -74,22 +62,10 @@ packages = [
     "harness.tools",
     "harness.tools.fs",
     "harness.tools.search",
-    # Engram (standalone MCP surface — scheduled for removal in a later pass)
-    "engram_mcp",
-    "engram_mcp.agent_memory_mcp",
-    "engram_mcp.agent_memory_mcp.cli",
-    "engram_mcp.agent_memory_mcp.core",
-    "engram_mcp.agent_memory_mcp.proxy",
-    "engram_mcp.agent_memory_mcp.sidecar",
-    "engram_mcp.agent_memory_mcp.sidecar.parsers",
-    "engram_mcp.agent_memory_mcp.tools",
-    "engram_mcp.agent_memory_mcp.tools.read_tools",
-    "engram_mcp.agent_memory_mcp.tools.semantic",
 ]
 
 [tool.setuptools.package-dir]
 harness = "harness"
-engram_mcp = "engram/core/tools"
 
 [tool.setuptools.package-data]
 harness = ["pricing.json", "py.typed"]
@@ -102,14 +78,8 @@ target-version = "py310"
 select = ["E", "F", "W", "I"]
 ignore = ["E501"]
 
-[tool.ruff.lint.per-file-ignores]
-# This script intentionally splits its imports around a sys.path insertion
-# (the third-party + core.tools.* imports below the path setup), so isort
-# can't reorder them safely.
-"engram/HUMANS/tooling/scripts/validate_memory_repo.py" = ["I001"]
-
 [tool.pytest.ini_options]
-testpaths = ["harness/tests", "engram/core/tools/tests"]
+testpaths = ["harness/tests"]
 asyncio_mode = "auto"
 markers = [
     "eval: marks tests as eval scenario tests (deselect with '-m \"not eval\"')",

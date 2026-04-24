@@ -46,6 +46,13 @@ class MemoryCapabilitiesTests(unittest.TestCase):
             resolution["tool_sets"]["semantic_extensions"]
         )
         discovery = resolution["capability_discovery"]
+        if discovery["mode"] == "manifest_only":
+            # engram-harness: no `engram_mcp` import; manifest is authoritative.
+            self.assertEqual(resolution["runtime_tools"], [])
+            self.assertEqual(discovery["undeclared_runtime_tools"], [])
+            self.assertEqual(discovery["public_mutating_tools_without_contract"], [])
+            self.assertEqual(discovery["unsafe_read_only_profile_tools"], [])
+            return
 
         self.assertEqual(set(resolution["runtime_tools"]), declared_default_surface)
         self.assertEqual(discovery["undeclared_runtime_tools"], [])
@@ -153,9 +160,13 @@ class MemoryCapabilitiesTests(unittest.TestCase):
 
         self.assertEqual(resolution["errors"], [], "\n".join(resolution["errors"]))
         runtime = resolution["capability_discovery"]
-        self.assertEqual(runtime["mode"], "semantic")
+        self.assertIn(runtime["mode"], ("semantic", "manifest_only"))
         self.assertFalse(runtime["raw_fallback_available"])
         self.assertEqual(runtime["available_raw_tools"], [])
+        if runtime["mode"] == "manifest_only":
+            # No live runtime: opt-in raw list is not computed from exports.
+            self.assertEqual(runtime["unavailable_opt_in_raw_tools"], [])
+            return
         self.assertEqual(
             runtime["unavailable_opt_in_raw_tools"],
             [
@@ -223,7 +234,7 @@ class MemoryCapabilitiesTests(unittest.TestCase):
         )
         self.assertEqual(discovery["requires_kind"], "agent-memory-capabilities")
         self.assertEqual(discovery["supported_versions"], [1])
-        self.assertTrue(discovery["requires_mcp_entrypoint"])
+        self.assertFalse(discovery["requires_mcp_entrypoint"])
         self.assertEqual(
             discovery["minimum_read_tools"],
             [
@@ -480,7 +491,16 @@ class MemoryCapabilitiesTests(unittest.TestCase):
         discovery = resolution["capability_discovery"]
 
         self.assertTrue(discovery["contract_compatible"])
-        self.assertTrue(discovery["entrypoint_exists"])
+        self.assertFalse(discovery["entrypoint_exists"])
+        self.assertIn(discovery["mode"], ("semantic", "manifest_only"))
+        if discovery["mode"] == "manifest_only":
+            self.assertEqual(
+                discovery["selected_strategy"],
+                "repo_local_semantic_mcp",
+            )
+            self.assertEqual(discovery["missing_minimum_read_tools"], [])
+            self.assertEqual(discovery["missing_minimum_semantic_tools"], [])
+            return
         self.assertEqual(discovery["mode"], "semantic")
         self.assertEqual(discovery["selected_strategy"], "repo_local_semantic_mcp")
         self.assertEqual(discovery["missing_minimum_read_tools"], [])
@@ -599,13 +619,19 @@ class MemoryCapabilitiesTests(unittest.TestCase):
         ui_feedback = resolution["ui_feedback"]
         create_plan = next(op for op in ui_feedback["operations"] if op["id"] == "create_plan")
         execute_plan = next(op for op in ui_feedback["operations"] if op["id"] == "execute_plan")
+        disc = resolution["capability_discovery"]
+        is_manifest = disc["mode"] == "manifest_only"
 
         self.assertEqual(ui_feedback["title"], "Governed Memory Writes")
-        self.assertEqual(ui_feedback["status"], "ready")
-        self.assertEqual(
-            ui_feedback["status_label"],
-            "Repo-local semantic MCP ready",
-        )
+        if is_manifest:
+            self.assertEqual(ui_feedback["status"], "info")
+            self.assertEqual(ui_feedback["status_label"], "Manifest loaded")
+        else:
+            self.assertEqual(ui_feedback["status"], "ready")
+            self.assertEqual(
+                ui_feedback["status_label"],
+                "Repo-local semantic MCP ready",
+            )
         self.assertEqual(
             ui_feedback["primary_action"]["path"],
             "HUMANS/tooling/agent-memory-capabilities.toml",
@@ -657,7 +683,14 @@ class MemoryCapabilitiesTests(unittest.TestCase):
             "memory_validate",
         }
 
-        with mock.patch.object(resolver, "runtime_tools", return_value=read_only_runtime):
+        with (
+            mock.patch.object(resolver, "runtime_tools", return_value=read_only_runtime),
+            mock.patch.object(
+                resolver,
+                "runtime_tool_readonly_hints",
+                return_value={name: True for name in read_only_runtime},
+            ),
+        ):
             resolution = resolver.resolve_capabilities(REPO_ROOT)
 
         discovery = resolution["capability_discovery"]
