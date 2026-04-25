@@ -261,6 +261,66 @@ def run_until_idle(
     )
 
 
+_REFLECTION_PROMPT = (
+    "You just finished the work above. Take a moment to reflect — your "
+    "reflection will be saved alongside this session and may help future "
+    "sessions avoid the same mistakes or build on what worked.\n\n"
+    "Write a short reflection (under 400 words) covering:\n"
+    "- What went well, and what didn't\n"
+    "- Any surprises or insights\n"
+    "- Knowledge gaps the session exposed\n"
+    "- Anything specific worth remembering next time you tackle similar work\n\n"
+    "Write in plain markdown — bullets, short paragraphs. Don't repeat "
+    "what you already said in your final answer; focus on the meta level. "
+    "Do not call any tools — just respond with prose."
+)
+
+
+def maybe_run_reflection(
+    mode: Mode,
+    messages: list[dict],
+    memory: MemoryBackend,
+    tracer: TraceSink,
+    *,
+    enabled: bool = True,
+    pricing: PricingTable | None = None,
+) -> Usage:
+    """Run the LLM reflection turn if enabled and supported.
+
+    Stashes the response on ``memory.session_reflection`` so the trace
+    bridge can use it instead of the mechanical template. Returns the
+    usage incurred (zero when skipped or on failure) so callers can roll
+    it into the session total.
+
+    Modes that don't implement ``reflect`` (most test doubles) cause a
+    silent skip — no exception. So do per-call failures: a flaky model
+    call should never fail an otherwise-completed session.
+    """
+    if not enabled:
+        return Usage.zero()
+    reflect_fn = getattr(mode, "reflect", None)
+    if reflect_fn is None:
+        return Usage.zero()
+    try:
+        text, raw_usage = reflect_fn(messages, _REFLECTION_PROMPT)
+    except Exception:  # noqa: BLE001
+        tracer.event("reflection_turn", status="error")
+        return Usage.zero()
+    if pricing is None:
+        pricing = load_pricing()
+    usage = compute_cost(raw_usage, pricing)
+    text = (text or "").strip()
+    if hasattr(memory, "session_reflection"):
+        memory.session_reflection = text  # type: ignore[attr-defined]
+    tracer.event(
+        "reflection_turn",
+        status="ok",
+        chars=len(text),
+        **usage.as_trace_dict(),
+    )
+    return usage
+
+
 def run(
     task: str,
     mode: Mode,
@@ -277,7 +337,10 @@ def run(
     error_recall_threshold: int = 0,
     skip_end_session_commit: bool = False,
     stop_event: threading.Event | None = None,
+    reflect: bool = True,
 ) -> RunResult:
+    if pricing is None:
+        pricing = load_pricing()
     prior = memory.start_session(task)
     messages = mode.initial_messages(task=task, prior=prior, tools=tools)
     tracer.event("session_start", task=task)
@@ -297,6 +360,24 @@ def run(
         error_recall_threshold=error_recall_threshold,
         stop_event=stop_event,
     )
+
+    # Reflection turn (cost folded into result.usage so the session total
+    # stays honest). Skipped when disabled, when the run was cut short by
+    # the user, or when the model exhausted its output budget — none of
+    # those leave a coherent state to reflect on.
+    skip_reflection = (
+        result.stopped_by_user
+        or getattr(result, "output_limit_reached", False)
+    )
+    reflection_usage = maybe_run_reflection(
+        mode,
+        messages,
+        memory,
+        tracer,
+        enabled=reflect and not skip_reflection,
+        pricing=pricing,
+    )
+    result.usage = result.usage + reflection_usage
 
     tracer.event("session_usage", **result.usage.as_trace_dict())
     # When the caller suppresses the end_session commit, the trace bridge

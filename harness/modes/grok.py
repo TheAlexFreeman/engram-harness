@@ -419,6 +419,30 @@ class GrokMode:
                 positions.append(pos)
         return positions
 
+    def reflect(self, messages: list[dict], prompt: str) -> tuple[str, Usage]:
+        """No-tool single-turn reflection via the Responses API.
+
+        Reuses :func:`_instructions_and_input` to fold the conversation
+        into Responses' instruction/input shape, then asks the model
+        with ``tools=[]`` and ``tool_choice="none"`` so it must respond
+        in prose. Returns ``(text, usage)``.
+        """
+        reflection_messages = list(messages) + [{"role": "user", "content": prompt}]
+        instructions, input_items = _instructions_and_input(
+            reflection_messages, self._system, self.tools
+        )
+        kw: dict[str, Any] = {
+            "model": self.model,
+            "instructions": instructions,
+            "input": input_items,
+            "tools": [],
+            "tool_choice": "none",
+            "max_output_tokens": 2048,
+            "temperature": 0.1,
+        }
+        response = self.client.responses.create(**kw)
+        return self.final_text(response), self.extract_usage(response)
+
     def extract_usage(self, response: Response) -> Usage:
         """xAI Responses usage plus server-side search call counts.
 

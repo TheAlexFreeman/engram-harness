@@ -34,3 +34,18 @@ class Mode(Protocol):
     def extract_usage(self, response: Any) -> Usage:
         """Token/search accounting for the turn. Cost fields left zero; the loop
         applies pricing. Return ``Usage.zero()`` if usage is unavailable."""
+
+    def reflect(self, messages: list[dict], prompt: str) -> tuple[str, Usage]:
+        """Run a single no-tool reflection turn after the main loop ends.
+
+        Implementations append ``prompt`` as a user turn to a copy of
+        ``messages``, ask the model for a plain-text response *without*
+        the tool surface, and return ``(reflection_text, usage)``. The
+        loop stashes the text on the memory backend so the trace bridge
+        can use it instead of the mechanical template; the usage is
+        rolled into the session total so cost accounting stays honest.
+
+        Optional: not all modes need to support it. The loop calls
+        ``getattr(mode, "reflect", None)`` and skips the step when
+        absent, so test doubles can omit this method entirely.
+        """

@@ -553,9 +553,21 @@ def _render_reflection(
     stats: _SessionStats,
     calls: list[_ToolCall],
 ) -> str:
+    """Build reflection.md, preferring the LLM-authored text when available.
+
+    When the loop ran an end-of-session reflection turn it stashes the
+    response on ``memory.session_reflection``; we surface it here under
+    a "## Reflection" heading so it reads naturally alongside the
+    mechanical stats. When the stash is empty (reflection disabled, the
+    mode doesn't support it, or the call failed), the body is the
+    legacy template — same content as before this PR.
+    """
     fm = dict(_AGENT_FM)
     fm["origin_session"] = f"memory/activity/{memory._session_path_fragment()}/{memory.session_id}"
     fm["created"] = stats.session_date or datetime.now().date().isoformat()
+
+    llm_reflection = (getattr(memory, "session_reflection", "") or "").strip()
+    fm["reflection_source"] = "model" if llm_reflection else "template"
 
     influence = "low"
     if memory.recall_events:
@@ -568,29 +580,37 @@ def _render_reflection(
     elif stats.error_count > stats.tool_call_count * 0.25:
         outcome = "high error rate"
 
-    gaps: list[str] = []
-    for name, count in stats.error_tools.items():
-        if count >= 2:
-            gaps.append(f"{name} failed {count} times — possible knowledge gap or stale interface")
-    if not memory.recall_events and stats.tool_call_count > 5:
-        gaps.append("session ran without recalling memory — task may be missing context")
-
     body_lines = [
         "# Session Reflection",
         "",
         f"- **Memory retrieved:** {len(memory.recall_events)} recall result(s)",
         f"- **Memory influence:** {influence}",
         f"- **Outcome quality:** {outcome}",
+        "",
     ]
-    body_lines.append("")
-    body_lines.append("## Gaps noticed")
-    body_lines.append("")
-    if gaps:
-        for g in gaps:
-            body_lines.append(f"- {g}")
+
+    if llm_reflection:
+        body_lines.append("## Reflection")
+        body_lines.append("")
+        body_lines.append(llm_reflection)
+        body_lines.append("")
     else:
-        body_lines.append("- (none)")
-    body_lines.append("")
+        gaps: list[str] = []
+        for name, count in stats.error_tools.items():
+            if count >= 2:
+                gaps.append(
+                    f"{name} failed {count} times — possible knowledge gap or stale interface"
+                )
+        if not memory.recall_events and stats.tool_call_count > 5:
+            gaps.append("session ran without recalling memory — task may be missing context")
+        body_lines.append("## Gaps noticed")
+        body_lines.append("")
+        if gaps:
+            for g in gaps:
+                body_lines.append(f"- {g}")
+        else:
+            body_lines.append("- (none)")
+        body_lines.append("")
 
     trace_events = memory.trace_events
     if trace_events:

@@ -321,6 +321,38 @@ def test_build_previous_session_provider_returns_callable(tmp_path, monkeypatch)
     assert rec.session_id == "ses_prev"
 
 
+# ---------------------------------------------------------------------------
+# reflect flag — default + CLI override
+# ---------------------------------------------------------------------------
+
+
+def test_session_config_reflect_defaults_to_true(tmp_path):
+    config = SessionConfig(workspace=tmp_path)
+    assert config.reflect is True
+
+
+def test_config_from_args_reflect_default_when_flag_absent():
+    """Flag not passed (argparse leaves default=None) → SessionConfig keeps True."""
+    ns = _minimal_namespace()
+    ns.reflect = None
+    config = config_from_args(ns)
+    assert config.reflect is True
+
+
+def test_config_from_args_no_reflect_disables():
+    ns = _minimal_namespace()
+    ns.reflect = False
+    config = config_from_args(ns)
+    assert config.reflect is False
+
+
+def test_config_from_args_reflect_true_explicit():
+    ns = _minimal_namespace()
+    ns.reflect = True
+    config = config_from_args(ns)
+    assert config.reflect is True
+
+
 def test_build_previous_session_provider_swallows_db_errors(tmp_path, monkeypatch):
     """A SessionStore that fails to open returns None (silent fall-through)."""
     bad_db = tmp_path / "bad.db"

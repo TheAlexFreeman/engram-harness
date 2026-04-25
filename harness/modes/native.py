@@ -133,3 +133,19 @@ class NativeMode:
             cache_read_tokens=int(getattr(u, "cache_read_input_tokens", 0) or 0),
             cache_write_tokens=int(getattr(u, "cache_creation_input_tokens", 0) or 0),
         )
+
+    def reflect(self, messages: list[dict], prompt: str) -> tuple[str, Usage]:
+        """Append *prompt* to *messages* as a user turn and ask the model
+        for a no-tool, plain-text reflection. Returns (text, usage)."""
+        reflection_messages = list(messages) + [{"role": "user", "content": prompt}]
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=2048,
+            system=self._system,
+            messages=reflection_messages,
+            # Deliberately no `tools=` — this is a reflection turn, not a
+            # work turn. The model returns prose; we don't dispatch any
+            # follow-up tool calls.
+        )
+        text = self.final_text(response)
+        return text, self.extract_usage(response)
