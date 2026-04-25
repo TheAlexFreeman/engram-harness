@@ -241,6 +241,9 @@ class EngramMemory:
         # Embedding backend; defer import — semantic search is optional.
         self._embed_enabled = embed if embed is not None else _embedding_available()
         self._embed_index = None  # built lazily on first recall
+        # BM25 backend always available (pure Python). Index is built lazily
+        # on first recall so loading EngramMemory stays cheap.
+        self._bm25_index = None
 
     # ------------------------------------------------------------------
     # Session lifecycle (the protocol)
@@ -303,8 +306,10 @@ class EngramMemory:
         if not q:
             return []
         scopes = _recall_scopes(namespace)
-        hits = self._semantic_recall(q, k=k, scopes=scopes) if self._embed_enabled else []
+        hits = self._hybrid_recall(q, k=k, scopes=scopes)
         if not hits:
+            # Last-resort: density-scored keyword scan over .md files. Used
+            # when the BM25 index is empty (fresh repo) or fails entirely.
             hits = self._keyword_recall(q, k=k, scopes=scopes)
 
         results: list[Memory] = []
@@ -974,6 +979,79 @@ class EngramMemory:
 
             self._embed_index = EmbeddingIndex(self.repo.root, self.content_root)
         return self._embed_index
+
+    def _get_bm25_index(self):
+        if self._bm25_index is None:
+            from harness._engram_fs.bm25_index import BM25Index
+
+            self._bm25_index = BM25Index(self.repo.root, self.content_root)
+        return self._bm25_index
+
+    def _bm25_recall(
+        self, query: str, *, k: int, scopes: tuple[str, ...] = _SEARCH_SCOPES
+    ) -> list[dict[str, Any]]:
+        """File-level BM25 recall with the same hit shape as ``_semantic_recall``."""
+        try:
+            index = self._get_bm25_index()
+            index.build_index(scopes=list(scopes))
+            if index.doc_count() == 0:
+                return []
+            results = index.search(query, limit=k * 3)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("BM25 recall failed: %s", exc)
+            return []
+
+        out: list[dict[str, Any]] = []
+        for r in results:
+            fp = r["file_path"]
+            if not any(_rel_path_in_scope(fp, s) for s in scopes):
+                continue
+            abs_path = self.content_root / fp
+            try:
+                text = abs_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            tokens = [t.lower() for t in re.findall(r"\w+", query) if len(t) >= 2]
+            snippet = _first_match_snippet(text, tokens)
+            out.append(
+                {
+                    "file_path": fp,
+                    "heading": None,
+                    "content": snippet,
+                    "score": float(r["score"]),
+                    "trust": _read_trust(abs_path),
+                }
+            )
+            if len(out) >= k * 3:
+                break
+        return out
+
+    def _hybrid_recall(
+        self, query: str, *, k: int, scopes: tuple[str, ...] = _SEARCH_SCOPES
+    ) -> list[dict[str, Any]]:
+        """Run semantic and BM25 in parallel, fuse with reciprocal rank fusion.
+
+        When semantic recall is unavailable (no ``sentence-transformers``,
+        empty index, or import failure) the result is BM25-only. When BM25
+        has no matches the result is semantic-only. RRF only kicks in when
+        both lists have entries — same-rank results bubble to the top.
+        """
+        from harness._engram_fs.bm25_index import reciprocal_rank_fusion
+
+        sem_hits = (
+            self._semantic_recall(query, k=k * 3, scopes=scopes) if self._embed_enabled else []
+        )
+        bm25_hits = self._bm25_recall(query, k=k, scopes=scopes)
+
+        if not sem_hits and not bm25_hits:
+            return []
+        if not sem_hits:
+            return bm25_hits[:k]
+        if not bm25_hits:
+            return sem_hits[:k]
+
+        fused = reciprocal_rank_fusion([sem_hits, bm25_hits])
+        return fused[:k]
 
     def _keyword_recall(
         self, query: str, *, k: int, scopes: tuple[str, ...] = _SEARCH_SCOPES
