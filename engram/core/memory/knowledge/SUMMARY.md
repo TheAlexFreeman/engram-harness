@@ -8,7 +8,7 @@ origin_session: manual
 
 # Knowledge Base
 
-419 files across 9 domains. Accumulated primarily from agent-planned and -executed research programs (2026-03-18 through 2026-03-21). Trust: 35 high, 314 medium, 70 low. Most content has been promoted from `_unverified/` and reviewed. Agent-generated self-knowledge syntheses now live in `self/` with medium trust instead of the external-research quarantine.
+421 files across 9 domains. Accumulated primarily from agent-planned and -executed research programs (2026-03-18 through 2026-03-21). Trust: 35 high, 314 medium, 70 low. Most content has been promoted from `_unverified/` and reviewed. Agent-generated self-knowledge syntheses now live in `self/` with medium trust instead of the external-research quarantine.
 
 ## Domains
 
@@ -20,7 +20,7 @@ origin_session: manual
 | [software-engineering/](software-engineering/)   | 69    | 69 med          | [SUMMARY.md](software-engineering/SUMMARY.md)                                                                                                  | Django, React, DevOps, testing, systems architecture                                                        |
 | [cognitive-science/](cognitive-science/)         | 59    | 59 med          | [cognitive-science-synthesis.md](cognitive-science/cognitive-science-synthesis.md)                                                             | Memory systems, attention, metacognition, concepts, relevance realization                                   |
 | [ai/](ai/)                                       | 49    | 48 med, 1 low   | [frontier-synthesis.md](ai/frontier-synthesis.md)                                                                                              | History of AI, frontier research, retrieval/memory, tools/MCP                                               |
-| [social-science/](social-science/)               | 42    | 12 med, 30 low  | by subfolder                                                                                                                                   | Cultural evolution, behavioral economics, social psychology, collective action, network diffusion           |
+| [social-science/](social-science/)               | 44    | 14 med, 30 low  | by subfolder                                                                                                                                   | Cultural evolution, behavioral economics, social psychology, collective action, network diffusion           |
 | [rationalist-community/](rationalist-community/) | 28    | 28 med          | [synthesis/rationalist-community-story-aims-and-tensions.md](rationalist-community/synthesis/rationalist-community-story-aims-and-tensions.md) | Origins, AI discourse, key figures, institutions, community norms                                           |
 | [self/](self/)                                   | 13    | 5 med, 8 low    | [engram-system-overview.md](self/engram-system-overview.md)                                                                                    | System architecture, governance model, security analysis, operational resilience                            |
 | [literature/](literature/)                       | 3     | 3 med           | —                                                                                                                                              | Literary analysis (Galatea 2.2, The Man Who Was Thursday, Tree of Smoke)                                    |
@@ -92,7 +92,7 @@ See [cognitive-science/SUMMARY.md](cognitive-science/SUMMARY.md).
 
 ### Social Science (42 files)
 
-- **cultural-evolution/** (12) — Dawkins, Blackmore, Tomasello, norms/punishment, LLM-as-cultural-mechanism
+- **cultural-evolution/** (14) — Dawkins, Blackmore, Tomasello, norms/punishment, LLM-as-cultural-mechanism; + internet-meme-as-meta-format.md, meme-format-typology.md (2026-04-25)
 - **social-psychology/** (6) — Transmission biases, conformity, persuasion
 - **behavioral-economics/** (5) — Kahneman/Tversky, prospect theory, nudge architecture
 - **collective-action/** (5) — Ostrom, Acemoglu/Robinson, mechanism design for commons

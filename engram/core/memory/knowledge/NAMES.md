@@ -133,6 +133,13 @@ _109 names · 477 source files · extracted 2026-03-24_
 
 ## D
 
+### Dancygier
+**Primary subject:**
+- [social-science/cultural-evolution/internet-meme-as-meta-format.md](social-science/cultural-evolution/internet-meme-as-meta-format.md) — Internet Memes as Multimodal Constructions (with Vandelanotte)
+- [social-science/cultural-evolution/meme-format-typology.md](social-science/cultural-evolution/meme-format-typology.md) — Internet Meme Format Typology
+
+---
+
 ### Dawkins
 **Primary subject:**
 - [social-science/cultural-evolution/dawkins-meme-concept.md](social-science/cultural-evolution/dawkins-meme-concept.md) — Dawkins and the Meme Concept
@@ -424,6 +431,12 @@ _109 names · 477 source files · extracted 2026-03-24_
 
 ---
 
+### Milner
+**Primary subject:**
+- [social-science/cultural-evolution/internet-meme-as-meta-format.md](social-science/cultural-evolution/internet-meme-as-meta-format.md) — The World Made Meme (political meme analysis)
+
+---
+
 ### Martin Fowler
 **Section coverage:**
 - [software-engineering/testing/unit-testing-principles.md](software-engineering/testing/unit-testing-principles.md) — Martin Fowler
@@ -637,6 +650,13 @@ _109 names · 477 source files · extracted 2026-03-24_
 ### Sen
 **Section coverage:**
 - [philosophy/ethics/algorithmic-fairness.md](philosophy/ethics/algorithmic-fairness.md) — Sen, Nussbaum
+
+---
+
+### Shifman
+**Primary subject:**
+- [social-science/cultural-evolution/internet-meme-as-meta-format.md](social-science/cultural-evolution/internet-meme-as-meta-format.md) — Memes in Digital Culture (2014) — primary scholarly anchor
+- [social-science/cultural-evolution/meme-format-typology.md](social-science/cultural-evolution/meme-format-typology.md) — Internet Meme Format Typology
 
 ---
 

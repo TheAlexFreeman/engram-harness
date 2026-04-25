@@ -1,0 +1,22 @@
+plan_id: memetics-research
+purpose: 'Build out the memetics knowledge cluster with files covering: (1) the internet
+  meme as cultural meta-format, (2) academic typologies of meme formats, and (3) cross-links
+  to cognitive linguistics, participatory culture, and the existing cultural-evolution
+  files.'
+phases:
+- title: Audit existing knowledge and resolve project questions
+  postconditions:
+  - grep:internet-meme::projects/memetics-knowledge/notes/gap-analysis.md
+  - All 5 project questions resolved or answered in notes
+- title: Write internet-meme-as-meta-format.md and promote to memory
+  postconditions:
+  - grep:meta-format::projects/memetics-knowledge/notes/internet-meme-as-meta-format.md
+  - grep:Shifman::projects/memetics-knowledge/notes/internet-meme-as-meta-format.md
+- title: Write meme-format-typology.md (image macro, snowclone, exploitable, reaction
+    image, copypasta) and promote
+  postconditions:
+  - grep:image macro::projects/memetics-knowledge/notes/meme-format-typology.md
+  - grep:snowclone::projects/memetics-knowledge/notes/meme-format-typology.md
+- title: Update SUMMARY.md / cross-links for cultural-evolution cluster and NAMES.md
+  postconditions:
+  - grep:internet-meme::memory/knowledge/social-science/cultural-evolution/SUMMARY.md
