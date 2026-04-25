@@ -281,9 +281,7 @@ def test_build_previous_session_provider_returns_none_without_env(tmp_path, monk
     assert _build_previous_session_provider(config) is None
 
 
-def test_build_previous_session_provider_returns_none_when_db_missing(
-    tmp_path, monkeypatch
-):
+def test_build_previous_session_provider_returns_none_when_db_missing(tmp_path, monkeypatch):
     """A pointer to a nonexistent DB silently disables the bootstrap block."""
     monkeypatch.setenv("HARNESS_DB_PATH", str(tmp_path / "no-such.db"))
     from harness.config import _build_previous_session_provider
