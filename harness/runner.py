@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
-from harness.loop import run, run_until_idle
+from harness.loop import maybe_run_reflection, run, run_until_idle
 from harness.usage import Usage
 
 if TYPE_CHECKING:
@@ -69,6 +69,7 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
     total_turns = 0
     last_final: str | None = None
     session_started = False
+    stopped_by_user = False
     messages: list[dict] = []
     subtask_idx = 0
 
@@ -149,6 +150,7 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
 
         except KeyboardInterrupt:
             print("\n[interrupt]", file=sys.stderr)
+            stopped_by_user = True
 
         if session_started:
             summary = (
@@ -156,6 +158,21 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
                 if last_final
                 else "(interactive exit before any assistant reply)"
             )
+            # Reflection turn at session-end (cost folded into total_usage
+            # so the printed usage line stays honest). The flag matches
+            # batch behaviour; the same skip_reflection conditions apply.
+            reflection_usage = maybe_run_reflection(
+                components.mode,
+                messages,
+                components.memory,
+                tracer,
+                enabled=(
+                    getattr(components.config, "reflect", True)
+                    and last_final is not None
+                    and not stopped_by_user
+                ),
+            )
+            total_usage = total_usage + reflection_usage
             components.memory.end_session(
                 summary=summary,
                 skip_commit=bridge,
@@ -184,6 +201,7 @@ def run_batch(args: "argparse.Namespace", components: "SessionComponents"):
             repeat_guard_threshold=config.repeat_guard_threshold,
             error_recall_threshold=config.error_recall_threshold,
             skip_end_session_commit=bridge,
+            reflect=getattr(config, "reflect", True),
         )
 
 

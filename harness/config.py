@@ -53,6 +53,12 @@ class SessionConfig:
     trace_live: bool = True
     trace_to_engram: bool | None = None  # None = auto (on when memory=engram)
 
+    # LLM reflection turn at session-end (one extra non-tool model call).
+    # Default on — the cost (≈ a few hundred output tokens per session)
+    # buys a real model-authored reflection for the trace bridge instead
+    # of the mechanical template.
+    reflect: bool = True
+
     # Tool access control
     tool_profile: ToolProfile = ToolProfile.FULL
 
@@ -121,6 +127,7 @@ def _build_previous_session_provider(config: SessionConfig) -> Any | None:
 
 def config_from_args(args: argparse.Namespace) -> SessionConfig:
     """Convert parsed CLI arguments to a SessionConfig."""
+    reflect_arg = getattr(args, "reflect", None)
     return SessionConfig(
         workspace=Path(args.workspace).resolve(),
         model=args.model,
@@ -135,6 +142,9 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         stream=args.stream,
         trace_live=args.trace_live,
         trace_to_engram=args.trace_to_engram,
+        # --reflect / --no-reflect override the default; absent flags fall
+        # through to the SessionConfig default (True).
+        reflect=reflect_arg if reflect_arg is not None else True,
         tool_profile=ToolProfile(getattr(args, "tool_profile", "full")),
         grok_include=list(args.grok_include or []),
         grok_encrypted_reasoning=args.grok_encrypted_reasoning,

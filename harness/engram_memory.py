@@ -223,6 +223,10 @@ class EngramMemory:
         # Set when end_session() is called; consumed by trace_bridge so the
         # agent's wrap-up text survives the deferred-artifact path.
         self.session_summary: str = ""
+        # Set when the loop runs an LLM reflection turn at session end;
+        # consumed by trace_bridge so reflection.md becomes a real
+        # model-authored reflection instead of the mechanical template.
+        self.session_reflection: str = ""
         self.workspace_dir: Path | None = (
             Path(workspace_dir).resolve() if workspace_dir is not None else None
         )

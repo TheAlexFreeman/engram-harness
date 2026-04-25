@@ -306,6 +306,24 @@ def _parse_args() -> argparse.Namespace:
         help="Disable post-run trace bridge even when --memory=engram.",
     )
     parser.add_argument(
+        "--reflect",
+        dest="reflect",
+        action="store_true",
+        default=None,
+        help=(
+            "Run an LLM reflection turn at the end of the session. The "
+            "model produces a real reflection that lands in reflection.md "
+            "instead of a mechanical template. Default: enabled. Disable "
+            "with --no-reflect to skip the extra LLM call."
+        ),
+    )
+    parser.add_argument(
+        "--no-reflect",
+        dest="reflect",
+        action="store_false",
+        help="Skip the end-of-session LLM reflection turn.",
+    )
+    parser.add_argument(
         "--tool-profile",
         choices=["full", "no_shell", "read_only"],
         default="full",
