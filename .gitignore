@@ -48,6 +48,7 @@ traces/
 .todos.md
 progress.md
 test-2/
+.harness/
 
 # --- Engram runtime artifacts ---
 chatgpt-instructions.txt

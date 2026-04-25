@@ -51,6 +51,8 @@ def build_tools(
         WriteFile,
     )
     from harness.tools.git import Git, GitCommit, GitDiff, GitLog, GitStatus
+    from harness.tools.python_eval import PythonEval
+    from harness.tools.run_script import RunScript
     from harness.tools.search import WebSearch
     from harness.tools.todos import AnalyzeTodos, ReadTodos, UpdateTodo, WriteTodos
     from harness.tools.x_search import XSearch
@@ -81,7 +83,7 @@ def build_tools(
         WriteTodos(scope),
         UpdateTodo(scope),
     ]
-    shell: list[Tool] = [Bash(scope)]
+    shell: list[Tool] = [Bash(scope), PythonEval(scope), RunScript(scope)]
 
     if profile == ToolProfile.READ_ONLY:
         base = read_only
