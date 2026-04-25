@@ -28,6 +28,19 @@ _DEFAULT_ERROR_RECALL_MESSAGE_TEMPLATE = (
     "relevant context from prior sessions that might help resolve this."
 )
 
+_OUTPUT_LIMIT_TOOL_BLOCK_MESSAGE = (
+    "[harness] The model response stopped because it reached the output token "
+    "limit while emitting tool calls. The harness did not execute those calls "
+    "because their arguments may be incomplete. Retry with smaller chunks, use "
+    "append_file for long documents, or use run_script to generate large files."
+)
+
+_OUTPUT_LIMIT_CONTINUE_MESSAGE = (
+    "[harness] Continue from exactly where you left off. Be concise, and if you "
+    "need to write a long file, use smaller chunks or a file-producing tool."
+)
+_MAX_OUTPUT_LIMIT_CONTINUATIONS = 1
+
 
 def _hash_result(content: str) -> str:
     """Short stable hash of a tool result; used as the result-side of the loop signature."""
@@ -74,6 +87,7 @@ class RunResult:
     max_turns_reached: bool = False
     stopped_by_user: bool = False
     stopped_by_loop_detection: bool = False
+    output_limit_reached: bool = False
 
 
 def run_until_idle(
@@ -115,6 +129,7 @@ def run_until_idle(
     tool_seq = 0
     # Per-tool consecutive-error counts; reset to 0 on a successful call.
     tool_error_streaks: dict[str, int] = {}
+    output_limit_continuations = 0
 
     for turn in range(max_turns):
         if stop_event is not None and stop_event.is_set():
@@ -133,6 +148,9 @@ def run_until_idle(
         tracer.event("usage", turn=turn, **turn_usage.as_trace_dict())
 
         messages.append(mode.as_assistant_message(response))
+        stop_reason_fn = getattr(mode, "response_stop_reason", None)
+        stop_reason = stop_reason_fn(response) if stop_reason_fn is not None else None
+        output_limited = stop_reason == "max_tokens"
 
         # Trace server-side native search calls (Grok web_search / x_search).
         # These run on xAI's infrastructure and never go through harness tool
@@ -169,7 +187,7 @@ def run_until_idle(
                     fn_seq_map[idx] = tool_seq
                 tool_seq += 1
 
-            if not tool_calls:
+            if not tool_calls and not output_limited:
                 final = mode.final_text(response)
                 return RunResult(
                     final_text=final,
@@ -190,7 +208,7 @@ def run_until_idle(
                 tracer.event("native_search_call", turn=turn, seq=tool_seq, **ev_kw)
                 tool_seq += 1
 
-            if not tool_calls:
+            if not tool_calls and not output_limited:
                 final = mode.final_text(response)
                 return RunResult(
                     final_text=final,
@@ -203,6 +221,55 @@ def run_until_idle(
                 fn_seqs.append(tool_seq)
                 tracer.event("tool_call", name=call.name, args=call.args, turn=turn, seq=tool_seq)
                 tool_seq += 1
+
+        if output_limited:
+            tracer.event(
+                "output_limited",
+                turn=turn,
+                stop_reason=stop_reason,
+                tool_calls=len(tool_calls),
+            )
+            if tool_calls:
+                tracer.event(
+                    "tool_execution_blocked",
+                    turn=turn,
+                    reason="output_limited",
+                    tool_calls=len(tool_calls),
+                )
+                memory.record(
+                    "output_limited: blocked tool execution because tool-call "
+                    "arguments may be incomplete",
+                    kind="error",
+                )
+                return RunResult(
+                    final_text=_OUTPUT_LIMIT_TOOL_BLOCK_MESSAGE,
+                    usage=total,
+                    turns_used=turn + 1,
+                    max_turns_reached=False,
+                    output_limit_reached=True,
+                )
+            if output_limit_continuations < _MAX_OUTPUT_LIMIT_CONTINUATIONS:
+                output_limit_continuations += 1
+                tracer.event(
+                    "output_limit_continuation",
+                    turn=turn,
+                    attempt=output_limit_continuations,
+                    max_attempts=_MAX_OUTPUT_LIMIT_CONTINUATIONS,
+                )
+                messages.append({"role": "user", "content": _OUTPUT_LIMIT_CONTINUE_MESSAGE})
+                continue
+            final = mode.final_text(response)
+            if final:
+                final = final.rstrip() + "\n\n[output stopped because max output tokens were reached]"
+            else:
+                final = "(output stopped because max output tokens were reached)"
+            return RunResult(
+                final_text=final,
+                usage=total,
+                turns_used=turn + 1,
+                max_turns_reached=False,
+                output_limit_reached=True,
+            )
 
         if max_parallel_tools <= 1 or len(tool_calls) == 1:
             results = [execute(c, tools) for c in tool_calls]

@@ -14,11 +14,13 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 _DEFAULT_TIMEOUT = 120
 _MAX_TIMEOUT = 600
 _MAX_OUTPUT_CHARS = 80_000
+_MAX_MODEL_OUTPUT_CHARS = 12_000
 
 _RESULT_START = "__HARNESS_RESULT_START__"
 _RESULT_END = "__HARNESS_RESULT_END__"
@@ -66,6 +68,8 @@ class RunResult:
     files_created: list[str] | None = None
     script_path: str | None = None
     timed_out: bool = False
+    stdout_artifact: str | None = None
+    stderr_artifact: str | None = None
 
 
 def _resolve_python_executable() -> str:
@@ -165,6 +169,33 @@ def _truncate(text: str) -> str:
     return text[:_MAX_OUTPUT_CHARS] + f"\n\n[output truncated to {_MAX_OUTPUT_CHARS} characters]\n"
 
 
+def _preview_with_artifact(
+    text: str,
+    *,
+    output_dir: Path | None,
+    label: str,
+) -> tuple[str, str | None]:
+    """Keep model-facing output compact while preserving full stream text."""
+    if output_dir is None or len(text) <= _MAX_MODEL_OUTPUT_CHARS:
+        return _truncate(text), None
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    artifact = output_dir / f"{stamp}-{label}.txt"
+    artifact.write_text(text, encoding="utf-8")
+    artifact_path = artifact.as_posix()
+
+    head_chars = _MAX_MODEL_OUTPUT_CHARS // 2
+    tail_chars = _MAX_MODEL_OUTPUT_CHARS - head_chars
+    omitted = len(text) - head_chars - tail_chars
+    truncation_notice = (
+        f"\n\n[output truncated: {omitted} characters omitted; "
+        f"full {label}: {artifact_path}]\n\n"
+    )
+    preview = text[:head_chars] + truncation_notice + text[-tail_chars:]
+    return preview, artifact_path
+
+
 def run_python(request: RunRequest) -> RunResult:
     """Execute a Python code snippet or script in a fresh subprocess."""
     timeout = max(1, min(int(request.timeout), int(request.max_timeout)))
@@ -257,12 +288,25 @@ def run_python(request: RunRequest) -> RunResult:
         new_files = sorted(post_snapshot - pre_snapshot)
         files_created = new_files
 
+    stdout_preview, stdout_artifact = _preview_with_artifact(
+        stdout_text,
+        output_dir=request.output_dir,
+        label="stdout",
+    )
+    stderr_preview, stderr_artifact = _preview_with_artifact(
+        stderr_text,
+        output_dir=request.output_dir,
+        label="stderr",
+    )
+
     return RunResult(
         exit_code=exit_code,
-        stdout=_truncate(stdout_text),
-        stderr=_truncate(stderr_text),
+        stdout=stdout_preview,
+        stderr=stderr_preview,
         result_value=result_value,
         files_created=files_created,
         script_path=str(script_to_run) if not delete_tempfile else None,
         timed_out=timed_out,
+        stdout_artifact=stdout_artifact,
+        stderr_artifact=stderr_artifact,
     )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .grep_tool import GrepWorkspace
 from .operations import (
+    AppendFile,
     CopyPath,
     DeletePath,
     EditFile,
@@ -24,6 +25,7 @@ __all__ = [
     "Mkdir",
     "EditFile",
     "WriteFile",
+    "AppendFile",
     "DeletePath",
     "MovePath",
     "CopyPath",

@@ -39,6 +39,7 @@ def build_tools(
     from harness.tools import Tool
     from harness.tools.bash import Bash
     from harness.tools.fs import (
+        AppendFile,
         CopyPath,
         DeletePath,
         EditFile,
@@ -76,6 +77,7 @@ def build_tools(
         Mkdir(scope),
         EditFile(scope),
         WriteFile(scope),
+        AppendFile(scope),
         DeletePath(scope),
         MovePath(scope),
         CopyPath(scope),
@@ -217,6 +219,13 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-turns", type=int, default=100)
     parser.add_argument(
+        "--max-output-tokens",
+        type=int,
+        default=65536,
+        metavar="N",
+        help="Maximum model output tokens per response (default: 65536).",
+    )
+    parser.add_argument(
         "--repeat-guard-threshold",
         type=int,
         default=3,
@@ -296,13 +305,20 @@ def _parse_args() -> argparse.Namespace:
         help="Disable live streaming; model output only appears after each turn.",
     )
     parser.add_argument(
+        "--stream-max-block-chars",
+        type=int,
+        default=4000,
+        metavar="N",
+        help="Maximum characters to print per streamed block before preview truncation.",
+    )
+    parser.add_argument(
         "--memory",
-        choices=["file", "engram"],
-        default="file",
+        choices=["engram", "file"],
+        default="engram",
         help=(
-            "Memory backend. 'file' (default): naive append-only progress.md. "
-            "'engram': use a git-backed Engram memory repo for cross-session "
-            "context, recall, and trace-fed activity records."
+            "Memory backend. 'engram' (default): use a git-backed Engram memory repo "
+            "for cross-session context, recall, and trace-fed activity records."
+            "'file' (fallback): naive append-only progress.md. "
         ),
     )
     parser.add_argument(

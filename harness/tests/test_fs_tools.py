@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from harness.tools import ToolCall, execute
+from harness.tools import Tool, ToolCall, execute
 from harness.tools.fs import (
+    AppendFile,
     CopyPath,
     DeletePath,
     EditFile,
@@ -120,6 +121,8 @@ def test_mkdir_edit_write(tmp_path: Path) -> None:
     assert ReadFile(s).run({"path": "nested/dir/f.txt"}) == "alpha"
     WriteFile(s).run({"path": "nested/dir/f.txt", "content": "beta", "must_exist": True})
     assert ReadFile(s).run({"path": "nested/dir/f.txt"}) == "beta"
+    AppendFile(s).run({"path": "nested/dir/f.txt", "content": "\ngamma"})
+    assert ReadFile(s).run({"path": "nested/dir/f.txt"}) == "beta\ngamma"
     with pytest.raises(FileExistsError):
         WriteFile(s).run({"path": "nested/dir/f.txt", "content": "x", "create_only": True})
 
@@ -163,6 +166,15 @@ def test_grep_invalid_regex(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_execute_unknown_tool(tmp_path: Path) -> None:
     s = _scope(tmp_path)
-    reg = {"read_file": ReadFile(s)}
+    reg: dict[str, Tool] = {"read_file": ReadFile(s)}
     res = execute(ToolCall(name="missing", args={}), reg)
     assert res.is_error
+
+
+def test_execute_validates_required_args(tmp_path: Path) -> None:
+    s = _scope(tmp_path)
+    reg: dict[str, Tool] = {"write_file": WriteFile(s)}
+    res = execute(ToolCall(name="write_file", args={"path": "x.txt"}), reg)
+    assert res.is_error
+    assert "missing required tool argument" in res.content
+    assert "content" in res.content

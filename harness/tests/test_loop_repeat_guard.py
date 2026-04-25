@@ -175,6 +175,66 @@ class VaryingTool:
         return f"call #{next(self._counter)}"
 
 
+class CountingTool:
+    name = "counting"
+    description = "counting tool for output-limit tests"
+    input_schema = {"type": "object", "properties": {}, "required": []}
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def run(self, args: dict) -> str:  # noqa: ARG002
+        self.calls += 1
+        return "called"
+
+
+def test_output_limited_tool_calls_are_not_executed():
+    tool = CountingTool()
+    mode = ScriptedMode(
+        [
+            _ScriptedResponse(
+                tool_calls=[ToolCall(name=tool.name, args={}, id="c0")],
+                stop_reason="max_tokens",
+            )
+        ]
+    )
+    tracer = RecordingTracer()
+    result = run(
+        task="go",
+        mode=mode,
+        tools={tool.name: tool},
+        memory=RecordingMemory(),
+        tracer=tracer,
+        max_parallel_tools=1,
+    )
+
+    assert tool.calls == 0
+    assert result.output_limit_reached is True
+    assert "did not execute" in result.final_text
+    assert any(k == "tool_execution_blocked" for k, _ in tracer.events)
+
+
+def test_output_limited_text_gets_one_continuation():
+    mode = ScriptedMode(
+        [
+            _ScriptedResponse(tool_calls=[], text="part one", stop_reason="max_tokens"),
+            _ScriptedResponse(tool_calls=[], text="part two"),
+        ]
+    )
+    tracer = RecordingTracer()
+    result = run(
+        task="go",
+        mode=mode,
+        tools={},
+        memory=RecordingMemory(),
+        tracer=tracer,
+        max_parallel_tools=1,
+    )
+
+    assert result.final_text == "part two"
+    assert any(k == "output_limit_continuation" for k, _ in tracer.events)
+
+
 def test_signature_distinguishes_results():
     calls = [ToolCall(name="x", args={"k": 1}, id="c0")]
     same_result = [ToolResult(call=calls[0], content="A")]

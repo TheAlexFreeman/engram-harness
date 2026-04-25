@@ -149,10 +149,12 @@ class GrokMode:
         tools: dict[str, Tool],
         *,
         response_include: list[str] | None = None,
+        max_output_tokens: int = 4096,
     ):
         self.client = client
         self.model = model
         self.tools = tools
+        self.max_output_tokens = max_output_tokens
         self._system = system_prompt_native()
         self._tool_schemas = _build_tool_schemas(tools)
         self._response_include: list[str] = list(response_include) if response_include else []
@@ -185,7 +187,7 @@ class GrokMode:
             "input": input_items,
             "tools": cast(Any, self._tool_schemas),
             "tool_choice": "auto",
-            "max_output_tokens": 4096,
+            "max_output_tokens": self.max_output_tokens,
             "temperature": 0.1,
         }
         if self._response_include:
@@ -340,6 +342,19 @@ class GrokMode:
                 )
             )
         return calls
+
+    def response_stop_reason(self, response: Response) -> str | None:
+        """Normalize Responses API incomplete/max-token signals."""
+        status = getattr(response, "status", None)
+        incomplete = getattr(response, "incomplete_details", None)
+        reason = getattr(incomplete, "reason", None) if incomplete is not None else None
+        if reason is None and isinstance(incomplete, dict):
+            reason = incomplete.get("reason")
+        if reason in {"max_output_tokens", "max_tokens"}:
+            return "max_tokens"
+        if status == "incomplete" and reason:
+            return str(reason)
+        return "incomplete" if status == "incomplete" else None
 
     def as_tool_results_message(self, results: list[ToolResult]) -> list[dict]:
         """One chat-style tool message per result; replayed as `function_call_output`."""

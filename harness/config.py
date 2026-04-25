@@ -45,6 +45,7 @@ class SessionConfig:
     # Run limits
     max_turns: int = 100
     max_parallel_tools: int = 4
+    max_output_tokens: int = 4096
     repeat_guard_threshold: int = 3
     # Hard-stop streak length; None disables loop termination (only the soft
     # nudge fires). When set, the run aborts with stopped_by_loop_detection
@@ -55,6 +56,7 @@ class SessionConfig:
 
     # Streaming / tracing
     stream: bool = True
+    stream_max_block_chars: int = 4000
     trace_live: bool = True
     trace_to_engram: bool | None = None  # None = auto (on when memory=engram)
 
@@ -142,11 +144,13 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         memory_repo=Path(args.memory_repo) if getattr(args, "memory_repo", None) else None,
         max_turns=args.max_turns,
         max_parallel_tools=args.max_parallel_tools,
+        max_output_tokens=getattr(args, "max_output_tokens", 4096),
         repeat_guard_threshold=args.repeat_guard_threshold,
         repeat_guard_terminate_at=getattr(args, "repeat_guard_terminate_at", None),
         repeat_guard_exempt_tools=list(getattr(args, "repeat_guard_exempt", None) or []),
         error_recall_threshold=getattr(args, "error_recall_threshold", 0),
         stream=args.stream,
+        stream_max_block_chars=getattr(args, "stream_max_block_chars", 4000),
         trace_live=args.trace_live,
         trace_to_engram=args.trace_to_engram,
         # --reflect / --no-reflect override the default; absent flags fall
@@ -328,6 +332,7 @@ def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any
             model=config.model,
             tools=tools,
             response_include=grok_include or None,
+            max_output_tokens=config.max_output_tokens,
         )
 
     import anthropic
@@ -341,6 +346,7 @@ def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any
             client=client,
             model=config.model,
             tools=tools,
+            max_output_tokens=config.max_output_tokens,
             system=system_prompt_native(
                 with_memory_tools=engram_memory is not None,
                 with_work_tools=engram_memory is not None,
@@ -385,7 +391,11 @@ def _build_stream_sink(config: SessionConfig, override: Any | None = None) -> An
     """Build stream sink from config, or use provided override."""
     if override is not None:
         return override
-    return StderrStreamPrinter() if config.stream else NullStreamSink()
+    return (
+        StderrStreamPrinter(max_block_chars=config.stream_max_block_chars)
+        if config.stream
+        else NullStreamSink()
+    )
 
 
 def build_session(

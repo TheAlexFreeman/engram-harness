@@ -7,6 +7,7 @@ from ._python_runner import (
     _DEFAULT_TIMEOUT,
     _MAX_TIMEOUT,
     RunRequest,
+    RunResult,
     run_python,
 )
 from .fs import WorkspaceScope
@@ -72,12 +73,13 @@ class PythonEval:
             timeout=timeout,
             prelude=prelude,
             capture_last_expr=True,
+            output_dir=output_dir,
         )
         result = run_python(request)
         return _format_eval_result(result)
 
 
-def _format_eval_result(result) -> str:
+def _format_eval_result(result: RunResult) -> str:
     parts = [f"exit code: {result.exit_code}", ""]
     if result.stdout:
         parts.append(result.stdout.rstrip("\n"))
@@ -91,6 +93,16 @@ def _format_eval_result(result) -> str:
             parts.append("")
         parts.append("--- result ---")
         parts.append(result.result_value)
+    artifact_lines = []
+    if result.stdout_artifact:
+        artifact_lines.append(f"full stdout: {result.stdout_artifact}")
+    if result.stderr_artifact:
+        artifact_lines.append(f"full stderr: {result.stderr_artifact}")
+    if artifact_lines:
+        if result.stdout or result.stderr or result.result_value is not None:
+            parts.append("")
+        parts.append("--- artifacts ---")
+        parts.extend(artifact_lines)
     text = "\n".join(parts).rstrip() + "\n"
     return text
 

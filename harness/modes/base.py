@@ -26,6 +26,14 @@ class Mode(Protocol):
 
     def extract_tool_calls(self, response: Any) -> list[ToolCall]: ...
 
+    def response_stop_reason(self, response: Any) -> str | None:
+        """Provider-neutral stop reason when available.
+
+        Implementations should normalize output-budget exhaustion to
+        ``"max_tokens"`` so the loop can avoid executing partial tool calls.
+        """
+        ...
+
     def as_tool_results_message(self, results: list[ToolResult]) -> Union[dict, list[dict]]: ...
 
     def final_text(self, response: Any) -> str:

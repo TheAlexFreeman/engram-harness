@@ -16,10 +16,12 @@ class NativeMode:
         tools: dict[str, Tool],
         *,
         system: str | None = None,
+        max_output_tokens: int = 4096,
     ):
         self.client = client
         self.model = model
         self.tools = tools
+        self.max_output_tokens = max_output_tokens
         self._system = system if system is not None else system_prompt_native()
         self._tool_schemas = [
             {
@@ -42,7 +44,7 @@ class NativeMode:
         if stream is None:
             return self.client.messages.create(
                 model=self.model,
-                max_tokens=4096,
+                max_tokens=self.max_output_tokens,
                 system=self._system,
                 tools=self._tool_schemas,
                 messages=messages,
@@ -57,7 +59,7 @@ class NativeMode:
         try:
             with self.client.messages.stream(
                 model=self.model,
-                max_tokens=4096,
+                max_tokens=self.max_output_tokens,
                 system=self._system,
                 tools=self._tool_schemas,
                 messages=messages,
@@ -71,7 +73,8 @@ class NativeMode:
                         kind = getattr(block, "type", "") or ""
                         name = getattr(block, "name", None)
                         call_id = getattr(block, "id", None)
-                        open_blocks[idx] = kind
+                        if isinstance(idx, int):
+                            open_blocks[idx] = kind
                         sink.on_block_start(kind, index=idx, name=name, call_id=call_id)
                     elif etype == "content_block_delta":
                         delta = getattr(event, "delta", None)
@@ -88,7 +91,7 @@ class NativeMode:
                             )
                     elif etype == "content_block_stop":
                         idx = getattr(event, "index", None)
-                        kind = open_blocks.pop(idx, "")
+                        kind = open_blocks.pop(idx, "") if isinstance(idx, int) else ""
                         sink.on_block_end(kind, index=idx)
                 return s.get_final_message()
         except BaseException as exc:
@@ -104,6 +107,10 @@ class NativeMode:
             if block.type == "tool_use":
                 calls.append(ToolCall(name=block.name, args=block.input, id=block.id))
         return calls
+
+    def response_stop_reason(self, response) -> str | None:
+        reason = getattr(response, "stop_reason", None)
+        return str(reason) if reason is not None else None
 
     def as_tool_results_message(self, results: list[ToolResult]) -> dict:
         return {

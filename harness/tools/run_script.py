@@ -93,34 +93,36 @@ class RunScript:
         prelude = build_prelude(workspace=workspace_root, output_dir=output_dir)
 
         script_artifact: Path | None = None
-        request_kwargs: dict = {
-            "cwd": workspace_root,
-            "timeout": timeout,
-            "output_dir": output_dir,
-            "args": cli_args,
-        }
+        script_to_run: Path
 
         if code is not None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             script_artifact = scripts_dir / f"{timestamp}.py"
             script_artifact.write_text(prelude + code, encoding="utf-8")
-            request_kwargs["script_path"] = script_artifact
+            script_to_run = script_artifact
         else:
-            resolved = self.scope.resolve(path)
-            if not resolved.is_file():
+            assert path is not None
+            script_to_run = self.scope.resolve(path)
+            if not script_to_run.is_file():
                 raise FileNotFoundError(f"path does not exist or is not a file: {path!r}")
-            request_kwargs["script_path"] = resolved
 
-        result = run_python(RunRequest(**request_kwargs))
+        request = RunRequest(
+            cwd=workspace_root,
+            timeout=timeout,
+            output_dir=output_dir,
+            args=cli_args,
+            script_path=script_to_run,
+        )
+        result = run_python(request)
 
         try:
             script_rel = (
                 script_artifact.relative_to(workspace_root).as_posix()
                 if script_artifact is not None
-                else self.scope.describe_path(Path(request_kwargs["script_path"]))
+                else self.scope.describe_path(script_to_run)
             )
         except ValueError:
-            script_rel = str(request_kwargs["script_path"])
+            script_rel = str(script_to_run)
 
         payload = {
             "exit_code": result.exit_code,
@@ -129,6 +131,10 @@ class RunScript:
             "files_created": result.files_created or [],
             "script_path": script_rel,
         }
+        if result.stdout_artifact:
+            payload["stdout_artifact"] = result.stdout_artifact
+        if result.stderr_artifact:
+            payload["stderr_artifact"] = result.stderr_artifact
         if result.timed_out:
             payload["timed_out"] = True
         return json.dumps(payload, indent=2, ensure_ascii=False)

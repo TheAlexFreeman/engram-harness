@@ -26,8 +26,10 @@ def _minimal_namespace(**kwargs) -> argparse.Namespace:
         memory_repo=None,
         max_turns=100,
         max_parallel_tools=4,
+        max_output_tokens=4096,
         repeat_guard_threshold=3,
         stream=True,
+        stream_max_block_chars=4000,
         trace_live=True,
         trace_to_engram=None,
         tool_profile="full",
@@ -51,8 +53,10 @@ def test_config_defaults(tmp_path):
     assert config.memory_repo is None
     assert config.max_turns == 100
     assert config.max_parallel_tools == 4
+    assert config.max_output_tokens == 4096
     assert config.repeat_guard_threshold == 3
     assert config.stream is True
+    assert config.stream_max_block_chars == 4000
     assert config.trace_live is True
     assert config.trace_to_engram is None
     assert config.grok_include == []
@@ -81,6 +85,8 @@ def test_config_from_args_custom(tmp_path):
         memory="engram",
         memory_repo=str(tmp_path),
         max_turns=50,
+        max_output_tokens=8192,
+        stream_max_block_chars=1234,
         grok_include=["web_search_call.sources"],
     )
     config = config_from_args(ns)
@@ -88,6 +94,8 @@ def test_config_from_args_custom(tmp_path):
     assert config.memory_backend == "engram"
     assert config.memory_repo == tmp_path
     assert config.max_turns == 50
+    assert config.max_output_tokens == 8192
+    assert config.stream_max_block_chars == 1234
     assert config.grok_include == ["web_search_call.sources"]
 
 
@@ -146,6 +154,23 @@ def test_build_session_stream_on(tmp_path):
         components = build_session(config, tools={})
 
     assert isinstance(components.stream_sink, StderrStreamPrinter)
+    assert components.stream_sink._max_block_chars == 4000  # noqa: SLF001
+
+
+def test_build_session_stream_cap_configured(tmp_path):
+    config = SessionConfig(
+        workspace=tmp_path,
+        memory_backend="file",
+        trace_live=False,
+        stream=True,
+        stream_max_block_chars=77,
+    )
+    with patch("harness.config._build_mode") as mock_mode:
+        mock_mode.return_value = MagicMock()
+        components = build_session(config, tools={})
+
+    assert isinstance(components.stream_sink, StderrStreamPrinter)
+    assert components.stream_sink._max_block_chars == 77  # noqa: SLF001
 
 
 def test_build_session_stream_sink_override(tmp_path):

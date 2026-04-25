@@ -66,6 +66,14 @@ def _wrap_untrusted(tool_name: str, content: str) -> str:
     return _UNTRUSTED_PREFIX.format(tool=tool_name) + body + _UNTRUSTED_SUFFIX + "\n"
 
 
+def _missing_required_args(tool: Tool, args: dict[str, Any]) -> list[str]:
+    schema = getattr(tool, "input_schema", {}) or {}
+    required = schema.get("required", [])
+    if not isinstance(required, list):
+        return []
+    return [name for name in required if isinstance(name, str) and name not in args]
+
+
 def execute(call: ToolCall, registry: dict[str, Tool]) -> ToolResult:
     """Single point of execution. Errors become results, never exceptions.
 
@@ -79,6 +87,18 @@ def execute(call: ToolCall, registry: dict[str, Tool]) -> ToolResult:
         return ToolResult(
             call=call,
             content=f"Unknown tool: {call.name}. Available: {sorted(registry)}",
+            is_error=True,
+        )
+    missing = _missing_required_args(tool, call.args)
+    if missing:
+        plural = "s" if len(missing) != 1 else ""
+        return ToolResult(
+            call=call,
+            content=(
+                f"missing required tool argument{plural}: {', '.join(missing)}. "
+                "If this followed a long generation, retry with smaller chunks "
+                "or use a file-producing tool."
+            ),
             is_error=True,
         )
     untrusted = _is_untrusted(tool)

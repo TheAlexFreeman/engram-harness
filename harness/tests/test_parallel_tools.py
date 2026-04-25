@@ -38,6 +38,7 @@ class SleepingTool:
 class _ScriptedResponse:
     tool_calls: list[ToolCall]
     text: str = ""
+    stop_reason: str | None = None
 
 
 class ScriptedMode:
@@ -60,6 +61,9 @@ class ScriptedMode:
 
     def extract_tool_calls(self, response: Any) -> list[ToolCall]:
         return response.tool_calls
+
+    def response_stop_reason(self, response: Any) -> str | None:
+        return response.stop_reason
 
     def as_tool_results_message(self, results: list[ToolResult]) -> dict:
         return {"role": "user", "content": [r.content for r in results]}

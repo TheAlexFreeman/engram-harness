@@ -55,6 +55,15 @@ def test_output_truncation(tmp_path: Path) -> None:
     assert len(result.stdout) <= 80_000 + 200
 
 
+def test_output_artifact_when_output_dir_set(tmp_path: Path) -> None:
+    output_dir = tmp_path / "out"
+    code = 'print("X" * 20_000)'
+    result = run_python(RunRequest(code=code, cwd=tmp_path, output_dir=output_dir))
+    assert result.stdout_artifact is not None
+    assert "[output truncated:" in result.stdout
+    assert Path(result.stdout_artifact).read_text(encoding="utf-8").count("X") == 20_000
+
+
 def test_prelude_injection(tmp_path: Path) -> None:
     workspace = tmp_path
     output_dir = tmp_path / "out"
@@ -223,6 +232,15 @@ def test_pythoneval_empty_code(scope: WorkspaceScope) -> None:
         PythonEval(scope).run({"code": "   "})
 
 
+def test_pythoneval_large_stdout_reports_artifact(scope: WorkspaceScope) -> None:
+    out = PythonEval(scope).run({"code": 'print("Y" * 20_000)'})
+    assert "--- artifacts ---" in out
+    assert "full stdout:" in out
+    artifact_line = next(line for line in out.splitlines() if line.startswith("full stdout:"))
+    artifact = Path(artifact_line.split(":", 1)[1].strip())
+    assert artifact.read_text(encoding="utf-8").count("Y") == 20_000
+
+
 def test_pythoneval_timeout_clamped(scope: WorkspaceScope) -> None:
     """Timeouts above the cap are silently clamped, not rejected."""
     out = PythonEval(scope).run({"code": "1 + 1", "timeout_sec": 1_000_000})
@@ -282,6 +300,14 @@ def test_runscript_files_created_reported(scope: WorkspaceScope) -> None:
     assert sorted(payload["files_created"]) == ["report.csv", "summary.json"]
 
 
+def test_runscript_large_stdout_reports_artifact(scope: WorkspaceScope) -> None:
+    out = RunScript(scope).run({"code": 'print("Z" * 20_000)'})
+    payload = json.loads(out)
+    assert "stdout_artifact" in payload
+    assert "[output truncated:" in payload["stdout"]
+    assert Path(payload["stdout_artifact"]).read_text(encoding="utf-8").count("Z") == 20_000
+
+
 def test_runscript_path_must_exist(scope: WorkspaceScope) -> None:
     with pytest.raises(FileNotFoundError):
         RunScript(scope).run({"path": "missing/script.py"})
@@ -309,6 +335,7 @@ def test_full_profile_has_python_tools(tmp_path: Path) -> None:
     tools = build_tools(WorkspaceScope(root=tmp_path), profile=ToolProfile.FULL)
     assert "python_eval" in tools
     assert "run_script" in tools
+    assert "append_file" in tools
 
 
 def test_no_shell_excludes_python_tools(tmp_path: Path) -> None:

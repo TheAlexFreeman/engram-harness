@@ -355,6 +355,41 @@ class WriteFile:
         return f"write_file ok: {args['path']}"
 
 
+class AppendFile:
+    name = "append_file"
+    description = (
+        "Append UTF-8 text to a file. Use for long generated documents that "
+        "should be written in chunks instead of one huge write_file call. "
+        "Set create to false to require the file to already exist."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Relative file path."},
+            "content": {"type": "string", "description": "Text to append."},
+            "create": {
+                "type": "boolean",
+                "description": "If false, error if the file does not exist. Default true.",
+            },
+        },
+        "required": ["path", "content"],
+    }
+
+    def __init__(self, scope: WorkspaceScope):
+        self.scope = scope
+
+    def run(self, args: dict) -> str:
+        path = self.scope.resolve(args["path"])
+        content = args["content"]
+        create = bool(args.get("create", True))
+        if not create and not path.exists():
+            raise FileNotFoundError(f"{args['path']!r} does not exist")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(content)
+        return f"append_file ok: {args['path']} ({len(content)} chars)"
+
+
 class DeletePath:
     name = "delete_path"
     description = (
