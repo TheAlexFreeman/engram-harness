@@ -369,7 +369,11 @@ def _run_interactive_session(session: ManagedSession) -> None:
 
         summary = (session.final_text or "")[:2000] or "(interactive exit)"
         bridge_enabled = _bridge_enabled(session)
-        memory.end_session(summary=summary, skip_commit=bridge_enabled)
+        memory.end_session(
+            summary=summary,
+            skip_commit=bridge_enabled,
+            defer_artifacts=bridge_enabled,
+        )
         tracer.event("session_usage", **session.usage.as_trace_dict())
         tracer.event(
             "session_end",

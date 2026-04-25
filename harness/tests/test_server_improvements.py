@@ -239,7 +239,7 @@ def test_run_interactive_session_persists_stopped_status(tmp_path):
     queue: asyncio.Queue = asyncio.Queue()
     memory = SimpleNamespace(
         start_session=lambda task: "prior context",
-        end_session=lambda summary, skip_commit: None,
+        end_session=lambda summary, skip_commit, defer_artifacts: None,
     )
     tracer = SimpleNamespace(event=MagicMock(), close=MagicMock())
     mode = SimpleNamespace(

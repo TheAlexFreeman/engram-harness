@@ -97,7 +97,13 @@ class RecordingMemory:
     def record(self, content: str, kind: str = "note") -> None:
         self.notes.append((kind, content))
 
-    def end_session(self, summary: str, *, skip_commit: bool = False) -> None:
+    def end_session(
+        self,
+        summary: str,
+        *,
+        skip_commit: bool = False,
+        defer_artifacts: bool = False,
+    ) -> None:
         self.end_calls += 1
         self.summary = summary
 

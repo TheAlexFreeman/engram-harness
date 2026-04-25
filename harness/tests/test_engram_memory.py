@@ -159,6 +159,45 @@ def test_engram_memory_bumps_session_id(engram_repo: Path) -> None:
     assert second.session_id == "act-002"
 
 
+def test_end_session_defer_artifacts_skips_file_but_stores_summary(
+    engram_repo: Path,
+) -> None:
+    """defer_artifacts=True hands ownership to the trace bridge.
+
+    The summary string is still captured on the memory object so the
+    bridge can render it; nothing lands on disk under the session dir.
+    """
+    mem = EngramMemory(engram_repo, embed=False)
+    mem.start_session("deferred wrap-up")
+    mem.end_session("agent wrap-up text", defer_artifacts=True)
+
+    summary_path = engram_repo / "core" / mem.session_dir_rel / "summary.md"
+    assert not summary_path.exists(), "deferred path should not write summary.md"
+    assert mem.session_summary == "agent wrap-up text"
+
+
+def test_end_session_defer_artifacts_does_not_commit(engram_repo: Path) -> None:
+    """defer_artifacts implies no commit even if skip_commit isn't set."""
+    before = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD"],
+        cwd=str(engram_repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    mem = EngramMemory(engram_repo, embed=False)
+    mem.start_session("no-commit")
+    mem.end_session("nope", defer_artifacts=True)
+    after = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD"],
+        cwd=str(engram_repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert before == after
+
+
 def test_engram_memory_rejects_missing_repo(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         EngramMemory(tmp_path / "no-such-dir", embed=False)

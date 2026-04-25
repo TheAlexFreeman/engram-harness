@@ -26,8 +26,21 @@ class MemoryBackend(Protocol):
     def record(self, content: str, kind: str = "note") -> None:
         """Capture an observation during the session."""
 
-    def end_session(self, summary: str, *, skip_commit: bool = False) -> None:
-        """Wrap up. Persist whatever needs persisting."""
+    def end_session(
+        self,
+        summary: str,
+        *,
+        skip_commit: bool = False,
+        defer_artifacts: bool = False,
+    ) -> None:
+        """Wrap up. Persist whatever needs persisting.
+
+        Backends that produce session artifacts (e.g. summary files) and
+        also have a downstream artifact-producer (e.g. the trace bridge)
+        should treat ``defer_artifacts=True`` as "don't write artifacts
+        here — the downstream stage owns them". Backends that have no
+        downstream stage may safely ignore the flag.
+        """
 
 
 class FileMemory:
@@ -53,7 +66,15 @@ class FileMemory:
         stamp = datetime.now().isoformat(timespec="seconds")
         self._append(f"- `{stamp}` [{kind}] {content}\n")
 
-    def end_session(self, summary: str, *, skip_commit: bool = False) -> None:
+    def end_session(
+        self,
+        summary: str,
+        *,
+        skip_commit: bool = False,
+        defer_artifacts: bool = False,
+    ) -> None:
+        # FileMemory has no downstream artifact-producer, so defer_artifacts
+        # is a no-op — we always persist the summary inline.
         self._append(f"\n**Summary:** {summary}\n")
 
     def _append(self, text: str) -> None:

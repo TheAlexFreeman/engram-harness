@@ -173,6 +173,9 @@ class EngramMemory:
         self.session_id = session_id or self._allocate_session_id()
         self.task: str | None = None
         self.start_time = datetime.now()
+        # Set when end_session() is called; consumed by trace_bridge so the
+        # agent's wrap-up text survives the deferred-artifact path.
+        self.session_summary: str = ""
         self.workspace_dir: Path | None = (
             Path(workspace_dir).resolve() if workspace_dir is not None else None
         )
@@ -389,7 +392,26 @@ class EngramMemory:
             )
         )
 
-    def end_session(self, summary: str, *, skip_commit: bool = False) -> None:
+    def end_session(
+        self,
+        summary: str,
+        *,
+        skip_commit: bool = False,
+        defer_artifacts: bool = False,
+    ) -> None:
+        """Persist the session-end state.
+
+        ``summary`` is always recorded on ``self.session_summary`` so the
+        trace bridge can include it in its rendered artifacts. When
+        ``defer_artifacts`` is True (the standard path when the trace
+        bridge will run next), summary.md is *not* written here — the
+        bridge owns it. ``skip_commit`` independently suppresses the
+        commit; defer implies skip but skip does not imply defer (some
+        legacy callers want the file written without committing).
+        """
+        self.session_summary = summary or ""
+        if defer_artifacts:
+            return
         rel_dir = self._session_dir_rel()
         summary_rel = f"{rel_dir}/summary.md"
         summary_abs = self.content_root / summary_rel
