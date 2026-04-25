@@ -53,9 +53,16 @@ def _is_untrusted(tool: Tool | None) -> bool:
     return bool(getattr(tool, "untrusted_output", False))
 
 
+def _escape_untrusted_body(content: str) -> str:
+    """Neutralize `</` sequences in untrusted text so a crafted closing tag
+    cannot terminate the wrapper early (Codex: escape sentinel before wrap).
+    """
+    return content.replace("</", "&lt;/")
+
+
 def _wrap_untrusted(tool_name: str, content: str) -> str:
     """Surround tool output with prompt-injection markers."""
-    body = content.rstrip("\n")
+    body = _escape_untrusted_body(content.rstrip("\n"))
     return _UNTRUSTED_PREFIX.format(tool=tool_name) + body + _UNTRUSTED_SUFFIX + "\n"
 
 
