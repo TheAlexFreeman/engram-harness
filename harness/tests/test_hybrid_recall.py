@@ -146,6 +146,45 @@ def test_bm25_index_scope_filter(tmp_path: Path) -> None:
     assert all("memory/knowledge" in h["file_path"] for h in knowledge_hits)
 
 
+def test_bm25_search_scope_does_not_match_sibling_prefix(tmp_path: Path) -> None:
+    """Scope ``memory/knowledge`` must not match ``memory/knowledge_base/...``."""
+    repo, content = _make_repo(tmp_path)
+    kb = content / "memory" / "knowledge_base"
+    kb.mkdir(parents=True)
+    (content / "memory" / "knowledge" / "in.md").write_text("matchterm inside real knowledge")
+    (kb / "out.md").write_text("matchterm in sibling knowledge_base tree")
+
+    idx = BM25Index(repo, content)
+    idx.build_index()
+    in_scope = idx.search("matchterm", scope="memory/knowledge")
+    out_paths = {h["file_path"] for h in in_scope}
+    assert "memory/knowledge/in.md" in out_paths
+    assert not any(p.startswith("memory/knowledge_base") for p in out_paths)
+
+
+def test_bm25_index_skips_symlink_escape(tmp_path: Path) -> None:
+    """A markdown path under a scope that symlinks outside content_root is not indexed."""
+    repo, content = _make_repo(tmp_path)
+    outside = tmp_path / "outside.md"
+    outside.write_text("leaked secret phrase xyzzy", encoding="utf-8")
+    knowledge = content / "memory" / "knowledge"
+    link = knowledge / "leak.md"
+    try:
+        link.symlink_to(outside, target_is_directory=False)
+    except OSError:
+        pytest.skip("symlink creation unavailable on this platform")
+    (knowledge / "ok.md").write_text("ok doc about bananas")
+
+    idx = BM25Index(repo, content)
+    stats = idx.build_index()
+    assert stats.get("errors", 0) >= 1
+    assert idx.search("leaked") == []
+    assert idx.search("xyzzy") == []
+    ok = idx.search("bananas")
+    assert ok
+    assert any("ok.md" in h["file_path"] for h in ok)
+
+
 def test_bm25_index_empty_corpus_returns_empty(tmp_path: Path) -> None:
     repo, content = _make_repo(tmp_path)
     idx = BM25Index(repo, content)

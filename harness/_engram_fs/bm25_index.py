@@ -58,6 +58,40 @@ def _strip_frontmatter(content: str) -> str:
     return content
 
 
+def _safe_md_path_for_index(md_file: Path, content_root: Path) -> Path | None:
+    """Resolve *md_file* and return it only if it stays under *content_root*.
+
+    Skips symlinks that escape the content tree (e.g. knowledge/leak.md -> /etc/passwd)
+    so their contents are not indexed or returned by recall.
+    """
+    try:
+        resolved = md_file.resolve()
+        root = content_root.resolve()
+    except OSError:
+        return None
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        return None
+    return resolved
+
+
+def _scope_match_clause() -> str:
+    """SQL fragment and params for path-boundary-safe scope: exact file or subfolder."""
+    return " AND (file_path = ? OR file_path LIKE ?)"
+
+
+def _scope_match_params(scope: str) -> list[str]:
+    s = scope.rstrip("/")
+    return [s, s + "/%"]
+
+
+def _path_in_scope(rel_path: str, scope: str) -> bool:
+    """True if *rel_path* is the scope root or a file under it (boundary-safe)."""
+    s = scope.rstrip("/")
+    return rel_path == s or rel_path.startswith(s + "/")
+
+
 class BM25Index:
     """Persistent BM25 index over markdown files in the Engram content root."""
 
@@ -173,10 +207,14 @@ class BM25Index:
                 if not scope_dir.is_dir():
                     continue
                 for md_file in scope_dir.rglob("*.md"):
-                    rel_path = str(md_file.relative_to(self.content_root)).replace("\\", "/")
+                    safe = _safe_md_path_for_index(md_file, self.content_root)
+                    if safe is None:
+                        stats["errors"] += 1
+                        continue
+                    rel_path = str(safe.relative_to(self.content_root)).replace("\\", "/")
                     seen.add(rel_path)
                     try:
-                        mtime = md_file.stat().st_mtime
+                        mtime = safe.stat().st_mtime
                     except OSError:
                         stats["errors"] += 1
                         continue
@@ -184,7 +222,7 @@ class BM25Index:
                         stats["skipped"] += 1
                         continue
                     try:
-                        content = md_file.read_text(encoding="utf-8")
+                        content = safe.read_text(encoding="utf-8")
                     except OSError:
                         stats["errors"] += 1
                         continue
@@ -193,13 +231,12 @@ class BM25Index:
                     self.index_file(rel_path, content, mtime)
                     stats["indexed"] += 1
 
-            scope_prefixes = tuple(s.rstrip("/") + "/" for s in scopes)
             indexed_files = {
                 row[0] for row in conn.execute("SELECT file_path FROM bm25_docs").fetchall()
             }
 
         for old_file in indexed_files - seen:
-            if any(old_file.startswith(prefix) for prefix in scope_prefixes):
+            if any(_path_in_scope(old_file, s) for s in scopes):
                 self.remove_file(old_file)
                 stats["removed"] += 1
 
@@ -236,8 +273,8 @@ class BM25Index:
             scope_clause = ""
             scope_params: list[str] = []
             if scope:
-                scope_clause = " AND file_path LIKE ?"
-                scope_params.append(f"{scope.rstrip('/')}%")
+                scope_clause = _scope_match_clause()
+                scope_params = _scope_match_params(scope)
 
             # df per term, plus per (term, file_path) tf so we score every
             # candidate document in one pass over the postings.
