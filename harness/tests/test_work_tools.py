@@ -391,10 +391,19 @@ def test_status_tolerates_missing_workspace(tmp_path: Path) -> None:
     assert not ws.current_path.is_file()
 
 
-def test_build_memory_filters_work_tools_under_read_only(tmp_path: Path) -> None:
+def test_build_memory_filters_work_tools_under_read_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """_build_memory must drop mutating work tools when tool_profile=read_only."""
+    import harness.config as config_module
     from harness.config import SessionConfig, ToolProfile, _build_memory
     from harness.tests.test_engram_memory import _make_engram_repo
+
+    # Anchor the workspace under tmp_path instead of the real project root
+    # so the test is self-contained and doesn't touch the repo's workspace.
+    project_root = tmp_path / "fake-project-root"
+    project_root.mkdir()
+    monkeypatch.setattr(config_module, "_harness_project_root", lambda: project_root)
 
     repo = _make_engram_repo(tmp_path)
     config = SessionConfig(
@@ -403,7 +412,7 @@ def test_build_memory_filters_work_tools_under_read_only(tmp_path: Path) -> None
         memory_repo=repo,
         tool_profile=ToolProfile.READ_ONLY,
     )
-    memory, _engram, extras = _build_memory(config)
+    _memory, _engram, extras = _build_memory(config)
     names = {t.name for t in extras}
     # Mutating work tools must not be registered.
     assert "work_thread" not in names
@@ -421,14 +430,20 @@ def test_build_memory_filters_work_tools_under_read_only(tmp_path: Path) -> None
     assert "work_project_list" in names
     assert "work_project_status" in names
     # And the workspace layout wasn't eagerly created.
-    workspace_root = memory.content_root / "workspace"
-    assert not workspace_root.is_dir()
+    assert not (project_root / "workspace").is_dir()
 
 
-def test_build_memory_registers_all_work_tools_under_full(tmp_path: Path) -> None:
+def test_build_memory_registers_all_work_tools_under_full(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Regression guard: non-read_only profiles keep every work tool."""
+    import harness.config as config_module
     from harness.config import SessionConfig, ToolProfile, _build_memory
     from harness.tests.test_engram_memory import _make_engram_repo
+
+    project_root = tmp_path / "fake-project-root"
+    project_root.mkdir()
+    monkeypatch.setattr(config_module, "_harness_project_root", lambda: project_root)
 
     repo = _make_engram_repo(tmp_path)
     config = SessionConfig(
@@ -437,7 +452,7 @@ def test_build_memory_registers_all_work_tools_under_full(tmp_path: Path) -> Non
         memory_repo=repo,
         tool_profile=ToolProfile.FULL,
     )
-    memory, _engram, extras = _build_memory(config)
+    _memory, _engram, extras = _build_memory(config)
     names = {t.name for t in extras}
     for expected in (
         "work_status",
@@ -458,13 +473,20 @@ def test_build_memory_registers_all_work_tools_under_full(tmp_path: Path) -> Non
         "work_project_plan",
     ):
         assert expected in names, f"missing in full profile: {expected}"
-    # Full profile creates the workspace up-front.
-    assert (memory.content_root / "workspace").is_dir()
+    # Full profile creates the workspace up-front, at the project root.
+    assert (project_root / "workspace").is_dir()
 
 
-def test_build_memory_disables_test_postconditions_under_no_shell(tmp_path: Path) -> None:
+def test_build_memory_disables_test_postconditions_under_no_shell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import harness.config as config_module
     from harness.config import SessionConfig, ToolProfile, _build_memory
     from harness.tests.test_engram_memory import _make_engram_repo
+
+    project_root = tmp_path / "fake-project-root"
+    project_root.mkdir()
+    monkeypatch.setattr(config_module, "_harness_project_root", lambda: project_root)
 
     repo = _make_engram_repo(tmp_path)
     config = SessionConfig(

@@ -29,14 +29,15 @@ _log = logging.getLogger(__name__)
 
 # ACCESS-tracked memory roots (paths *within* the content root). Reads of files
 # anywhere inside these get an entry in the corresponding ACCESS.jsonl.
+# The workspace is intentionally absent: it is a peer of memory at the project
+# root rather than a subdirectory of content_root, and the design doc
+# (docs/workspace-affordances-draft.md) marks it as ungoverned — no trust
+# frontmatter, no ACCESS.jsonl, no aggregation pipeline.
 _ACCESS_ROOTS = (
     "memory/users",
     "memory/knowledge",
     "memory/skills",
     "memory/activity",
-    # workspace/projects/ replaced the legacy memory/working/projects/ root
-    # when plan_tools.py retired; plan state and project notes live there now.
-    "workspace/projects",
 )
 
 # Helpfulness presets — keep the bands explicit so the trace bridge is auditable.
@@ -796,13 +797,11 @@ def _access_namespace(file_path: str, content_prefix: str = "core") -> str | Non
 def _normalize_for_access(file_path: str, content_prefix: str = "core") -> str:
     """Store ACCESS file paths with the content_prefix to match the repo's convention.
 
-    Both ``memory/...`` and ``workspace/...`` paths are canonicalized —
-    without the workspace branch, `_ACCESS_ROOTS` entries under
-    ``workspace/projects`` would record mixed path shapes depending on
-    how the tool argument was written, and the dedupe key (which uses
-    the raw ``file`` string) would double-count the same file. Consumers
-    that resolve ``root / file`` from the git root would also miss
-    unprefixed workspace records when ``content_prefix`` is ``"core"``.
+    Only ``memory/...`` paths get prefixed — workspace files are
+    deliberately not ACCESS-tracked, so there is no workspace branch
+    to canonicalize. Without the prefix step, `_ACCESS_ROOTS` consumers
+    that resolve ``root / file`` from the git root would miss
+    unprefixed records when ``content_prefix`` is ``"core"``.
     """
     norm = _norm(file_path).strip("/")
     prefix = content_prefix.strip("/")
@@ -810,7 +809,7 @@ def _normalize_for_access(file_path: str, content_prefix: str = "core") -> str:
         return norm
     if norm.startswith(prefix + "/"):
         return norm  # already prefixed
-    if norm.startswith("memory/") or norm.startswith("workspace/"):
+    if norm.startswith("memory/"):
         return f"{prefix}/{norm}"
     return norm
 

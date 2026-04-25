@@ -261,6 +261,16 @@ engram-harness/
 │   ├── pricing.py / pricing.json   # Token cost accounting
 │   └── report.py                   # Post-run trace summaries
 │
+├── workspace/                      # Agent's operational working surface
+│   │                               # (peer of engram/ and harness/, not a
+│   │                               # subdirectory of either; mediates
+│   │                               # between them via the work_* tools)
+│   ├── CURRENT.md                  # Active threads + freeform notes
+│   ├── notes/                      # Persistent working documents
+│   ├── projects/                   # Isolated work contexts (GOAL, plans, …)
+│   ├── scratch/                    # Session-scoped (gitignored)
+│   └── archive/                    # Auto-archived closed threads
+│
 ├── cli.py                          # Unified CLI entry point
 ├── pyproject.toml                  # Package: engram-harness
 ├── ROADMAP.md                      # This file
@@ -420,9 +430,19 @@ underscore names and documented in the prompt with `work: <op>(...)` or
       `_BOOTSTRAP_FILES` no longer includes `memory/working/USER.md`
       or `memory/working/CURRENT.md`; `_active_plan_briefing` and
       `cmd_status._print_active_plans` now scan
-      `workspace/projects/*/plans/*.run-state.json`. `memory/working`
-      stays in `_SEARCH_SCOPES` so `memory_recall` can still surface
+      `<workspace>/projects/*/plans/*.run-state.json` against the
+      project-root `workspace/` directory (passed in via
+      `EngramMemory(..., workspace_dir=...)`). `memory/working` stays
+      in `_SEARCH_SCOPES` so `memory_recall` can still surface
       MCP-curated content.
+- [x] Promote workspace to a top-level peer of `engram/` and
+      `harness/`. Originally lived under `engram/core/workspace/`;
+      moved out so the workspace explicitly mediates between the two
+      packages rather than belonging to either one. Trace bridge
+      ACCESS tracking dropped `workspace/projects` (the workspace is
+      ungoverned per the design doc), and EngramMemory accepts the
+      workspace location via `workspace_dir` so the integration seam
+      stays explicit.
 - [ ] MCP-side `memory/working/` retirement. ~45 references across
       `engram/core/tools/agent_memory_mcp/**` (identity_paths,
       plan_approvals, plan_utils, context tools, tool_schemas, etc.)

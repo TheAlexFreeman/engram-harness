@@ -126,6 +126,7 @@ class EngramMemory:
         content_prefix: str | None = None,
         session_id: str | None = None,
         embed: bool | None = None,
+        workspace_dir: Path | None = None,
     ):
         """Open an Engram repo for use as a MemoryBackend.
 
@@ -138,6 +139,11 @@ class EngramMemory:
                 Default: auto-detect (`""`, `"core"`, or `"engram/core"`).
             session_id: Override the auto-allocated `act-NNN` session id.
             embed: Force semantic search on/off (default: detect at runtime).
+            workspace_dir: Path to the agent's workspace directory (the one
+                that contains `CURRENT.md`, `projects/`, etc.). The workspace
+                is a peer of memory rather than a subdirectory of the Engram
+                repo, so it must be supplied explicitly. When ``None``, the
+                bootstrap skips the active-plan briefing.
         """
         from harness._engram_fs import GitRepo
 
@@ -167,6 +173,9 @@ class EngramMemory:
         self.session_id = session_id or self._allocate_session_id()
         self.task: str | None = None
         self.start_time = datetime.now()
+        self.workspace_dir: Path | None = (
+            Path(workspace_dir).resolve() if workspace_dir is not None else None
+        )
         self._records: list[_BufferedRecord] = []
         self._recall_events: list[_RecallEvent] = []
         self._trace_events: list[_TraceEvent] = []
@@ -591,14 +600,19 @@ class EngramMemory:
     def _active_plan_briefing(self, max_chars: int = 2000) -> str:
         """Return a brief briefing for the most recently active workspace plan, if any.
 
-        Scans ``workspace/projects/*/plans/*.run-state.json`` under the
-        Engram content root, picks the most-recently-modified run-state
-        file whose ``status == "active"``, loads the sibling plan YAML,
-        and renders a short pointer that tells the agent to call
-        ``work_project_plan`` with op='brief' for the full briefing.
-        Returns an empty string when no active plan is found; callers
+        Scans ``projects/*/plans/*.run-state.json`` under
+        ``self.workspace_dir`` (the agent's workspace, which is a peer of
+        memory rather than a child of the Engram content root). Picks the
+        most-recently-modified run-state file whose ``status == "active"``,
+        loads the sibling plan YAML, and renders a short pointer that
+        tells the agent to call ``work_project_plan`` with op='brief' for
+        the full briefing. Returns an empty string when no active plan is
+        found, or when no workspace was wired in at construction; callers
         treat that as "nothing extra to load into the session primer".
         """
+        if self.workspace_dir is None:
+            return ""
+
         import json
 
         import yaml
@@ -609,7 +623,7 @@ class EngramMemory:
         # entries are silently skipped, matching the tolerance the
         # previous find_active_plans implementation had.
         candidates: list[tuple[float, Path]] = []
-        for p in self.content_root.glob("workspace/projects/*/plans/*.run-state.json"):
+        for p in self.workspace_dir.glob("projects/*/plans/*.run-state.json"):
             try:
                 mtime = p.stat().st_mtime
             except OSError:
@@ -638,13 +652,13 @@ class EngramMemory:
                 phases[current_idx].get("title", "?") if 0 <= current_idx < len(phases) else "?"
             )
             purpose = plan.get("purpose", "(no purpose)")
-            rel = state_path.parent.relative_to(self.content_root).as_posix()
+            rel_in_ws = state_path.parent.relative_to(self.workspace_dir).as_posix()
             lines = [
                 "\n## Active plan detected",
                 "",
                 f"**{plan_id}** — {purpose}",
                 f"Current phase ({current_idx + 1}/{len(phases)}): {phase_title}",
-                f"Path: `{rel}/`",
+                f"Path: `workspace/{rel_in_ws}/`",
                 "",
                 "Call `work_project_plan` with "
                 f"op='brief', project={project!r}, plan_id={plan_id!r} "
