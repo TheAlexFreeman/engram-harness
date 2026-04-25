@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -390,3 +391,121 @@ def test_active_plan_briefing_prefers_most_recently_modified(
     out = mem._active_plan_briefing()
     assert "newer" in out
     assert "older" not in out
+
+
+# ---------------------------------------------------------------------------
+# _previous_session_block — bootstrap continuity hint backed by a provider
+# (SessionStore in production; SimpleNamespace shim in tests).
+# ---------------------------------------------------------------------------
+
+
+def _fake_prev_session(
+    *,
+    session_id: str = "ses_prev",
+    task: str = "previous task",
+    final_text: str | None = "Wrote utils.py and tests.",
+    status: str = "completed",
+    ended_at: str | None = None,
+    engram_session_dir: str | None = None,
+    active_plan_project: str | None = None,
+    active_plan_id: str | None = None,
+):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        session_id=session_id,
+        task=task,
+        final_text=final_text,
+        status=status,
+        ended_at=ended_at if ended_at is not None else datetime.now().isoformat(timespec="seconds"),
+        engram_session_dir=engram_session_dir,
+        active_plan_project=active_plan_project,
+        active_plan_id=active_plan_id,
+    )
+
+
+def test_previous_session_block_empty_when_no_provider(engram_repo: Path) -> None:
+    mem = EngramMemory(engram_repo, embed=False)
+    assert mem._previous_session_block() == ""
+
+
+def test_previous_session_block_empty_when_provider_returns_none(
+    engram_repo: Path,
+) -> None:
+    mem = EngramMemory(engram_repo, embed=False, previous_session_provider=lambda: None)
+    assert mem._previous_session_block() == ""
+
+
+def test_previous_session_block_renders_recent_session(engram_repo: Path) -> None:
+    rec = _fake_prev_session(
+        task="Implement offline-capable token refresh",
+        final_text="Wrote tests for the refresh endpoint.",
+        active_plan_project="auth-redesign",
+        active_plan_id="token-refresh",
+        engram_session_dir="memory/activity/2026/04/25/act-007",
+    )
+    mem = EngramMemory(engram_repo, embed=False, previous_session_provider=lambda: rec)
+    out = mem._previous_session_block()
+    assert "## Previous session" in out
+    assert "Implement offline-capable token refresh" in out
+    assert "Wrote tests for the refresh endpoint" in out
+    assert "ses_prev" in out
+    assert "auth-redesign" in out
+    assert "token-refresh" in out
+    assert "memory/activity/2026/04/25/act-007" in out
+
+
+def test_previous_session_block_dropped_when_too_old(engram_repo: Path) -> None:
+    """Sessions older than the recency window are stale — pretend they don't exist."""
+    rec = _fake_prev_session(
+        ended_at=(datetime.now() - timedelta(days=30)).isoformat(timespec="seconds"),
+    )
+    mem = EngramMemory(engram_repo, embed=False, previous_session_provider=lambda: rec)
+    assert mem._previous_session_block() == ""
+
+
+def test_previous_session_block_omits_self_when_id_matches(engram_repo: Path) -> None:
+    """Provider handing back our own row must not produce a self-referential block."""
+    mem = EngramMemory(engram_repo, embed=False)
+    rec = _fake_prev_session(session_id=mem.session_id)
+    mem._previous_session_provider = lambda: rec  # type: ignore[assignment]
+    assert mem._previous_session_block() == ""
+
+
+def test_previous_session_block_swallows_provider_errors(engram_repo: Path) -> None:
+    """A SessionStore I/O hiccup must not break bootstrap."""
+
+    def boom():
+        raise RuntimeError("db offline")
+
+    mem = EngramMemory(engram_repo, embed=False, previous_session_provider=boom)
+    assert mem._previous_session_block() == ""
+
+
+def test_previous_session_block_skips_resume_hint_when_no_plan_link(
+    engram_repo: Path,
+) -> None:
+    """Without an active_plan_* link, no plan resume hint is rendered."""
+    rec = _fake_prev_session(
+        active_plan_project=None,
+        active_plan_id=None,
+    )
+    mem = EngramMemory(engram_repo, embed=False, previous_session_provider=lambda: rec)
+    out = mem._previous_session_block()
+    assert "## Previous session" in out
+    assert "work_project_plan" not in out
+
+
+def test_start_session_appends_previous_session_block(engram_repo: Path) -> None:
+    """The new section lands as part of the bootstrap output, not just standalone."""
+    rec = _fake_prev_session(task="Refactor the auth middleware")
+    mem = EngramMemory(engram_repo, embed=False, previous_session_provider=lambda: rec)
+    bootstrap = mem.start_session("continue auth refactor")
+    assert "## Previous session" in bootstrap
+    assert "Refactor the auth middleware" in bootstrap
+
+
+def test_start_session_omits_block_when_provider_silent(engram_repo: Path) -> None:
+    mem = EngramMemory(engram_repo, embed=False, previous_session_provider=lambda: None)
+    bootstrap = mem.start_session("fresh start")
+    assert "## Previous session" not in bootstrap

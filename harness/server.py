@@ -38,6 +38,10 @@ from harness.server_models import (
     ToolCallInfo,
     UsageInfo,
 )
+from harness.session_index import (
+    engram_session_metadata,
+    record_completed_session,
+)
 from harness.session_store import SessionRecord, SessionStore
 from harness.sinks.session_tracker import SessionStateTrackerSink
 from harness.sinks.sse import SSEEvent, SSEStreamSink, SSETraceSink, enqueue_sse_event
@@ -413,71 +417,26 @@ def _store_complete_session(session: ManagedSession) -> None:
     store = _get_store()
     if store is None:
         return
-    try:
-        u = session.usage
-        tool_counts: dict[str, int] = {}
-        error_count = 0
-        for tc in session.tool_call_log:
-            tool_counts[tc["name"]] = tool_counts.get(tc["name"], 0) + 1
-            if tc.get("is_error"):
-                error_count += 1
-        engram_session_dir, active_plan_project, active_plan_id = _engram_session_metadata(session)
-        store.complete_session(
-            session.id,
-            status=session.status,
-            ended_at=_now(),
-            turns_used=session.turns_used,
-            input_tokens=u.input_tokens,
-            output_tokens=u.output_tokens,
-            cache_read_tokens=u.cache_read_tokens,
-            cache_write_tokens=u.cache_write_tokens,
-            reasoning_tokens=u.reasoning_tokens,
-            total_cost_usd=u.total_cost_usd,
-            tool_counts=tool_counts or None,
-            error_count=error_count,
-            final_text=session.final_text,
-            max_turns_reached=(session.result.max_turns_reached if session.result else False),
-            engram_session_dir=engram_session_dir,
-            active_plan_project=active_plan_project,
-            active_plan_id=active_plan_id,
-        )
-    except Exception:
-        pass
+    record_completed_session(
+        store,
+        session_id=session.id,
+        status=session.status,
+        ended_at=_now(),
+        turns_used=session.turns_used,
+        usage=session.usage,
+        tool_call_log=session.tool_call_log,
+        final_text=session.final_text,
+        max_turns_reached=(session.result.max_turns_reached if session.result else False),
+        engram_memory=getattr(session.components, "engram_memory", None),
+    )
 
 
+# Re-export so existing imports / tests keep working with the moved helper.
 def _engram_session_metadata(
     session: ManagedSession,
 ) -> tuple[str | None, str | None, str | None]:
-    """Pull the Engram session dir + most-recent active plan link from session state.
-
-    Returns ``(engram_session_dir, active_plan_project, active_plan_id)``.
-    All three are ``None`` when the session ran without Engram or when no
-    workspace plan was active at session-end. Best-effort: any failure
-    inside this helper degrades to all-None so SessionStore writes never
-    crash on session metadata.
-    """
-    engram = getattr(session.components, "engram_memory", None)
-    if engram is None:
-        return None, None, None
-    engram_dir = getattr(engram, "session_dir_rel", None)
-    workspace_dir = getattr(engram, "workspace_dir", None)
-    project: str | None = None
-    plan_id: str | None = None
-    if workspace_dir is not None:
-        try:
-            from harness.workspace import Workspace
-
-            workspace = Workspace(workspace_dir.parent, workspace_path=workspace_dir)
-            active = workspace.list_active_plans()
-            if active:
-                # Mirror the bootstrap heuristic: link the session to the
-                # most-recently-modified active plan.
-                ap = active[0]
-                project = ap.project
-                plan_id = ap.plan_id
-        except Exception:
-            pass
-    return engram_dir, project, plan_id
+    """Thin wrapper around the shared helper for back-compat with tests."""
+    return engram_session_metadata(getattr(session.components, "engram_memory", None))
 
 
 def _bridge_enabled(session: ManagedSession) -> bool:

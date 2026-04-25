@@ -169,6 +169,36 @@ def test_init_schema_adds_columns_to_existing_db(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# most_recent_for_workspace
+# ---------------------------------------------------------------------------
+
+
+def test_most_recent_for_workspace_returns_none_when_empty(store):
+    assert store.most_recent_for_workspace("/some/ws") is None
+
+
+def test_most_recent_for_workspace_returns_latest_for_workspace(store):
+    """Newer created_at wins; sessions for other workspaces are ignored."""
+    store.insert_session(
+        _make_record("s_old", workspace="/a", created_at="2026-04-21T00:00:00.000")
+    )
+    store.insert_session(
+        _make_record("s_new", workspace="/a", created_at="2026-04-21T03:00:00.000")
+    )
+    store.insert_session(
+        _make_record("s_other", workspace="/b", created_at="2026-04-21T05:00:00.000")
+    )
+    rec = store.most_recent_for_workspace("/a")
+    assert rec is not None
+    assert rec.session_id == "s_new"
+
+
+def test_most_recent_for_workspace_returns_none_for_unknown_workspace(store):
+    store.insert_session(_make_record("s1", workspace="/a"))
+    assert store.most_recent_for_workspace("/never-seen") is None
+
+
+# ---------------------------------------------------------------------------
 # list_sessions filters
 # ---------------------------------------------------------------------------
 
