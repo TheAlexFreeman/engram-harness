@@ -113,9 +113,7 @@ def test_terminate_at_works_when_nudge_threshold_zero():
     tool = SleepingTool("sleep")
     tools: dict[str, Tool] = {"sleep": tool}
     batch = [ToolCall(name="sleep", args={"duration": 0.0, "tag": "t"}, id="c0")]
-    mode = CaptureScriptedMode(
-        [_ScriptedResponse(tool_calls=list(batch)) for _ in range(5)]
-    )
+    mode = CaptureScriptedMode([_ScriptedResponse(tool_calls=list(batch)) for _ in range(5)])
     tracer = RecordingTracer()
     result = run(
         task="go",

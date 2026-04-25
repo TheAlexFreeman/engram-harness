@@ -264,9 +264,7 @@ def run_until_idle(
 
         repeat_guard_active = tool_calls and (
             repeat_guard_threshold > 0
-            or (
-                repeat_guard_terminate_at is not None and repeat_guard_terminate_at > 0
-            )
+            or (repeat_guard_terminate_at is not None and repeat_guard_terminate_at > 0)
         )
         if repeat_guard_active:
             batch_sig = _tool_batch_signature(tool_calls, results, exempt_tools=exempt_tools)
