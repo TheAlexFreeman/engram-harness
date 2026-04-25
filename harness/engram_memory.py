@@ -636,9 +636,8 @@ class EngramMemory:
 
         from harness.workspace import Workspace
 
-        # The Workspace constructor takes the *parent* of `workspace/`,
-        # so back up one level to satisfy its `<root>/workspace` layout.
-        workspace = Workspace(self.workspace_dir.parent)
+        # Scan the configured directory (may not be named ``workspace/``).
+        workspace = Workspace(self.workspace_dir.parent, workspace_path=self.workspace_dir)
         active = workspace.list_active_plans()
         if not active:
             return ""

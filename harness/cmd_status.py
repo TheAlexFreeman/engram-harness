@@ -52,7 +52,7 @@ def _print_active_plans(workspace_dir: Path) -> None:
 
     from harness.workspace import Workspace
 
-    workspace = Workspace(workspace_dir.parent)
+    workspace = Workspace(workspace_dir.parent, workspace_path=workspace_dir)
     active = workspace.list_active_plans()
 
     if not active:

@@ -708,14 +708,24 @@ def test_list_active_plans_returns_empty_when_no_plans(ws: Workspace) -> None:
     assert ws.list_active_plans() == []
 
 
+def test_list_active_plans_respects_custom_workspace_path(tmp_path: Path) -> None:
+    """A non-conventional directory name (not ``workspace/``) is scanned as-is."""
+    custom = tmp_path / "my-ws"
+    w = Workspace(tmp_path, workspace_path=custom, session_id="act-001")
+    w.ensure_layout()
+    assert w.dir == custom
+    w.project_create("p", goal="g")
+    w.plan_create("p", "only", "x", phases=[{"title": "P1"}])
+    found = w.list_active_plans()
+    assert [ap.plan_id for ap in found] == ["only"]
+
+
 def test_list_active_plans_returns_only_active_plans(ws: Workspace) -> None:
     ws.project_create("p", goal="g")
     ws.plan_create("p", "active-a", "active plan", phases=[{"title": "P1"}])
     ws.plan_create("p", "done-a", "done plan", phases=[{"title": "P1"}])
     # Mark the second plan completed.
-    state_path = (
-        ws.dir / "projects" / "p" / "plans" / "done-a.run-state.json"
-    )
+    state_path = ws.dir / "projects" / "p" / "plans" / "done-a.run-state.json"
     import json as _json
 
     state = _json.loads(state_path.read_text(encoding="utf-8"))

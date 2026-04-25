@@ -467,7 +467,7 @@ def _engram_session_metadata(
         try:
             from harness.workspace import Workspace
 
-            workspace = Workspace(workspace_dir.parent)
+            workspace = Workspace(workspace_dir.parent, workspace_path=workspace_dir)
             active = workspace.list_active_plans()
             if active:
                 # Mirror the bootstrap heuristic: link the session to the
