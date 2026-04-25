@@ -221,7 +221,8 @@ def _parse_args() -> argparse.Namespace:
         help=(
             "Abort repetitive tool loops: after N consecutive identical tool batches "
             "(matching both input arguments and a hash of tool_result content), "
-            "inject a user nudge. Use 0 to disable."
+            "inject a user nudge. Use 0 to disable soft nudges only; "
+            "--repeat-guard-terminate-at still applies when set."
         ),
     )
     parser.add_argument(

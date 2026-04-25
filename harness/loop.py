@@ -262,7 +262,13 @@ def run_until_idle(
                     tool_error_streaks[tool_name] = 0
                     break  # one nudge per turn is enough
 
-        if repeat_guard_threshold > 0 and tool_calls:
+        repeat_guard_active = tool_calls and (
+            repeat_guard_threshold > 0
+            or (
+                repeat_guard_terminate_at is not None and repeat_guard_terminate_at > 0
+            )
+        )
+        if repeat_guard_active:
             batch_sig = _tool_batch_signature(tool_calls, results, exempt_tools=exempt_tools)
             if batch_sig is None:
                 # Batch contained an exempt tool — leave streak unchanged so a
@@ -314,6 +320,7 @@ def run_until_idle(
 
             if (
                 batch_sig is not None
+                and repeat_guard_threshold > 0
                 and repeat_streak >= repeat_guard_threshold
                 and not nudge_fired_for_streak
             ):

@@ -108,6 +108,30 @@ def test_repeat_guard_disabled_when_threshold_zero():
     assert not any(k == "repetition_guard" for k, _ in tracer.events)
 
 
+def test_terminate_at_works_when_nudge_threshold_zero():
+    """Soft nudges disabled (threshold=0) must not disable hard termination."""
+    tool = SleepingTool("sleep")
+    tools: dict[str, Tool] = {"sleep": tool}
+    batch = [ToolCall(name="sleep", args={"duration": 0.0, "tag": "t"}, id="c0")]
+    mode = CaptureScriptedMode(
+        [_ScriptedResponse(tool_calls=list(batch)) for _ in range(5)]
+    )
+    tracer = RecordingTracer()
+    result = run(
+        task="go",
+        mode=mode,
+        tools=tools,
+        memory=RecordingMemory(),
+        tracer=tracer,
+        max_parallel_tools=1,
+        repeat_guard_threshold=0,
+        repeat_guard_terminate_at=3,
+    )
+    assert result.stopped_by_loop_detection is True
+    assert any(k == "loop_detected" for k, _ in tracer.events)
+    assert not any(k == "repetition_guard" for k, _ in tracer.events)
+
+
 def test_repeat_guard_custom_message():
     tool = SleepingTool("sleep")
     tools: dict[str, Tool] = {"sleep": tool}
