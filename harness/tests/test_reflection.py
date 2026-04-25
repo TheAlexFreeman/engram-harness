@@ -93,6 +93,15 @@ def test_maybe_run_reflection_skips_when_mode_has_no_reflect():
     assert usage == Usage.zero()
 
 
+def test_maybe_run_reflection_skips_when_memory_cannot_persist():
+    mode = _ReflectingMode([_no_tool_response("ok")])
+    memory = RecordingMemory()  # no session_reflection attribute
+    tracer = NullTracer()
+    usage = maybe_run_reflection(mode, [], memory, tracer, enabled=True)
+    assert usage == Usage.zero()
+    assert mode.reflect_calls == []
+
+
 def test_maybe_run_reflection_stashes_text_on_memory():
     mode = _ReflectingMode([_no_tool_response("ok")], reflection_text="Lessons learned: …")
     memory = SimpleNamespace(session_reflection="")

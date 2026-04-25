@@ -298,6 +298,11 @@ def maybe_run_reflection(
     """
     if not enabled:
         return Usage.zero()
+    # Only pay for a reflection turn when the backend can persist it.
+    # FileMemory and other lightweight backends intentionally do not expose
+    # this field.
+    if not hasattr(memory, "session_reflection"):
+        return Usage.zero()
     reflect_fn = getattr(mode, "reflect", None)
     if reflect_fn is None:
         return Usage.zero()
@@ -310,8 +315,7 @@ def maybe_run_reflection(
         pricing = load_pricing()
     usage = compute_cost(raw_usage, pricing)
     text = (text or "").strip()
-    if hasattr(memory, "session_reflection"):
-        memory.session_reflection = text  # type: ignore[attr-defined]
+    memory.session_reflection = text  # type: ignore[attr-defined]
     tracer.event(
         "reflection_turn",
         status="ok",

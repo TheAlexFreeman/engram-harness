@@ -69,6 +69,7 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
     total_turns = 0
     last_final: str | None = None
     session_started = False
+    stopped_by_user = False
     messages: list[dict] = []
     subtask_idx = 0
 
@@ -149,6 +150,7 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
 
         except KeyboardInterrupt:
             print("\n[interrupt]", file=sys.stderr)
+            stopped_by_user = True
 
         if session_started:
             summary = (
@@ -164,7 +166,11 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
                 messages,
                 components.memory,
                 tracer,
-                enabled=getattr(components.config, "reflect", True) and last_final is not None,
+                enabled=(
+                    getattr(components.config, "reflect", True)
+                    and last_final is not None
+                    and not stopped_by_user
+                ),
             )
             total_usage = total_usage + reflection_usage
             components.memory.end_session(

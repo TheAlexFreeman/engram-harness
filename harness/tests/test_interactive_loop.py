@@ -225,3 +225,23 @@ def test_run_interactive_with_opener_starts_subsession():
     start_events = [e for e in tracer.events if e["kind"] == "sub_session_start"]
     assert len(start_events) == 1
     assert start_events[0]["input"] == "my opener"
+
+
+def test_run_interactive_skips_reflection_after_keyboard_interrupt():
+    """Ctrl-C should stop the session without paying for reflection."""
+    from unittest.mock import patch
+
+    from harness.runner import run_interactive
+
+    mode = ScriptedMode([_ScriptedResponse(tool_calls=[], text="ok")])
+    mode.reflect = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("reflect called"))
+    memory = RecordingMemory()
+    memory.session_reflection = ""  # type: ignore[attr-defined]
+    tracer = RecordingTracer()
+    components = _make_components(mode, memory, tracer)
+
+    args = argparse.Namespace(task="opener", interactive=True)
+    with patch("harness.runner._read_interactive_line", side_effect=KeyboardInterrupt):
+        run_interactive(args, components)
+
+    assert memory.session_reflection == ""  # type: ignore[attr-defined]
