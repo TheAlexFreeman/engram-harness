@@ -17,12 +17,11 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
 from harness.engram_memory import EngramMemory
-from harness.loop import RunResult, _REFLECTION_PROMPT, maybe_run_reflection
+from harness.loop import _REFLECTION_PROMPT, RunResult, maybe_run_reflection
 from harness.tests.test_engram_memory import _make_engram_repo
 from harness.tests.test_parallel_tools import (
     NullTracer,
@@ -30,9 +29,8 @@ from harness.tests.test_parallel_tools import (
     ScriptedMode,
     _ScriptedResponse,
 )
-from harness.tools import Tool, ToolCall
+from harness.tools import Tool
 from harness.usage import Usage
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -252,7 +250,7 @@ def _seeded_memory(repo: Path) -> EngramMemory:
 
 
 def test_trace_bridge_uses_llm_reflection_when_stashed(engram_repo: Path) -> None:
-    from harness.trace_bridge import _SessionStats, _render_reflection
+    from harness.trace_bridge import _render_reflection, _SessionStats
 
     mem = _seeded_memory(engram_repo)
     mem.session_reflection = (
@@ -270,7 +268,7 @@ def test_trace_bridge_uses_llm_reflection_when_stashed(engram_repo: Path) -> Non
 
 
 def test_trace_bridge_falls_back_to_template_when_no_stash(engram_repo: Path) -> None:
-    from harness.trace_bridge import _SessionStats, _render_reflection
+    from harness.trace_bridge import _render_reflection, _SessionStats
 
     mem = _seeded_memory(engram_repo)
     # session_reflection left at its default ""
