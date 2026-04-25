@@ -67,6 +67,28 @@ def test_prelude_injection(tmp_path: Path) -> None:
     assert "abc" in result.stdout
 
 
+def test_prelude_adds_workspace_to_sys_path(tmp_path: Path) -> None:
+    workspace = tmp_path
+    output_dir = tmp_path / "out"
+    prelude = build_prelude(workspace=workspace, output_dir=output_dir, session_id="abc")
+    module_file = workspace / "local_mod.py"
+    module_file.write_text("VALUE = 123\n", encoding="utf-8")
+    code = "import local_mod\nprint(local_mod.VALUE)\n"
+    result = run_python(RunRequest(code=code, cwd=workspace, prelude=prelude))
+    assert result.exit_code == 0
+    assert "123" in result.stdout
+
+
+def test_prelude_after_future_import(tmp_path: Path) -> None:
+    workspace = tmp_path
+    output_dir = tmp_path / "out"
+    prelude = build_prelude(workspace=workspace, output_dir=output_dir, session_id="abc")
+    code = "from __future__ import annotations\nprint('ok')\n"
+    result = run_python(RunRequest(code=code, cwd=workspace, prelude=prelude))
+    assert result.exit_code == 0
+    assert "ok" in result.stdout
+
+
 def test_last_expr_capture(tmp_path: Path) -> None:
     result = run_python(RunRequest(code="2 + 2", cwd=tmp_path, capture_last_expr=True))
     assert result.exit_code == 0

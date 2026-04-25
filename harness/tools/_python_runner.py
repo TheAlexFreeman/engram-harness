@@ -24,6 +24,26 @@ _RESULT_START = "__HARNESS_RESULT_START__"
 _RESULT_END = "__HARNESS_RESULT_END__"
 
 
+def _compose_code_with_prelude(code: str, prelude: str | None) -> str:
+    """Insert prelude after leading __future__ imports when present."""
+    if not prelude:
+        return code
+
+    lines = code.splitlines(keepends=True)
+    insert_at = 0
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("from __future__ import "):
+            insert_at += 1
+            continue
+        break
+
+    if insert_at == 0:
+        return prelude + code
+
+    return "".join([*lines[:insert_at], prelude, *lines[insert_at:]])
+
+
 @dataclass
 class RunRequest:
     code: str | None = None
@@ -164,7 +184,7 @@ def run_python(request: RunRequest) -> RunResult:
         rewritten = code
         if request.capture_last_expr:
             rewritten, _ = _rewrite_for_last_expr(code)
-        final_code = (request.prelude or "") + rewritten
+        final_code = _compose_code_with_prelude(rewritten, request.prelude)
 
         tmp = tempfile.NamedTemporaryFile(
             mode="w",

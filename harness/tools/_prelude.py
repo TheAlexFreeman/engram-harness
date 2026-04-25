@@ -28,5 +28,7 @@ def build_prelude(
         f"WORKSPACE = Path({workspace_literal})\n"
         f"OUTPUT_DIR = Path({output_dir_literal})\n"
         f"SESSION_ID = {session_id_literal}\n"
+        "if str(WORKSPACE) not in sys.path:\n"
+        "    sys.path.insert(0, str(WORKSPACE))\n"
         "# --- end prelude ---\n"
     )
