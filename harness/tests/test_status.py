@@ -12,6 +12,7 @@ from harness.cmd_status import (
     _print_active_plans,
     _print_recent_sessions,
     _resolve_engram_content_root,
+    _resolve_workspace_dir,
 )
 from harness.session_store import SessionRecord, SessionStore
 from harness.workspace import Workspace
@@ -28,21 +29,29 @@ def _make_content_root(tmp: Path) -> Path:
     return tmp
 
 
+def _make_workspace_dir(tmp: Path) -> Path:
+    """Return an empty workspace directory under *tmp* with the layout in place."""
+    ws = Workspace(tmp, session_id="act-001")
+    ws.ensure_layout()
+    return ws.dir
+
+
 def _create_plan(
-    content_root: Path,
+    workspace_parent: Path,
     purpose: str,
     *,
     plan_id: str | None = None,
     project: str = "misc-plans",
     n_phases: int = 2,
     budget: dict | None = None,
-) -> tuple[str, str]:
+) -> tuple[str, str, Path]:
     """Scaffold a workspace plan directly via ``Workspace.plan_create``.
 
-    Returns ``(project, plan_id)`` so tests can address the new layout
-    without assuming anything about how the content is written.
+    Workspace lives at ``workspace_parent/workspace`` (the conventional
+    layout). Returns ``(project, plan_id, workspace_dir)`` so tests can
+    pass the workspace directly to ``_print_active_plans``.
     """
-    ws = Workspace(content_root, session_id="act-001")
+    ws = Workspace(workspace_parent, session_id="act-001")
     ws.ensure_layout()
     # project_create seeds GOAL.md + SUMMARY.md — plan_create requires
     # the project to exist first.
@@ -51,7 +60,7 @@ def _create_plan(
     pid = plan_id or purpose.lower().replace(" ", "-")
     phases = [{"title": f"Phase {i + 1}"} for i in range(n_phases)]
     ws.plan_create(project, pid, purpose, phases=phases, budget=budget)
-    return project, pid
+    return project, pid, ws.dir
 
 
 # ---------------------------------------------------------------------------
@@ -95,16 +104,22 @@ def test_resolve_content_root_auto_detect_walks_cwd(tmp_path):
 
 
 def test_print_active_plans_no_plans(tmp_path, capsys):
-    cr = _make_content_root(tmp_path)
-    _print_active_plans(cr)
+    ws_dir = _make_workspace_dir(tmp_path)
+    _print_active_plans(ws_dir)
     out = capsys.readouterr().out
     assert "Active plans: none" in out
 
 
+def test_print_active_plans_missing_workspace_dir(tmp_path, capsys):
+    """A bare path that doesn't exist yet renders as 'not initialized', not a crash."""
+    _print_active_plans(tmp_path / "no-workspace")
+    out = capsys.readouterr().out
+    assert "not initialized" in out
+
+
 def test_print_active_plans_shows_active(tmp_path, capsys):
-    cr = _make_content_root(tmp_path)
-    _create_plan(cr, "Build auth module", n_phases=3)
-    _print_active_plans(cr)
+    _, _, ws_dir = _create_plan(tmp_path, "Build auth module", n_phases=3)
+    _print_active_plans(ws_dir)
     out = capsys.readouterr().out
     assert "Active plans (1)" in out
     assert "Build auth module" in out
@@ -112,10 +127,9 @@ def test_print_active_plans_shows_active(tmp_path, capsys):
 
 
 def test_print_active_plans_shows_multiple(tmp_path, capsys):
-    cr = _make_content_root(tmp_path)
-    _create_plan(cr, "Plan Alpha", plan_id="plan-alpha")
-    _create_plan(cr, "Plan Beta", plan_id="plan-beta")
-    _print_active_plans(cr)
+    _, _, ws_dir = _create_plan(tmp_path, "Plan Alpha", plan_id="plan-alpha")
+    _create_plan(tmp_path, "Plan Beta", plan_id="plan-beta")
+    _print_active_plans(ws_dir)
     out = capsys.readouterr().out
     assert "Active plans (2)" in out
     assert "Plan Alpha" in out
@@ -123,41 +137,57 @@ def test_print_active_plans_shows_multiple(tmp_path, capsys):
 
 
 def test_print_active_plans_completed_plan_excluded(tmp_path, capsys):
-    cr = _make_content_root(tmp_path)
-    project, plan_id = _create_plan(cr, "Done plan")
+    project, plan_id, ws_dir = _create_plan(tmp_path, "Done plan")
     # Mark the workspace run-state as completed (new schema uses the
     # "completed" string, not "complete").
-    state_path = cr / "workspace" / "projects" / project / "plans" / f"{plan_id}.run-state.json"
+    state_path = ws_dir / "projects" / project / "plans" / f"{plan_id}.run-state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["status"] = "completed"
     state_path.write_text(json.dumps(state), encoding="utf-8")
-    _print_active_plans(cr)
+    _print_active_plans(ws_dir)
     out = capsys.readouterr().out
     assert "Done plan" not in out
 
 
 def test_print_active_plans_shows_session_count(tmp_path, capsys):
-    cr = _make_content_root(tmp_path)
-    project, plan_id = _create_plan(cr, "Tracked plan")
+    project, plan_id, ws_dir = _create_plan(tmp_path, "Tracked plan")
     # Simulate one distinct session having advanced the plan. The new
     # schema tracks this via sessions_used + sessions_touched, not a
     # list of per-session dicts.
-    state_path = cr / "workspace" / "projects" / project / "plans" / f"{plan_id}.run-state.json"
+    state_path = ws_dir / "projects" / project / "plans" / f"{plan_id}.run-state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["sessions_used"] = 1
     state["sessions_touched"] = ["act-200"]
     state_path.write_text(json.dumps(state), encoding="utf-8")
-    _print_active_plans(cr)
+    _print_active_plans(ws_dir)
     out = capsys.readouterr().out
     assert "1 session" in out
 
 
 def test_print_active_plans_shows_budget_when_max_sessions(tmp_path, capsys):
-    cr = _make_content_root(tmp_path)
-    _create_plan(cr, "Budgeted plan", budget={"max_sessions": 5})
-    _print_active_plans(cr)
+    _, _, ws_dir = _create_plan(tmp_path, "Budgeted plan", budget={"max_sessions": 5})
+    _print_active_plans(ws_dir)
     out = capsys.readouterr().out
     assert "0/5" in out
+
+
+# ---------------------------------------------------------------------------
+# _resolve_workspace_dir
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_workspace_dir_explicit(tmp_path):
+    explicit = tmp_path / "ws-elsewhere"
+    resolved = _resolve_workspace_dir(str(explicit))
+    assert resolved == explicit.resolve()
+
+
+def test_resolve_workspace_dir_default_anchors_on_project_root():
+    """No argument → fall back to <project_root>/workspace."""
+    resolved = _resolve_workspace_dir(None)
+    # The default lives next to the harness package, regardless of CWD.
+    assert resolved.name == "workspace"
+    assert (resolved.parent / "harness" / "cmd_status.py").is_file()
 
 
 # ---------------------------------------------------------------------------

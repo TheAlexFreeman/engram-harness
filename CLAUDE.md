@@ -3,8 +3,13 @@
 This repository merges two internally coherent projects: a Python **agent harness**
 (`harness/`) and the **Engram** memory system (`engram/`). The harness runs LLM
 sessions against local workspaces with tool access and JSONL tracing; Engram
-gives those sessions durable, git-backed, cross-session memory. Their integration
-seam lives in `harness/engram_memory.py` and `harness/trace_bridge.py`.
+gives those sessions durable, git-backed, cross-session memory. The agent's own
+operational **workspace** sits at the project root in `workspace/`, mediating
+between the two: it's mutable working surface (CURRENT.md threads, projects,
+plans, scratch) that the harness owns and reads/writes via the `work:` tool
+family, with promotion paths into governed Engram memory. Their integration
+seam lives in `harness/engram_memory.py`, `harness/workspace.py`, and
+`harness/trace_bridge.py`.
 
 ## Where to start
 
@@ -25,11 +30,17 @@ from this project; what the harness needs it owns at `harness/_engram_fs/`.
 **Working on the integration seam.** `harness/engram_memory.py` implements the
 `MemoryBackend` protocol against an Engram repo (compact returning-session
 bootstrap, semantic or keyword recall, buffered records flushed at
-`end_session`). `harness/trace_bridge.py` turns a post-run JSONL trace into
-activity records, reflection notes, ACCESS entries, and trace spans — then commits
-them. `harness/tools/memory_tools.py` exposes `memory_recall`, `memory_context`,
-and the rest of the agent-callable memory tools when `--memory=engram` is
-selected; `harness/tools/recall.py` is only a legacy compatibility alias.
+`end_session`). It accepts an optional `workspace_dir` so the bootstrap can
+surface an active-plan briefing for the workspace at the project root.
+`harness/workspace.py` owns the `workspace/` directory and exposes the
+`work:` affordance backend. `harness/trace_bridge.py` turns a post-run JSONL
+trace into activity records, reflection notes, ACCESS entries (memory only —
+the workspace is intentionally ungoverned), and trace spans, then commits
+them. `harness/tools/memory_tools.py` exposes `memory_recall`,
+`memory_context`, and the rest of the agent-callable memory tools when
+`--memory=engram` is selected; `harness/tools/recall.py` is only a legacy
+compatibility alias. `harness/config.py::_harness_project_root` is the
+canonical anchor for finding `workspace/` (and the bundled `engram/`).
 
 ## Harness-owned format primitives
 

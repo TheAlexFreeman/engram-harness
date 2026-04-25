@@ -62,32 +62,50 @@ affordance surface.
 
 ## Directory structure
 
+The workspace lives at the **harness project root** as a top-level peer of
+both the `engram/` and `harness/` packages — it does not live inside
+either one. This separation reflects its mediating role: the harness
+owns the tools that read and write it, the engram memory tree is where
+its contents eventually graduate (via `work_promote`), but the
+workspace itself belongs to neither subpackage.
+
 ```
-workspace/                        # project root, not inside memory/
-├── CURRENT.md                    # active threads + freeform notes
-├── notes/                        # persistent working documents
-│   ├── auth-redesign.md
-│   └── harness-expansion-analysis.md
-├── projects/                     # isolated work contexts
-│   ├── general-knowledge-base/
-│   │   ├── GOAL.md               # the project's objective (required)
-│   │   ├── SUMMARY.md            # auto-generated, never written directly
-│   │   ├── questions.md          # open and resolved questions
-│   │   ├── notes/                # project-scoped working notes
-│   │   ├── plans/                # plan YAML + run state
-│   │   ├── IN/                   # staging area (freeform)
-│   │   └── ...                   # anything else the project needs
-│   ├── _archive/                 # archived projects
-│   └── ...
-├── scratch/                      # session-scoped (gitignored)
-│   └── act-007.md                # one file per session
-└── archive/                      # auto-archived closed threads
-    └── threads.md
+<project_root>/
+├── engram/                       # Memory data + standalone Engram docs
+├── harness/                      # Agent loop + tools (incl. workspace.py)
+└── workspace/                    # ← The agent's operational workspace
+    ├── CURRENT.md                # active threads + freeform notes
+    ├── notes/                    # persistent working documents
+    │   ├── auth-redesign.md
+    │   └── harness-expansion-analysis.md
+    ├── projects/                 # isolated work contexts
+    │   ├── general-knowledge-base/
+    │   │   ├── GOAL.md           # the project's objective (required)
+    │   │   ├── SUMMARY.md        # auto-generated, never written directly
+    │   │   ├── questions.md      # open and resolved questions
+    │   │   ├── notes/            # project-scoped working notes
+    │   │   ├── plans/            # plan YAML + run state
+    │   │   ├── IN/               # staging area (freeform)
+    │   │   └── ...               # anything else the project needs
+    │   ├── _archive/             # archived projects
+    │   └── ...
+    ├── scratch/                  # session-scoped (gitignored)
+    │   └── act-007.md            # one file per session
+    └── archive/                  # auto-archived closed threads
+        └── threads.md
 ```
+
+`harness/config.py::_harness_project_root()` is the single source of
+truth for the parent directory; `_build_memory` constructs
+`Workspace(project_root, ...)` and passes the resulting path through to
+`EngramMemory(..., workspace_dir=...)` so the bootstrap can surface
+active-plan briefings.
 
 The workspace is git-tracked (except `scratch/`) but has no trust
 frontmatter, no ACCESS.jsonl, and no aggregation pipeline. It's working
-state, not curated knowledge.
+state, not curated knowledge — `harness/trace_bridge.py::_ACCESS_ROOTS`
+deliberately omits any `workspace/` entries so reads of workspace files
+do not generate ACCESS rows.
 
 ---
 

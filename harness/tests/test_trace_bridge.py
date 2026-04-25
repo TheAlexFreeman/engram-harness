@@ -68,10 +68,11 @@ def test_access_namespace_normalises_paths() -> None:
     # default content_prefix="core"
     assert _access_namespace("memory/knowledge/foo.md") == "memory/knowledge"
     assert _access_namespace("core/memory/skills/bar.md") == "memory/skills"
-    # workspace/projects/ replaced the legacy memory/working/projects/ root.
-    assert _access_namespace("workspace/projects/x/notes.md") == "workspace/projects"
-    # Top-level workspace files (like CURRENT.md) are not ACCESS-tracked —
-    # only reads under the listed _ACCESS_ROOTS get logged.
+    # The workspace is intentionally absent from _ACCESS_ROOTS — it lives
+    # at the project root (peer of memory) and is ungoverned per
+    # docs/workspace-affordances-draft.md (no trust, no ACCESS, no
+    # aggregation), so workspace reads do not generate ACCESS rows.
+    assert _access_namespace("workspace/projects/x/notes.md") is None
     assert _access_namespace("workspace/CURRENT.md") is None
     # Legacy memory/working/ paths also no longer ACCESS-track (MCP layer
     # keeps writing there but the harness stopped sourcing from it).
@@ -104,23 +105,19 @@ def test_normalize_for_access_empty_prefix() -> None:
     assert _normalize_for_access("memory/knowledge/foo.md", "") == "memory/knowledge/foo.md"
 
 
-def test_normalize_for_access_workspace_paths_get_prefix() -> None:
-    """workspace/... paths need the same content_prefix canonicalization
-    that memory/... paths get. Without this, dedupe would double-count
-    the same workspace file when it's referenced with and without the
-    prefix (e.g. ``workspace/projects/x/foo.md`` vs
-    ``core/workspace/projects/x/foo.md``).
+def test_normalize_for_access_does_not_prefix_workspace_paths() -> None:
+    """Workspace files are not ACCESS-tracked, so no prefix is applied.
+
+    The workspace lives at the project root (a peer of memory, not a
+    child of content_root). Prefixing ``workspace/...`` with the engram
+    content prefix would invent a path that doesn't exist on disk.
     """
+    # No prefix prepended — the path is returned as-is even with content_prefix="core".
     assert (
         _normalize_for_access("workspace/projects/x/foo.md", "core")
-        == "core/workspace/projects/x/foo.md"
+        == "workspace/projects/x/foo.md"
     )
-    # Already-prefixed paths round-trip unchanged.
-    assert (
-        _normalize_for_access("core/workspace/projects/x/foo.md", "core")
-        == "core/workspace/projects/x/foo.md"
-    )
-    # Empty prefix — no prepending.
+    # Empty prefix — no prepending either way.
     assert _normalize_for_access("workspace/projects/x/foo.md", "") == "workspace/projects/x/foo.md"
 
 

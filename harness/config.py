@@ -75,6 +75,18 @@ class SessionComponents:
     config: SessionConfig
 
 
+def _harness_project_root() -> Path:
+    """Return the harness git project root.
+
+    Anchored relative to this file (``harness/config.py`` →
+    ``<project_root>/harness/config.py``). Used to locate the agent's
+    workspace and the bundled Engram repo, both of which live at the
+    project root rather than inside the engram package or the user's
+    ``--workspace``.
+    """
+    return Path(__file__).resolve().parent.parent
+
+
 def config_from_args(args: argparse.Namespace) -> SessionConfig:
     """Convert parsed CLI arguments to a SessionConfig."""
     return SessionConfig(
@@ -135,10 +147,11 @@ def _build_memory(
     from harness.workspace import Workspace
 
     repo_path = config.memory_repo
+    project_root = _harness_project_root()
     if repo_path is None:
         repo_path = detect_engram_repo(config.workspace) or detect_engram_repo(Path.cwd())
     if repo_path is None:
-        bundled = Path(__file__).resolve().parent.parent / "engram"
+        bundled = project_root / "engram"
         if (bundled / "core" / "memory" / "HOME.md").is_file():
             repo_path = bundled
     if repo_path is None:
@@ -150,8 +163,12 @@ def _build_memory(
         from harness.memory import FileMemory
 
         return FileMemory(path=config.workspace / "progress.md"), None, []
+    # The agent's workspace lives at the project root, mediating between
+    # the engram (memory) and harness (tools/loop) packages. EngramMemory
+    # needs the path to surface active-plan briefings during its bootstrap.
+    workspace_root = project_root / "workspace"
     try:
-        engram = EngramMemory(Path(repo_path))
+        engram = EngramMemory(Path(repo_path), workspace_dir=workspace_root)
     except Exception as exc:  # noqa: BLE001
         print(
             f"[warning] failed to open Engram repo at {repo_path}: {exc}. "
@@ -165,13 +182,14 @@ def _build_memory(
         f"[engram] session={engram.session_id} repo={engram.content_root}",
         file=sys.stderr,
     )
-    # Workspace lives alongside memory inside the Engram content root.
-    # For non-read_only profiles we create the layout upfront so that the
+    # The Workspace class takes the directory that *contains* `workspace/`,
+    # so pass the project root and let it append the segment. For
+    # non-read_only profiles we create the layout upfront so that the
     # first mutation doesn't pay an extra directory-scaffold cost. In
     # read_only we skip layout creation — the read-only work tools
     # tolerate a missing workspace and return an uninitialized state
     # message instead.
-    workspace = Workspace(engram.content_root, session_id=engram.session_id)
+    workspace = Workspace(project_root, session_id=engram.session_id)
     read_only = config.tool_profile == ToolProfile.READ_ONLY
     allow_test_postconditions = config.tool_profile != ToolProfile.NO_SHELL
     if not read_only:

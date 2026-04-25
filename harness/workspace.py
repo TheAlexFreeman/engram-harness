@@ -15,9 +15,13 @@ persistence, and project scaffolding. The ``Workspace`` class owns a
 
 Design points (see docs/workspace-affordances-draft.md):
 
-- Workspace is a *peer* of memory, not a subdirectory of it. When the
-  harness runs against an Engram repo, ``workspace/`` lives at the same
-  level as ``memory/``.
+- Workspace is a *peer* of both the engram memory tree and the harness
+  package — it lives at the project root (``<repo>/workspace/``), not
+  under either subpackage. ``harness/config.py`` resolves the project
+  root and constructs ``Workspace(project_root)`` so the directory
+  appears at ``project_root / "workspace"``. The Engram repo itself is
+  unaware of the workspace location; the integration seam injects it
+  via ``EngramMemory(..., workspace_dir=...)`` for active-plan briefings.
 - CURRENT.md has a fixed three-section layout (Threads / Closed / Notes)
   parsed structurally so thread operations never clobber the freeform
   notes section and vice versa.
@@ -376,10 +380,12 @@ class Workspace:
     Parameters
     ----------
     root
-        Directory that *contains* ``workspace/``. When running against an
-        Engram repo this is typically the content root (``core/`` or
-        whatever path ``EngramMemory.content_root`` points at). The
-        workspace directory itself is ``root/workspace``.
+        Directory that *contains* ``workspace/``. In the merged
+        engram-harness layout this is the harness project root, so the
+        workspace directory itself is ``project_root/workspace`` —
+        a peer of both the ``engram/`` and ``harness/`` packages, not
+        a subdirectory of either. Tests typically pass a ``tmp_path`` to
+        get an isolated workspace at ``tmp_path/workspace``.
     session_id
         Identifier used for the per-session scratch file. Optional — the
         scratch op falls back to the process-local isoformat timestamp if

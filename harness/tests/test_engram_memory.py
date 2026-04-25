@@ -172,12 +172,13 @@ def test_engram_memory_explicit_prefix(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _active_plan_briefing — workspace layout (post plan_tools.py retirement)
+# _active_plan_briefing — workspace layout (workspace is a peer of memory,
+# not a subdirectory of the engram content root)
 # ---------------------------------------------------------------------------
 
 
 def _seed_workspace_plan(
-    content_root: Path,
+    workspace_parent: Path,
     *,
     project: str,
     plan_id: str,
@@ -186,17 +187,26 @@ def _seed_workspace_plan(
     status: str = "active",
     current_phase: int = 0,
     body_override: str | None = None,
-) -> None:
-    """Write a plan + run-state pair under the workspace."""
+) -> Path:
+    """Write a plan + run-state pair under ``workspace_parent/workspace``.
+
+    Returns the workspace directory itself so tests can pass it straight
+    into ``EngramMemory(workspace_dir=...)``.
+    """
     from harness.workspace import Workspace
 
-    ws = Workspace(content_root, session_id="act-999")
+    ws = Workspace(workspace_parent, session_id="act-999")
     ws.ensure_layout()
     if not ws.project(project).exists():
         ws.project_create(project, goal=f"fixture for {purpose}")
     ws.plan_create(project, plan_id, purpose, phases=phases)
     state_path = (
-        content_root / "workspace" / "projects" / project / "plans" / f"{plan_id}.run-state.json"
+        workspace_parent
+        / "workspace"
+        / "projects"
+        / project
+        / "plans"
+        / f"{plan_id}.run-state.json"
     )
     import json as _json
 
@@ -207,23 +217,35 @@ def _seed_workspace_plan(
         state_path.write_text(_json.dumps(state), encoding="utf-8")
     else:
         state_path.write_text(body_override, encoding="utf-8")
+    return ws.dir
 
 
-def test_active_plan_briefing_returns_empty_when_no_plans(engram_repo: Path) -> None:
+def test_active_plan_briefing_returns_empty_when_no_workspace(engram_repo: Path) -> None:
+    """Without ``workspace_dir`` the bootstrap silently skips the briefing."""
     mem = EngramMemory(engram_repo, embed=False)
     assert mem._active_plan_briefing() == ""
 
 
-def test_active_plan_briefing_picks_the_active_plan(engram_repo: Path) -> None:
-    content_root = engram_repo / "core"
-    _seed_workspace_plan(
-        content_root,
+def test_active_plan_briefing_returns_empty_when_no_plans(
+    engram_repo: Path, tmp_path: Path
+) -> None:
+    workspace_dir = tmp_path / "ws_root" / "workspace"
+    workspace_dir.mkdir(parents=True)
+    mem = EngramMemory(engram_repo, embed=False, workspace_dir=workspace_dir)
+    assert mem._active_plan_briefing() == ""
+
+
+def test_active_plan_briefing_picks_the_active_plan(
+    engram_repo: Path, tmp_path: Path
+) -> None:
+    workspace_dir = _seed_workspace_plan(
+        tmp_path / "ws_root",
         project="alpha",
         plan_id="offline-refresh",
         purpose="Implement offline-capable token refresh",
         phases=[{"title": "Schema design"}, {"title": "Endpoint"}],
     )
-    mem = EngramMemory(engram_repo, embed=False)
+    mem = EngramMemory(engram_repo, embed=False, workspace_dir=workspace_dir)
     out = mem._active_plan_briefing()
     assert "offline-refresh" in out
     assert "Implement offline-capable token refresh" in out
@@ -233,38 +255,40 @@ def test_active_plan_briefing_picks_the_active_plan(engram_repo: Path) -> None:
     assert "resume_plan" not in out
 
 
-def test_active_plan_briefing_skips_completed_plans(engram_repo: Path) -> None:
-    content_root = engram_repo / "core"
-    _seed_workspace_plan(
-        content_root,
+def test_active_plan_briefing_skips_completed_plans(
+    engram_repo: Path, tmp_path: Path
+) -> None:
+    workspace_dir = _seed_workspace_plan(
+        tmp_path / "ws_root",
         project="alpha",
         plan_id="shipped",
         purpose="already done",
         phases=[{"title": "X"}],
         status="completed",
     )
-    mem = EngramMemory(engram_repo, embed=False)
+    mem = EngramMemory(engram_repo, embed=False, workspace_dir=workspace_dir)
     assert mem._active_plan_briefing() == ""
 
 
 def test_active_plan_briefing_tolerates_malformed_run_state(
-    engram_repo: Path,
+    engram_repo: Path, tmp_path: Path
 ) -> None:
-    content_root = engram_repo / "core"
-    _seed_workspace_plan(
-        content_root,
+    workspace_dir = _seed_workspace_plan(
+        tmp_path / "ws_root",
         project="alpha",
         plan_id="broken",
         purpose="x",
         phases=[{"title": "A"}],
         body_override="{not: valid json",
     )
-    mem = EngramMemory(engram_repo, embed=False)
+    mem = EngramMemory(engram_repo, embed=False, workspace_dir=workspace_dir)
     # Skips the broken file rather than raising.
     assert mem._active_plan_briefing() == ""
 
 
-def test_active_plan_briefing_tolerates_stat_errors(engram_repo: Path) -> None:
+def test_active_plan_briefing_tolerates_stat_errors(
+    engram_repo: Path, tmp_path: Path
+) -> None:
     """A stale symlink or vanished run-state file must not raise OSError.
 
     glob() + stat() is racy: a deleted file between glob and sort
@@ -272,16 +296,15 @@ def test_active_plan_briefing_tolerates_stat_errors(engram_repo: Path) -> None:
     PR #9 Codex review. We plant a broken symlink alongside a real
     active plan and assert the briefing still surfaces the real one.
     """
-    content_root = engram_repo / "core"
-    _seed_workspace_plan(
-        content_root,
+    workspace_dir = _seed_workspace_plan(
+        tmp_path / "ws_root",
         project="alpha",
         plan_id="real",
         purpose="valid plan",
         phases=[{"title": "Ship"}],
     )
     # Plant a broken symlink where glob() will see it but stat() blows up.
-    plans_dir = content_root / "workspace" / "projects" / "alpha" / "plans"
+    plans_dir = workspace_dir / "projects" / "alpha" / "plans"
     bad_link = plans_dir / "ghost.run-state.json"
     try:
         bad_link.symlink_to(plans_dir / "does-not-exist-anywhere.json")
@@ -298,7 +321,7 @@ def test_active_plan_briefing_tolerates_stat_errors(engram_repo: Path) -> None:
 
         pytest.skip("symlink creation unavailable on this platform")
     try:
-        mem = EngramMemory(engram_repo, embed=False)
+        mem = EngramMemory(engram_repo, embed=False, workspace_dir=workspace_dir)
         out = mem._active_plan_briefing()
         assert "real" in out
         assert "valid plan" in out
@@ -307,13 +330,13 @@ def test_active_plan_briefing_tolerates_stat_errors(engram_repo: Path) -> None:
 
 
 def test_active_plan_briefing_prefers_most_recently_modified(
-    engram_repo: Path,
+    engram_repo: Path, tmp_path: Path
 ) -> None:
     import os as _os
 
-    content_root = engram_repo / "core"
-    _seed_workspace_plan(
-        content_root,
+    workspace_parent = tmp_path / "ws_root"
+    workspace_dir = _seed_workspace_plan(
+        workspace_parent,
         project="alpha",
         plan_id="older",
         purpose="stale",
@@ -321,16 +344,16 @@ def test_active_plan_briefing_prefers_most_recently_modified(
     )
     # Bump mtime on the older plan so it looks ancient, then create a newer
     # one that should win.
-    older = content_root / "workspace" / "projects" / "alpha" / "plans" / "older.run-state.json"
+    older = workspace_dir / "projects" / "alpha" / "plans" / "older.run-state.json"
     _os.utime(older, (1_700_000_000, 1_700_000_000))
     _seed_workspace_plan(
-        content_root,
+        workspace_parent,
         project="alpha",
         plan_id="newer",
         purpose="fresh",
         phases=[{"title": "Y"}],
     )
-    mem = EngramMemory(engram_repo, embed=False)
+    mem = EngramMemory(engram_repo, embed=False, workspace_dir=workspace_dir)
     out = mem._active_plan_briefing()
     assert "newer" in out
     assert "older" not in out
