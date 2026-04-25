@@ -156,7 +156,11 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
                 if last_final
                 else "(interactive exit before any assistant reply)"
             )
-            components.memory.end_session(summary=summary, skip_commit=bridge)
+            components.memory.end_session(
+                summary=summary,
+                skip_commit=bridge,
+                defer_artifacts=bridge,
+            )
             tracer.event("session_usage", **total_usage.as_trace_dict())
             tracer.event("session_end", turns=total_turns, reason="interactive_exit")
 

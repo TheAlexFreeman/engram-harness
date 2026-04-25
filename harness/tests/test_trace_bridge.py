@@ -218,6 +218,177 @@ def test_run_trace_bridge_minimal_session(repo: Path, memory: EngramMemory, tmp_
     assert rec["session_id"] == f"core/{memory._session_dir_rel()}"
 
 
+def test_summary_renders_deferred_agent_summary(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """When end_session(defer_artifacts=True) ran first, the bridge picks up
+    the agent's wrap-up text from memory.session_summary and includes it in
+    the summary.md it writes."""
+    memory.end_session(
+        "Implemented offline-capable token refresh; ready for review.",
+        defer_artifacts=True,
+    )
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    _write_trace(
+        trace,
+        [
+            {"ts": ts, "kind": "session_start", "task": "ship offline tokens"},
+            {"ts": ts, "kind": "session_end", "turns": 1},
+        ],
+    )
+    result = run_trace_bridge(trace, memory)
+    summary = result.summary_path.read_text(encoding="utf-8")
+    assert "## Summary" in summary
+    assert "Implemented offline-capable token refresh" in summary
+
+
+def test_summary_omits_summary_section_when_no_deferred_text(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """Without a deferred agent summary the bridge skips the Summary section
+    rather than rendering an empty one."""
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    _write_trace(
+        trace,
+        [
+            {"ts": ts, "kind": "session_start", "task": "no wrap-up"},
+            {"ts": ts, "kind": "session_end", "turns": 1},
+        ],
+    )
+    result = run_trace_bridge(trace, memory)
+    summary = result.summary_path.read_text(encoding="utf-8")
+    assert "## Summary" not in summary
+
+
+def test_session_rollup_writes_per_namespace_jsonl(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """Each ACCESS namespace touched in the session gets one rollup row."""
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    _write_trace(
+        trace,
+        [
+            {"ts": ts, "kind": "session_start", "task": "rollup test"},
+            {
+                "ts": ts,
+                "kind": "tool_call",
+                "name": "read_file",
+                "args": {"path": "memory/knowledge/celery.md"},
+            },
+            {
+                "ts": ts,
+                "kind": "tool_result",
+                "name": "read_file",
+                "is_error": False,
+                "content_preview": "celery...",
+            },
+            {
+                "ts": ts,
+                "kind": "tool_call",
+                "name": "edit_file",
+                "args": {"path": "memory/knowledge/celery.md"},
+            },
+            {
+                "ts": ts,
+                "kind": "tool_result",
+                "name": "edit_file",
+                "is_error": False,
+                "content_preview": "ok",
+            },
+            {"ts": ts, "kind": "session_end", "turns": 1},
+        ],
+    )
+    run_trace_bridge(trace, memory)
+
+    rollup_path = repo / "core" / "memory" / "knowledge" / "_session-rollups.jsonl"
+    assert rollup_path.is_file(), "rollup file should land alongside ACCESS.jsonl"
+    rows = [
+        json.loads(line)
+        for line in rollup_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["session_id"] == f"core/{memory._session_dir_rel()}"
+    assert row["task"] == "rollup-test"
+    assert row["files_touched"] == 1
+    assert row["rows_added"] >= 1
+    assert row["max_helpfulness"] == HELPFULNESS_READ_THEN_EDIT
+    assert row["top_files"][0]["file"] == "core/memory/knowledge/celery.md"
+
+
+def test_session_rollup_only_for_touched_namespaces(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """A namespace that wasn't touched gets no rollup file."""
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    _write_trace(
+        trace,
+        [
+            {"ts": ts, "kind": "session_start", "task": "knowledge-only"},
+            {
+                "ts": ts,
+                "kind": "tool_call",
+                "name": "read_file",
+                "args": {"path": "memory/knowledge/celery.md"},
+            },
+            {
+                "ts": ts,
+                "kind": "tool_result",
+                "name": "read_file",
+                "is_error": False,
+                "content_preview": "...",
+            },
+            {"ts": ts, "kind": "session_end", "turns": 1},
+        ],
+    )
+    run_trace_bridge(trace, memory)
+
+    assert (repo / "core" / "memory" / "knowledge" / "_session-rollups.jsonl").is_file()
+    assert not (repo / "core" / "memory" / "skills" / "_session-rollups.jsonl").exists()
+    assert not (repo / "core" / "memory" / "users" / "_session-rollups.jsonl").exists()
+
+
+def test_session_rollup_is_idempotent_across_reruns(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """Re-running the bridge for the same session must not append a duplicate row."""
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    _write_trace(
+        trace,
+        [
+            {"ts": ts, "kind": "session_start", "task": "rerun guard"},
+            {
+                "ts": ts,
+                "kind": "tool_call",
+                "name": "read_file",
+                "args": {"path": "memory/knowledge/celery.md"},
+            },
+            {
+                "ts": ts,
+                "kind": "tool_result",
+                "name": "read_file",
+                "is_error": False,
+                "content_preview": "...",
+            },
+            {"ts": ts, "kind": "session_end", "turns": 1},
+        ],
+    )
+    run_trace_bridge(trace, memory)
+    run_trace_bridge(trace, memory)
+
+    rollup_path = repo / "core" / "memory" / "knowledge" / "_session-rollups.jsonl"
+    rows = [
+        line for line in rollup_path.read_text(encoding="utf-8").splitlines() if line
+    ]
+    assert len(rows) == 1
+
+
 def test_reflection_surfaces_agent_trace_events(
     repo: Path, memory: EngramMemory, tmp_path: Path
 ) -> None:

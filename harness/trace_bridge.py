@@ -166,6 +166,7 @@ def run_trace_bridge(
         access_count = _emit_access_entries(
             memory, tool_calls, stats, content_prefix=content_prefix
         )
+        _emit_session_rollups(memory, tool_calls, stats, content_prefix=content_prefix)
 
     if trace_path.is_file():
         try:
@@ -179,7 +180,10 @@ def run_trace_bridge(
     commit_sha: str | None = None
     if commit:
         commit_sha = _commit_artifacts(
-            memory, written + _access_paths(memory, tool_calls, content_prefix=content_prefix)
+            memory,
+            written
+            + _access_paths(memory, tool_calls, content_prefix=content_prefix)
+            + _rollup_paths(memory, content_prefix),
         )
 
     if otel_endpoint := os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
@@ -273,6 +277,7 @@ def _run_subsession_bridge(
     _write_artifact(reflection_path, reflection_text)
 
     access_count = _emit_access_entries(memory, tool_calls, stats, content_prefix=content_prefix)
+    _emit_session_rollups(memory, tool_calls, stats, content_prefix=content_prefix)
 
     written = [
         _relpath(memory, summary_path),
@@ -481,6 +486,18 @@ def _render_summary(
     if stats.end_reason:
         body_lines.append(f"- End reason: {stats.end_reason}")
     body_lines.append("")
+
+    # Surface the agent's wrap-up text. ``end_session`` stashes it on
+    # ``memory.session_summary`` so the bridge can render it here when the
+    # caller opts into deferred artifacts. The getattr guard keeps the
+    # bridge backward-compatible with custom MemoryBackend instances that
+    # don't expose the field.
+    agent_summary = (getattr(memory, "session_summary", "") or "").strip()
+    if agent_summary:
+        body_lines.append("## Summary")
+        body_lines.append("")
+        body_lines.append(agent_summary)
+        body_lines.append("")
 
     if sub_sessions:
         body_lines.append("## Sub-sessions")
@@ -726,6 +743,157 @@ def _emit_access_entries(
                 f.write(json.dumps(entry, separators=(",", ":")) + "\n")
         total += len(deduped)
     return total
+
+
+# Session-rollup sidecar lives next to each namespace's ACCESS.jsonl.
+# One JSONL row per (session, namespace) pair with aggregate stats —
+# the cheap, harness-resident analogue of Engram's external aggregation
+# pipeline. Idempotent: dedupes on (session_id, date) so reruns don't
+# double-count.
+_SESSION_ROLLUP_FILENAME = "_session-rollups.jsonl"
+_TOP_FILES_PER_ROLLUP = 5
+
+
+def _emit_session_rollups(
+    memory: EngramMemory,
+    tool_calls: list[_ToolCall],
+    stats: _SessionStats,
+    *,
+    content_prefix: str = "core",
+) -> int:
+    """Append a per-namespace session rollup row alongside each ACCESS.jsonl.
+
+    For every ACCESS_ROOT that gained rows in this session, compute a
+    summary row (rows_added, mean/max helpfulness, top files by
+    helpfulness) and append it to ``<namespace>/_session-rollups.jsonl``.
+    Returns the number of rollup rows written.
+
+    This is the session-boundary half of what Engram's external
+    aggregation pipeline does. It does *not* update per-file SUMMARY.md
+    or compute co-retrieval clusters — those still belong to the deeper
+    aggregation pass — but it gives the harness an in-process, append-only
+    audit trail of what each session contributed to each namespace.
+    """
+    # Re-derive entries per namespace from the same source data
+    # _emit_access_entries uses. Cheap; keeps this function independent.
+    entries_by_ns: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    access_date = stats.session_date or datetime.now().date().isoformat()
+    task_slug = _task_slug(stats.task) or memory.session_id
+    _prefix = content_prefix.strip("/")
+    canonical_session_id = (
+        f"{_prefix}/{memory._session_dir_rel()}" if _prefix else memory._session_dir_rel()
+    )
+
+    for idx, tc in enumerate(tool_calls):
+        if tc.name != "read_file":
+            continue
+        arg_path = tc.args.get("path") or tc.args.get("file_path")
+        if not arg_path:
+            continue
+        ns = _access_namespace(str(arg_path), content_prefix)
+        if not ns:
+            continue
+        helpfulness, _ = _derive_read_helpfulness(str(arg_path), idx, tool_calls)
+        entries_by_ns[ns].append(
+            {
+                "file": _normalize_for_access(str(arg_path), content_prefix),
+                "helpfulness": float(helpfulness),
+            }
+        )
+
+    for ev in memory.recall_events:
+        if getattr(ev, "phase", "manifest") == "fetch":
+            continue
+        ns = _access_namespace(ev.file_path, content_prefix)
+        if not ns:
+            continue
+        helpfulness, _ = _derive_recall_helpfulness(ev.file_path, ev.timestamp, tool_calls)
+        entries_by_ns[ns].append(
+            {
+                "file": _normalize_for_access(ev.file_path, content_prefix),
+                "helpfulness": float(helpfulness),
+            }
+        )
+
+    written = 0
+    for ns, raw_entries in entries_by_ns.items():
+        if not raw_entries:
+            continue
+        helpfulness_by_file: dict[str, float] = {}
+        for entry in raw_entries:
+            f = entry["file"]
+            score = entry["helpfulness"]
+            # Keep the strongest signal per file in case of repeat reads.
+            if score > helpfulness_by_file.get(f, -1.0):
+                helpfulness_by_file[f] = score
+        rows_added = len(raw_entries)
+        files_touched = len(helpfulness_by_file)
+        mean_helpfulness = round(
+            sum(helpfulness_by_file.values()) / files_touched, 3
+        )
+        max_helpfulness = round(max(helpfulness_by_file.values()), 3)
+        top_files = [
+            {"file": f, "helpfulness": round(s, 3)}
+            for f, s in sorted(
+                helpfulness_by_file.items(), key=lambda kv: kv[1], reverse=True
+            )[:_TOP_FILES_PER_ROLLUP]
+        ]
+        rollup_row = {
+            "session_id": canonical_session_id,
+            "date": access_date,
+            "task": task_slug,
+            "rows_added": rows_added,
+            "files_touched": files_touched,
+            "mean_helpfulness": mean_helpfulness,
+            "max_helpfulness": max_helpfulness,
+            "top_files": top_files,
+        }
+        rollup_path = memory.content_root / ns / _SESSION_ROLLUP_FILENAME
+        if _rollup_already_recorded(rollup_path, canonical_session_id, access_date):
+            continue
+        rollup_path.parent.mkdir(parents=True, exist_ok=True)
+        with rollup_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rollup_row, separators=(",", ":")) + "\n")
+        written += 1
+    return written
+
+
+def _rollup_paths(memory: EngramMemory, content_prefix: str) -> list[str]:
+    """Return content-relative paths to every namespace rollup file.
+
+    The trace bridge stages and commits these alongside ACCESS.jsonl, so
+    the rollups land in the same atomic commit as the artifacts that
+    produced them.
+    """
+    out: list[str] = []
+    for ns in _ACCESS_ROOTS:
+        rollup_abs = memory.content_root / ns / _SESSION_ROLLUP_FILENAME
+        if rollup_abs.is_file():
+            out.append(f"{ns}/{_SESSION_ROLLUP_FILENAME}")
+    return out
+
+
+def _rollup_already_recorded(
+    rollup_path: Path, session_id: str, date: str
+) -> bool:
+    """Idempotency guard so rerunning the bridge doesn't duplicate rollup rows."""
+    if not rollup_path.is_file():
+        return False
+    try:
+        with rollup_path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("session_id") == session_id and rec.get("date") == date:
+                    return True
+    except OSError:
+        return False
+    return False
 
 
 def _sidecar_dedupe_entries(
