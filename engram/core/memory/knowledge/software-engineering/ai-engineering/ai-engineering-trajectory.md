@@ -97,3 +97,31 @@ Where AI-assisted development is heading — capability trends, emerging pattern
 - Documentation writing — AI-generated docs are approaching human quality for technical content
 
 **The meta-skill**: Learning to effectively collaborate with AI — knowing when to delegate, how to verify output, and when to take manual control. This is the new literacy.
+
+---
+
+## 7. Research Grounding for These Predictions
+
+The trajectory predictions above are grounded in specific frontier research findings:
+
+**Test-time compute scaling** is not speculative — it is an observed scaling law documented in Snell et al. (2024) "Scaling LLM Test-Time Compute Optimally" and demonstrated by o1→o3 progression. The performance ceiling of this scaling axis has not been reached as of 2026. See `ai/frontier/reasoning/test-time-compute-scaling.md`.
+
+**Persistent agents** depend on the memory architecture gap described in `ai/frontier/retrieval-memory/persistent-memory-architectures.md`. The cognitive memory taxonomy (episodic, semantic, procedural) maps onto what persistent agent infrastructure must provide. The gap is real and current solutions (vector stores, conversation history) do not fully close it.
+
+**Agent reliability** numbers (~70-90% for simple tasks, ~20-40% for complex refactors) are consistent with SWE-bench and similar evaluation results as of 2025-2026. The bottleneck is error recovery and cross-file coherence, not raw code generation quality. See `testing/ml-evaluation-methodology.md` for evaluation methodology.
+
+**Synthetic data feedback loops** are documented in `ai/frontier/architectures/synthetic-data-self-improvement.md`. The trust inflation risk is not a prediction — it is a consequence of the current training distribution trend that is already underway.
+
+**Prompt injection as a security surface** is documented in the multi-agent coordination research (`ai/frontier/multi-agent/multi-agent-coordination.md`). The risk grows proportionally with agent tool access and external content exposure. It is not a hypothetical — jailbreaks via embedded document instructions have been demonstrated on every major agent system.
+
+**The "autonomous zone" expansion** prediction assumes continued improvement in error detection and recovery. The specific bottleneck is not capability but reliability: agents can often produce correct code but cannot reliably detect when they have produced incorrect code. As evaluation and verification infrastructure matures (LangSmith, Langfuse, eval frameworks), this gap closes.
+
+## 8. Cross-References
+
+- `reasoning-models-for-engineers.md` — what test-time compute scaling means for engineering practice now
+- `trusting-ai-output.md` — the RLHF grounding for why AI reliability is hard to improve
+- `agentic-system-design.md` — current best practices for agentic systems given current reliability
+- `ai/frontier/reasoning/test-time-compute-scaling.md` — the research behind test-time compute predictions
+- `ai/frontier/architectures/synthetic-data-self-improvement.md` — training data feedback loop research
+- `ai/frontier/multi-agent/multi-agent-coordination.md` — security surface and prompt injection
+- `ai/tools/agent-memory-in-ai-ecosystem.md` — memory system positioning in the trajectory

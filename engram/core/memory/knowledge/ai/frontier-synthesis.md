@@ -163,3 +163,35 @@ The following files contain the primary source material for this synthesis, in p
 | [architectures/synthetic-data-self-improvement.md](frontier/architectures/synthetic-data-self-improvement.md) | Source field importance; trust inflation from synthetic data |
 | [retrieval-memory/reranking-two-stage-retrieval.md](frontier/retrieval-memory/reranking-two-stage-retrieval.md) | Two-stage retrieval baseline; position bias in context |
 | [agentic-frameworks.md](frontier/agentic-frameworks.md) | LangGraph/CrewAI/LlamaIndex; the right framework theory for different failure modes |
+
+---
+
+## 9. What Frontier Research Means for AI Engineering Practice
+
+*This section bridges the Engram-focused synthesis above with the practitioner knowledge in `software-engineering/ai-engineering/`. The three bridge files there translate each major frontier finding into engineering decisions.*
+
+### The RLHF implications (→ `ai-engineering/trusting-ai-output.md`)
+
+Sections 3 and 7 above describe RLHF properties from the perspective of what this system must account for. The practitioner implication is direct: **every AI output, including code review suggestions, debugging hypotheses, and architectural recommendations, is subject to the same sycophancy and calibration problems described in the alignment research.** The fix is not better prompting — it is systematic verification through automated tools, behavioral testing, and adversarial prompting patterns that counteract sycophancy pressure.
+
+The hallucination taxonomy (fabrication, mis-attribution, temporal confusion, calibration failure) maps directly onto specific engineering mitigations: type checking catches fabrication; documentation cross-reference catches mis-attribution; date-aware prompting and retrieval address temporal confusion; chain-of-thought verification and alternative generation address calibration failure.
+
+### Reasoning models change the cost curve (→ `ai-engineering/reasoning-models-for-engineers.md`)
+
+Section 4 above notes that reasoning models are better at multi-step deduction. The engineering implication: reasoning models are not drop-in replacements for standard models. They are 10-100x more expensive, have high first-token latency, and perform worse than standard models on simple tasks (the "overthinking" failure mode). The right architecture tiers model selection by task complexity, using reasoning models only for high-value decision and planning nodes, and standard models for execution steps.
+
+The agentic implications are specific: use reasoning models for the planning phase of plan-and-execute workflows, for critical verification nodes, and for hard debugging. Do not put reasoning models in the inner loop of agentic execution.
+
+### Multi-agent architecture patterns (→ `ai-engineering/agentic-system-design.md`)
+
+Sections 4 and 5 above describe agent architecture patterns and multi-agent risks from the system design perspective. The engineering translation covers: concrete orchestrator/subagent decomposition decisions, tool design principles that enable agent self-correction, HITL gate placement based on reversibility and ambiguity, and the multi-agent failure modes (prompt injection, trust hierarchy degeneration, concurrent write conflict) with specific mitigations.
+
+The key engineering insight from the frontier research: **trust enforcement must be in the tool layer, not in agent prompts.** Prompts instruct; tool schemas constrain. An agent given a tool with hard path restrictions cannot escape them regardless of what its prompt says. This shifts the security and correctness burden from prompt engineering (fragile) to tool design (robust).
+
+### Bridge files
+
+| Engineering concern | Bridge file | Primary frontier sources |
+|---|---|---|
+| Should I trust this AI output? | `ai-engineering/trusting-ai-output.md` | `alignment/rlhf-reward-models.md`, `interpretability/llm-representation-confabulation.md` |
+| When and how to use reasoning models? | `ai-engineering/reasoning-models-for-engineers.md` | `reasoning/reasoning-models.md`, `reasoning/test-time-compute-scaling.md`, `inference-time-compute.md` |
+| How to architect agentic systems? | `ai-engineering/agentic-system-design.md` | `agentic-frameworks.md`, `multi-agent/agent-architecture-patterns.md`, `multi-agent/human-in-the-loop.md` |

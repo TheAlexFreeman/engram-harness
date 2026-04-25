@@ -6,7 +6,7 @@ source: external-research
 topic: Reasoning models — o1, o3, DeepSeek R1, extended thinking
 trust: medium
 type: knowledge
-related: test-time-compute-scaling.md, benchmarking-reasoning.md, ../alignment/rlhf-reward-models.md, ../architectures/state-space-models.md, ../../history/frontier/multimodality-tool-use-and-reasoning-time-compute.md
+related: test-time-compute-scaling.md, benchmarking-reasoning.md, ../alignment/rlhf-reward-models.md, ../architectures/state-space-models.md, ../../history/frontier/multimodality-tool-use-and-reasoning-time-compute.md, ../../../software-engineering/ai-engineering/reasoning-models-for-engineers.md
 ---
 
 # Reasoning Models: o1, o3, DeepSeek R1, and Extended Thinking
