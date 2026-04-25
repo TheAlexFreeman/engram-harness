@@ -110,6 +110,7 @@ def run_trace_bridge(
     memory: EngramMemory,
     *,
     commit: bool = True,
+    model: str | None = None,
 ) -> TraceBridgeResult:
     """Process a finished trace file and write Engram artifacts.
 
@@ -119,6 +120,10 @@ def run_trace_bridge(
             session id, repo root, and recall-event log.
         commit: If True, stage and commit all artifacts in one commit. Set
             False in tests that prefer to inspect the working tree.
+        model: LLM identifier driving the session. Forwarded to the OTLP
+            exporter so spans get the correct ``gen_ai.provider.name`` and
+            ``gen_ai.request.model`` attributes. Optional; falls through to
+            empty when callers don't have it.
     """
     events = list(_read_events(trace_path))
     stats = _aggregate_stats(events)
@@ -195,6 +200,7 @@ def run_trace_bridge(
                 endpoint=otel_endpoint,
                 service_name="engram-harness",
                 session_id=memory.session_id,
+                model=model,
             )
             if n:
                 _log.info("OTLP export: %d spans → %s", n, otel_endpoint)

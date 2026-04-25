@@ -457,7 +457,11 @@ def _maybe_run_trace_bridge(session: ManagedSession) -> None:
     try:
         from harness.trace_bridge import run_trace_bridge
 
-        run_trace_bridge(session.components.trace_path, session.components.engram_memory)
+        run_trace_bridge(
+            session.components.trace_path,
+            session.components.engram_memory,
+            model=session.config.model,
+        )
     except Exception:
         pass
 

@@ -216,7 +216,11 @@ def run_trace_bridge_if_enabled(components: "SessionComponents") -> None:
     try:
         from harness.trace_bridge import run_trace_bridge
 
-        bridge_result = run_trace_bridge(components.trace_path, components.engram_memory)
+        bridge_result = run_trace_bridge(
+            components.trace_path,
+            components.engram_memory,
+            model=components.config.model,
+        )
         print(
             f"[engram] trace bridge: {len(bridge_result.artifacts)} artifact(s), "
             f"{bridge_result.access_entries} ACCESS entries"

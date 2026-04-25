@@ -9,6 +9,18 @@ Activation: set OTEL_EXPORTER_OTLP_ENDPOINT in the environment. The
 trace bridge calls export_session_spans() after every session when the env
 var is present. OTEL_SAMPLE_RATE (0.0–1.0, default 1.0) controls sampling;
 sessions with errors are always exported regardless of sample rate.
+
+Semantic conventions: emitted spans follow the OpenTelemetry GenAI semantic
+conventions (https://opentelemetry.io/docs/specs/semconv/gen-ai/) so traces
+are ingestible by Phoenix, LangSmith, Braintrust, Datadog, Helicone, etc.
+without translation. Span names use canonical operation forms
+(``invoke_agent <agent>``, ``execute_tool <tool>``, ``chat <model>``); the
+``gen_ai.*`` attribute namespace covers operation, provider, conversation,
+agent, tool, and usage data.
+
+Downstream consumers that pin a specific semconv version should set
+``OTEL_SEMCONV_STABILITY_OPT_IN`` per the OTel spec — this module always
+emits the latest stable GenAI attribute names.
 """
 
 from __future__ import annotations
@@ -18,6 +30,7 @@ import json
 import logging
 import os
 import random
+from dataclasses import dataclass
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
@@ -33,6 +46,44 @@ except ImportError:
 
 
 _DEFAULT_OTLP_BASE = "http://localhost:4318"
+_DEFAULT_AGENT_NAME = "engram-harness"
+
+
+def _gen_ai_provider_name_for_model(model: str | None) -> str | None:
+    """Map a model identifier to OTel GenAI ``gen_ai.provider.name``.
+
+    Values follow the well-known set in the GenAI semantic conventions
+    (https://opentelemetry.io/docs/specs/semconv/gen-ai/). Returns ``None``
+    when no model is given or the family is unknown.
+    """
+    if not model:
+        return None
+    m = model.lower()
+    if "claude" in m or "anthropic" in m:
+        return "anthropic"
+    if "grok" in m or "xai" in m or "x.ai" in m:
+        return "x_ai"
+    if "gpt" in m or "o1" in m or "openai" in m:
+        return "openai"
+    if "gemini" in m or "palm" in m:
+        return "gcp.gemini"
+    return None
+
+
+# Deprecated name kept for callers that imported the helper before the
+# semconv rename from ``gen_ai.system`` to ``gen_ai.provider.name``.
+_gen_ai_system_for_model = _gen_ai_provider_name_for_model
+
+
+def _gen_ai_operation(span_type: str) -> str:
+    """Map an internal span_type to the canonical ``gen_ai.operation.name``."""
+    if span_type == "tool_call":
+        return "execute_tool"
+    if span_type == "chat":
+        return "chat"
+    if span_type == "embeddings":
+        return "embeddings"
+    return span_type
 
 
 def _build_endpoint(base_or_full: str) -> str:
@@ -52,8 +103,10 @@ def export_session_spans(
     spans_jsonl_path: Path,
     *,
     endpoint: str | None = None,
-    service_name: str = "engram-harness",
+    service_name: str = _DEFAULT_AGENT_NAME,
     session_id: str | None = None,
+    model: str | None = None,
+    agent_name: str | None = None,
 ) -> int:
     """Export spans from a trace bridge JSONL file to an OTLP endpoint.
 
@@ -61,6 +114,11 @@ def export_session_spans(
     a base URL (``http://host:4318``); trailing slashes are stripped either way.
     When omitted the value of ``OTEL_EXPORTER_OTLP_ENDPOINT`` env var is used,
     falling back to ``http://localhost:4318``.
+
+    ``model`` is the LLM identifier driving the session — used to populate
+    ``gen_ai.provider.name`` and ``gen_ai.request.model`` on the root
+    invocation span. ``agent_name`` becomes ``gen_ai.agent.name`` (defaults
+    to the service name).
 
     Returns the number of spans exported. Returns 0 (without raising) if the
     OTel SDK is not installed, the spans file is missing/empty, or the session
@@ -112,13 +170,32 @@ def export_session_spans(
     trace_id = _session_trace_id(session_id or "")
     root_ctx = _build_root_context(trace_id)
 
-    root_span = _start_span(tracer, "harness.session", root_ctx)
+    resolved_agent = agent_name or service_name
+    gen_ai_provider = _gen_ai_provider_name_for_model(model)
+
+    root_span_name = f"invoke_agent {resolved_agent}"
+    root_span = _start_span(tracer, root_span_name, root_ctx)
     _set_attr(root_span, "session.id", session_id or "")
+    _set_attr(root_span, "gen_ai.operation.name", "invoke_agent")
+    _set_attr(root_span, "gen_ai.agent.name", resolved_agent)
+    if session_id:
+        _set_attr(root_span, "gen_ai.conversation.id", session_id)
+    if gen_ai_provider:
+        _set_attr(root_span, "gen_ai.provider.name", gen_ai_provider)
+    if model:
+        _set_attr(root_span, "gen_ai.request.model", model)
+
+    span_ctx = _SpanCommonContext(
+        session_id=session_id or "",
+        agent_name=resolved_agent,
+        gen_ai_provider_name=gen_ai_provider,
+        model=model,
+    )
 
     count = 0
     child_ctx = _span_to_context(root_span)
     for raw in spans_raw:
-        _emit_span(tracer, raw, child_ctx)
+        _emit_span(tracer, raw, child_ctx, span_ctx)
         count += 1
 
     root_span.end()
@@ -131,16 +208,47 @@ def export_session_spans(
 # ---------------------------------------------------------------------------
 
 
-def _emit_span(tracer, raw: dict, parent_ctx) -> None:
+@dataclass
+class _SpanCommonContext:
+    """Per-session attributes copied onto every emitted span.
+
+    These values come from the session as a whole (model, agent identity,
+    conversation id) and aren't repeated in each JSONL row, so the exporter
+    plumbs them through here.
+    """
+
+    session_id: str = ""
+    agent_name: str = _DEFAULT_AGENT_NAME
+    gen_ai_provider_name: str | None = None
+    model: str | None = None
+
+
+def _emit_span(
+    tracer,
+    raw: dict,
+    parent_ctx,
+    common: _SpanCommonContext | None = None,
+) -> None:
     """Translate one JSONL span dict into an OTel span and export it."""
     from opentelemetry.trace import SpanKind, StatusCode
 
+    if common is None:
+        common = _SpanCommonContext()
+
     span_type = raw.get("span_type", "tool_call")
     name = raw.get("name") or span_type
+    metadata = raw.get("metadata") or {}
+    operation_name = _gen_ai_operation(span_type)
+
+    # Canonical span name per OTel GenAI semconv: "<operation> <target>".
     if span_type == "tool_call":
-        otel_name = "gen_ai.tool"
+        otel_name = f"execute_tool {name}"
     elif span_type == "chat":
-        otel_name = "gen_ai.chat"
+        chat_model = metadata.get("model") or common.model or ""
+        otel_name = f"chat {chat_model}".strip()
+    elif span_type == "embeddings":
+        emb_model = metadata.get("model") or common.model or ""
+        otel_name = f"embeddings {emb_model}".strip()
     else:
         otel_name = f"harness.{span_type}"
 
@@ -156,16 +264,37 @@ def _emit_span(tracer, raw: dict, parent_ctx) -> None:
         start_time=start_ns or None,
     )
 
+    # Attributes that apply to every gen_ai span.
+    _set_attr(span, "gen_ai.operation.name", operation_name)
+    if common.gen_ai_provider_name:
+        _set_attr(span, "gen_ai.provider.name", common.gen_ai_provider_name)
+    if common.session_id:
+        _set_attr(span, "gen_ai.conversation.id", common.session_id)
+    _set_attr(span, "gen_ai.agent.name", common.agent_name)
+
     if span_type == "tool_call":
         _set_attr(span, "gen_ai.tool.name", name)
-        meta = raw.get("metadata") or {}
-        args_summary = meta.get("args_summary", "")
+        # Function-style call by default; lets consumers distinguish from
+        # native (provider-side) tools later.
+        _set_attr(span, "gen_ai.tool.type", "function")
+        seq = metadata.get("seq")
+        if seq is not None:
+            _set_attr(span, "gen_ai.tool.call.id", str(seq))
+        args_summary = metadata.get("args_summary", "")
         if args_summary:
             _set_attr(span, "gen_ai.tool.input", str(args_summary)[:500])
-    elif span_type == "chat":
-        model = (raw.get("metadata") or {}).get("model", "")
-        if model:
-            _set_attr(span, "gen_ai.request.model", model)
+    elif span_type in ("chat", "embeddings"):
+        chat_model = metadata.get("model") or common.model
+        if chat_model:
+            _set_attr(span, "gen_ai.request.model", chat_model)
+            _set_attr(span, "gen_ai.response.model", chat_model)
+        for key, attr in (
+            ("input_tokens", "gen_ai.usage.input_tokens"),
+            ("output_tokens", "gen_ai.usage.output_tokens"),
+        ):
+            value = metadata.get(key)
+            if isinstance(value, (int, float)):
+                _set_attr(span, attr, int(value))
 
     cost = raw.get("cost") or {}
     if isinstance(cost, dict) and "usd" in cost:
@@ -246,4 +375,11 @@ def _iso_to_ns(iso: str) -> int:
         return 0
 
 
-__all__ = ["export_session_spans", "_build_endpoint", "_OTEL_AVAILABLE"]
+__all__ = [
+    "export_session_spans",
+    "_build_endpoint",
+    "_OTEL_AVAILABLE",
+    "_gen_ai_provider_name_for_model",
+    "_gen_ai_system_for_model",
+    "_gen_ai_operation",
+]
