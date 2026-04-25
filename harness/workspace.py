@@ -403,6 +403,10 @@ class Workspace:
         a peer of both the ``engram/`` and ``harness/`` packages, not
         a subdirectory of either. Tests typically pass a ``tmp_path`` to
         get an isolated workspace at ``tmp_path/workspace``.
+    workspace_path
+        If set, use this directory as the workspace root instead of
+        ``root / "workspace"`` (for custom ``--workspace-dir`` paths that
+        are not literally named ``workspace``).
     session_id
         Identifier used for the per-session scratch file. Optional — the
         scratch op falls back to the process-local isoformat timestamp if
@@ -416,11 +420,16 @@ class Workspace:
         self,
         root: Path,
         *,
+        workspace_path: Path | None = None,
         session_id: str | None = None,
         today_provider=date.today,
     ):
-        self.root = Path(root).resolve()
-        self.dir = self.root / "workspace"
+        if workspace_path is not None:
+            self.dir = Path(workspace_path).resolve()
+            self.root = self.dir.parent
+        else:
+            self.root = Path(root).resolve()
+            self.dir = self.root / "workspace"
         self.session_id = session_id
         self._today = today_provider
 
