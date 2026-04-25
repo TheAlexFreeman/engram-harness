@@ -36,6 +36,11 @@ class WebSearch:
         "Set BRAVE_API_KEY, TAVILY_API_KEY, or AZURE_BING_SEARCH_KEY (+ optional AZURE_BING_SEARCH_ENDPOINT for Bing). "
         "Set HARNESS_SEARCH_DISABLED=1 to disable live search (tool still available; returns guidance)."
     )
+    # Search results are attacker-influenceable (SEO, ranking manipulation,
+    # adversarial pages). The ``execute`` shim wraps the content in
+    # ``<untrusted_tool_output>`` markers so the model can distinguish it
+    # from harness-trusted text.
+    untrusted_output = True
     input_schema = {
         "type": "object",
         "properties": {
