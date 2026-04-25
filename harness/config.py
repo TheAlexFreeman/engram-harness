@@ -46,6 +46,11 @@ class SessionConfig:
     max_turns: int = 100
     max_parallel_tools: int = 4
     repeat_guard_threshold: int = 3
+    # Hard-stop streak length; None disables loop termination (only the soft
+    # nudge fires). When set, the run aborts with stopped_by_loop_detection
+    # once the same (input + result) batch has run this many times in a row.
+    repeat_guard_terminate_at: int | None = None
+    repeat_guard_exempt_tools: list[str] = field(default_factory=list)
     error_recall_threshold: int = 0  # 0 = disabled; set to e.g. 3 to enable
 
     # Streaming / tracing
@@ -138,6 +143,8 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         max_turns=args.max_turns,
         max_parallel_tools=args.max_parallel_tools,
         repeat_guard_threshold=args.repeat_guard_threshold,
+        repeat_guard_terminate_at=getattr(args, "repeat_guard_terminate_at", None),
+        repeat_guard_exempt_tools=list(getattr(args, "repeat_guard_exempt", None) or []),
         error_recall_threshold=getattr(args, "error_recall_threshold", 0),
         stream=args.stream,
         trace_live=args.trace_live,

@@ -221,8 +221,33 @@ def _parse_args() -> argparse.Namespace:
         default=3,
         metavar="N",
         help=(
-            "Abort repetitive tool loops: after N consecutive identical tool batches, "
-            "inject a user nudge. Use 0 to disable."
+            "Abort repetitive tool loops: after N consecutive identical tool batches "
+            "(matching both input arguments and a hash of tool_result content), "
+            "inject a user nudge. Use 0 to disable soft nudges only; "
+            "--repeat-guard-terminate-at still applies when set."
+        ),
+    )
+    parser.add_argument(
+        "--repeat-guard-terminate-at",
+        type=int,
+        default=None,
+        metavar="N",
+        dest="repeat_guard_terminate_at",
+        help=(
+            "Hard-stop the run when the same input+result batch has occurred N "
+            "times in a row. Defaults to disabled (only the soft nudge fires)."
+        ),
+    )
+    parser.add_argument(
+        "--repeat-guard-exempt",
+        action="append",
+        default=None,
+        metavar="TOOL",
+        dest="repeat_guard_exempt",
+        help=(
+            "Exempt a tool from loop detection (repeatable). Use for tools that "
+            "are legitimately invoked many times in a row, e.g. polling or "
+            "heartbeat tools."
         ),
     )
     parser.add_argument(

@@ -250,6 +250,8 @@ def _run_session(session: ManagedSession) -> None:
             max_parallel_tools=session.config.max_parallel_tools,
             stream_sink=session.components.stream_sink,
             repeat_guard_threshold=session.config.repeat_guard_threshold,
+            repeat_guard_terminate_at=session.config.repeat_guard_terminate_at,
+            repeat_guard_exempt_tools=session.config.repeat_guard_exempt_tools,
             error_recall_threshold=session.config.error_recall_threshold,
             stop_event=session.stop_event,
             skip_end_session_commit=_bridge_enabled(session),
@@ -309,6 +311,8 @@ def _run_interactive_session(session: ManagedSession) -> None:
             max_parallel_tools=config.max_parallel_tools,
             stream_sink=stream_sink,
             repeat_guard_threshold=config.repeat_guard_threshold,
+            repeat_guard_terminate_at=config.repeat_guard_terminate_at,
+            repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
             error_recall_threshold=config.error_recall_threshold,
             stop_event=session.stop_event,
         )
@@ -353,6 +357,8 @@ def _run_interactive_session(session: ManagedSession) -> None:
                 max_parallel_tools=config.max_parallel_tools,
                 stream_sink=stream_sink,
                 repeat_guard_threshold=config.repeat_guard_threshold,
+                repeat_guard_terminate_at=config.repeat_guard_terminate_at,
+                repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
                 error_recall_threshold=config.error_recall_threshold,
                 stop_event=session.stop_event,
             )

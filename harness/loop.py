@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -9,7 +11,7 @@ from harness.memory import MemoryBackend
 from harness.modes.base import Mode
 from harness.pricing import PricingTable, compute_cost, load_pricing
 from harness.stream import StreamSink
-from harness.tools import Tool, ToolCall, execute
+from harness.tools import Tool, ToolCall, ToolResult, execute
 from harness.trace import TraceSink
 from harness.usage import Usage
 
@@ -27,12 +29,40 @@ _DEFAULT_ERROR_RECALL_MESSAGE_TEMPLATE = (
 )
 
 
-def _tool_batch_signature(tool_calls: list[ToolCall]) -> tuple[tuple[str, str], ...]:
-    """Stable, order-independent signature for a batch of tool calls."""
-    parts: list[tuple[str, str]] = []
-    for c in tool_calls:
-        blob = json.dumps(c.args, sort_keys=True, default=str, separators=(",", ":"))
-        parts.append((c.name, blob))
+def _hash_result(content: str) -> str:
+    """Short stable hash of a tool result; used as the result-side of the loop signature."""
+    return hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+
+def _tool_batch_signature(
+    tool_calls: list[ToolCall],
+    results: list[ToolResult] | None = None,
+    *,
+    exempt_tools: Iterable[str] | None = None,
+) -> tuple[tuple[str, str, str], ...] | None:
+    """Stable, order-independent signature for a batch of (tool_call, result) pairs.
+
+    The signature folds in a hash of each tool_result so that identical inputs
+    that produce different outputs (e.g. polling a status endpoint) do NOT
+    register as a loop. Identical inputs producing identical outputs do.
+
+    Returns ``None`` when at least one tool in the batch is in
+    ``exempt_tools`` — those batches are excluded from loop detection
+    entirely. Pass ``results=None`` for input-only signatures (used by
+    callers that want pre-execution dedup).
+    """
+    exempt = set(exempt_tools or ())
+    if exempt and any(c.name in exempt for c in tool_calls):
+        return None
+
+    parts: list[tuple[str, str, str]] = []
+    for i, c in enumerate(tool_calls):
+        args_blob = json.dumps(c.args, sort_keys=True, default=str, separators=(",", ":"))
+        if results is not None and i < len(results):
+            result_hash = _hash_result(results[i].content)
+        else:
+            result_hash = ""
+        parts.append((c.name, args_blob, result_hash))
     return tuple(sorted(parts))
 
 
@@ -43,6 +73,7 @@ class RunResult:
     turns_used: int = 0
     max_turns_reached: bool = False
     stopped_by_user: bool = False
+    stopped_by_loop_detection: bool = False
 
 
 def run_until_idle(
@@ -58,6 +89,8 @@ def run_until_idle(
     *,
     repeat_guard_threshold: int = 3,
     repeat_guard_message: str | None = None,
+    repeat_guard_terminate_at: int | None = None,
+    repeat_guard_exempt_tools: Iterable[str] | None = None,
     error_recall_threshold: int = 0,
     stop_event: threading.Event | None = None,
 ) -> RunResult:
@@ -74,9 +107,11 @@ def run_until_idle(
 
     total = Usage.zero()
 
-    prev_batch_sig: tuple[tuple[str, str], ...] | None = None
+    prev_batch_sig: tuple[tuple[str, str, str], ...] | None = None
     repeat_streak = 0
+    nudge_fired_for_streak = False
     nudge_text = repeat_guard_message or _DEFAULT_REPEAT_GUARD_MESSAGE
+    exempt_tools = set(repeat_guard_exempt_tools or ())
     tool_seq = 0
     # Per-tool consecutive-error counts; reset to 0 on a successful call.
     tool_error_streaks: dict[str, int] = {}
@@ -227,15 +262,66 @@ def run_until_idle(
                     tool_error_streaks[tool_name] = 0
                     break  # one nudge per turn is enough
 
-        if repeat_guard_threshold > 0 and tool_calls:
-            batch_sig = _tool_batch_signature(tool_calls)
-            if prev_batch_sig is not None and batch_sig == prev_batch_sig:
-                repeat_streak += 1
+        repeat_guard_active = tool_calls and (
+            repeat_guard_threshold > 0
+            or (repeat_guard_terminate_at is not None and repeat_guard_terminate_at > 0)
+        )
+        if repeat_guard_active:
+            batch_sig = _tool_batch_signature(tool_calls, results, exempt_tools=exempt_tools)
+            if batch_sig is None:
+                # Batch contained an exempt tool — leave streak unchanged so a
+                # legitimate poll/heartbeat tool doesn't break a streak elsewhere
+                # nor accumulate one of its own.
+                pass
             else:
-                repeat_streak = 1
-            prev_batch_sig = batch_sig
+                if prev_batch_sig is not None and batch_sig == prev_batch_sig:
+                    repeat_streak += 1
+                else:
+                    repeat_streak = 1
+                    nudge_fired_for_streak = False
+                prev_batch_sig = batch_sig
 
-            if repeat_streak >= repeat_guard_threshold:
+            # Hard terminate first so streak ≥ terminate_at takes priority over
+            # the soft nudge — if both thresholds fire on the same turn we end
+            # the run rather than nudging into a dead end.
+            if (
+                batch_sig is not None
+                and repeat_guard_terminate_at is not None
+                and repeat_guard_terminate_at > 0
+                and repeat_streak >= repeat_guard_terminate_at
+            ):
+                sig_preview = str(batch_sig)
+                if len(sig_preview) > 500:
+                    sig_preview = sig_preview[:497] + "..."
+                tracer.event(
+                    "loop_detected",
+                    turn=turn,
+                    streak=repeat_streak,
+                    terminate_at=repeat_guard_terminate_at,
+                    signature=sig_preview,
+                )
+                memory.record(
+                    f"loop_detected: same tool batch+result {repeat_streak}x "
+                    f"(terminate_at={repeat_guard_terminate_at}) — terminating",
+                    kind="error",
+                )
+                return RunResult(
+                    final_text=(
+                        "(loop detected: identical tool batches with identical "
+                        f"results, streak={repeat_streak})"
+                    ),
+                    usage=total,
+                    turns_used=turn + 1,
+                    max_turns_reached=False,
+                    stopped_by_loop_detection=True,
+                )
+
+            if (
+                batch_sig is not None
+                and repeat_guard_threshold > 0
+                and repeat_streak >= repeat_guard_threshold
+                and not nudge_fired_for_streak
+            ):
                 sig_preview = str(batch_sig)
                 if len(sig_preview) > 500:
                     sig_preview = sig_preview[:497] + "..."
@@ -251,7 +337,15 @@ def run_until_idle(
                     kind="error",
                 )
                 messages.append({"role": "user", "content": nudge_text})
-                repeat_streak = 0
+                nudge_fired_for_streak = True
+                # Backward-compat: when hard-terminate is disabled, reset the
+                # streak so a fresh repeat starts a new cycle. With terminate
+                # enabled, leave the streak intact so it can grow into the
+                # higher threshold if the model ignores the nudge.
+                if repeat_guard_terminate_at is None:
+                    repeat_streak = 0
+                    prev_batch_sig = None
+                    nudge_fired_for_streak = False
 
     return RunResult(
         final_text="(max turns reached without completion)",
@@ -338,6 +432,8 @@ def run(
     *,
     repeat_guard_threshold: int = 3,
     repeat_guard_message: str | None = None,
+    repeat_guard_terminate_at: int | None = None,
+    repeat_guard_exempt_tools: Iterable[str] | None = None,
     error_recall_threshold: int = 0,
     skip_end_session_commit: bool = False,
     stop_event: threading.Event | None = None,
@@ -361,6 +457,8 @@ def run(
         stream_sink=stream_sink,
         repeat_guard_threshold=repeat_guard_threshold,
         repeat_guard_message=repeat_guard_message,
+        repeat_guard_terminate_at=repeat_guard_terminate_at,
+        repeat_guard_exempt_tools=repeat_guard_exempt_tools,
         error_recall_threshold=error_recall_threshold,
         stop_event=stop_event,
     )
@@ -399,6 +497,13 @@ def run(
             defer_artifacts=defer,
         )
         tracer.event("session_end", turns=result.turns_used, reason="stopped")
+    elif result.stopped_by_loop_detection:
+        memory.end_session(
+            summary=result.final_text[:2000],
+            skip_commit=skip_end_session_commit,
+            defer_artifacts=defer,
+        )
+        tracer.event("session_end", turns=result.turns_used, reason="loop_detected")
     else:
         memory.end_session(
             summary=result.final_text[:2000],
