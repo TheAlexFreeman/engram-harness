@@ -697,3 +697,92 @@ def test_plan_advance_without_session_id_does_not_track(tmp_path: Path) -> None:
     _, state = ws.plan_load("p", "plan-a")
     assert state["sessions_used"] == 0
     assert state["sessions_touched"] == []
+
+
+# ---------------------------------------------------------------------------
+# list_active_plans — single source of truth for the workspace plan scan
+# ---------------------------------------------------------------------------
+
+
+def test_list_active_plans_returns_empty_when_no_plans(ws: Workspace) -> None:
+    assert ws.list_active_plans() == []
+
+
+def test_list_active_plans_respects_custom_workspace_path(tmp_path: Path) -> None:
+    """A non-conventional directory name (not ``workspace/``) is scanned as-is."""
+    custom = tmp_path / "my-ws"
+    w = Workspace(tmp_path, workspace_path=custom, session_id="act-001")
+    w.ensure_layout()
+    assert w.dir == custom
+    w.project_create("p", goal="g")
+    w.plan_create("p", "only", "x", phases=[{"title": "P1"}])
+    found = w.list_active_plans()
+    assert [ap.plan_id for ap in found] == ["only"]
+
+
+def test_list_active_plans_returns_only_active_plans(ws: Workspace) -> None:
+    ws.project_create("p", goal="g")
+    ws.plan_create("p", "active-a", "active plan", phases=[{"title": "P1"}])
+    ws.plan_create("p", "done-a", "done plan", phases=[{"title": "P1"}])
+    # Mark the second plan completed.
+    state_path = ws.dir / "projects" / "p" / "plans" / "done-a.run-state.json"
+    import json as _json
+
+    state = _json.loads(state_path.read_text(encoding="utf-8"))
+    state["status"] = "completed"
+    state_path.write_text(_json.dumps(state), encoding="utf-8")
+
+    found = ws.list_active_plans()
+    assert [ap.plan_id for ap in found] == ["active-a"]
+
+
+def test_list_active_plans_sorts_most_recently_modified_first(
+    ws: Workspace, tmp_path: Path
+) -> None:
+    import os as _os
+
+    ws.project_create("p", goal="g")
+    ws.plan_create("p", "older", "older plan", phases=[{"title": "P1"}])
+    older_state = ws.dir / "projects" / "p" / "plans" / "older.run-state.json"
+    _os.utime(older_state, (1_700_000_000, 1_700_000_000))
+    ws.plan_create("p", "newer", "newer plan", phases=[{"title": "P1"}])
+
+    found = ws.list_active_plans()
+    assert [ap.plan_id for ap in found] == ["newer", "older"]
+
+
+def test_list_active_plans_tolerates_malformed_run_state(
+    ws: Workspace,
+) -> None:
+    """A broken JSON file shouldn't take out the whole listing."""
+    ws.project_create("p", goal="g")
+    ws.plan_create("p", "good", "fine plan", phases=[{"title": "P1"}])
+    bad = ws.dir / "projects" / "p" / "plans" / "broken.run-state.json"
+    bad.write_text("{not: valid json", encoding="utf-8")
+    # Sibling YAML so the path looks plausible.
+    bad.with_suffix(".yaml").parent  # noqa: B018 — keep import-style consistency
+    (ws.dir / "projects" / "p" / "plans" / "broken.yaml").write_text(
+        "plan_id: broken\npurpose: x\nphases: []\n", encoding="utf-8"
+    )
+
+    found = ws.list_active_plans()
+    assert [ap.plan_id for ap in found] == ["good"]
+
+
+def test_list_active_plans_carries_plan_doc_and_state(ws: Workspace) -> None:
+    """Callers should be able to render briefings without re-reading disk."""
+    ws.project_create("p", goal="g")
+    ws.plan_create(
+        "p",
+        "ship-it",
+        "Ship the thing",
+        phases=[{"title": "Phase A"}, {"title": "Phase B"}],
+    )
+    found = ws.list_active_plans()
+    assert len(found) == 1
+    ap = found[0]
+    assert ap.project == "p"
+    assert ap.plan_id == "ship-it"
+    assert ap.plan_doc.get("purpose") == "Ship the thing"
+    assert ap.run_state.get("status") == "active"
+    assert ap.state_path.is_file()

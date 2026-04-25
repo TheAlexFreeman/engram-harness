@@ -259,6 +259,23 @@ class ResolvedQuestion:
 
 
 @dataclass
+class ActivePlan:
+    """An ``status == active`` plan discovered by ``Workspace.list_active_plans``.
+
+    Carries everything callers need (briefings, status tables, the
+    SessionStore index row) so the workspace glob runs once per
+    look-up regardless of how many projections are needed.
+    """
+
+    project: str
+    plan_id: str
+    plan_doc: dict  # parsed plan YAML
+    run_state: dict  # parsed run-state JSON
+    state_path: Path  # absolute path to <plan>.run-state.json
+    mtime: float  # st_mtime of state_path; used for ranking
+
+
+@dataclass
 class Project:
     """Pointer to a project directory under ``projects/<name>/``."""
 
@@ -386,6 +403,10 @@ class Workspace:
         a peer of both the ``engram/`` and ``harness/`` packages, not
         a subdirectory of either. Tests typically pass a ``tmp_path`` to
         get an isolated workspace at ``tmp_path/workspace``.
+    workspace_path
+        If set, use this directory as the workspace root instead of
+        ``root / "workspace"`` (for custom ``--workspace-dir`` paths that
+        are not literally named ``workspace``).
     session_id
         Identifier used for the per-session scratch file. Optional — the
         scratch op falls back to the process-local isoformat timestamp if
@@ -399,11 +420,16 @@ class Workspace:
         self,
         root: Path,
         *,
+        workspace_path: Path | None = None,
         session_id: str | None = None,
         today_provider=date.today,
     ):
-        self.root = Path(root).resolve()
-        self.dir = self.root / "workspace"
+        if workspace_path is not None:
+            self.dir = Path(workspace_path).resolve()
+            self.root = self.dir.parent
+        else:
+            self.root = Path(root).resolve()
+            self.dir = self.root / "workspace"
         self.session_id = session_id
         self._today = today_provider
 
@@ -1217,6 +1243,62 @@ class Workspace:
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
 
+    def list_active_plans(self) -> "list[ActivePlan]":
+        """Scan the workspace for plans with ``status == "active"``.
+
+        Returns the ranked list of active plans, most-recently-modified
+        first. Each entry carries the parsed plan YAML, the run-state
+        JSON, and metadata so callers can pick whichever projection
+        they need (briefing, status table, SessionStore index row, …).
+
+        Tolerant: stale symlinks and malformed JSON/YAML are silently
+        skipped — start_session and ``harness status`` must never raise
+        because of corrupt workspace state.
+
+        This is the single source of truth for "which plans are active
+        for this workspace?" — both ``EngramMemory._active_plan_briefing``
+        and ``cmd_status._print_active_plans`` route through here.
+        """
+        import yaml
+
+        # Pair paths with their mtimes up front so a race between
+        # glob() and stat() (stale symlink, file removed mid-scan)
+        # doesn't propagate OSError into callers.
+        candidates: list[tuple[float, Path]] = []
+        for p in self.dir.glob("projects/*/plans/*.run-state.json"):
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:
+                continue
+            candidates.append((mtime, p))
+        candidates.sort(key=lambda pair: pair[0], reverse=True)
+
+        out: list[ActivePlan] = []
+        for mtime, state_path in candidates:
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if state.get("status") != PLAN_STATUS_ACTIVE:
+                continue
+            plan_id = state_path.name[: -len(".run-state.json")]
+            plan_path = state_path.with_name(f"{plan_id}.yaml")
+            try:
+                plan_doc = yaml.safe_load(plan_path.read_text(encoding="utf-8")) or {}
+            except (OSError, yaml.YAMLError):
+                continue
+            out.append(
+                ActivePlan(
+                    project=state_path.parent.parent.name,
+                    plan_id=plan_id,
+                    plan_doc=plan_doc,
+                    run_state=state,
+                    state_path=state_path,
+                    mtime=mtime,
+                )
+            )
+        return out
+
     def active_plan_for_project(self, project: str) -> tuple[dict, dict] | None:
         """Return ``(plan_doc, run_state)`` for the project's active plan, if any.
 
@@ -1710,6 +1792,7 @@ __all__ = [
     "ClosedThread",
     "Note",
     "Project",
+    "ActivePlan",
     "ResolvedQuestion",
     "parse_current",
 ]

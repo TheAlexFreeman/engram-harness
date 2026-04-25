@@ -287,6 +287,68 @@ def test_run_interactive_session_persists_stopped_status(tmp_path):
     tracer.event.assert_any_call("session_end", turns=1, reason="stopped")
 
 
+def test_engram_session_metadata_returns_none_when_no_engram():
+    """Sessions without Engram backend yield (None, None, None)."""
+    srv = _import_server()
+    components = SimpleNamespace(engram_memory=None)
+    session = SimpleNamespace(components=components)
+    assert srv._engram_session_metadata(session) == (None, None, None)
+
+
+def test_engram_session_metadata_links_active_plan(tmp_path):
+    """When Engram + workspace are wired, the helper returns the engram dir
+    plus the most-recently-modified active plan from the workspace."""
+    srv = _import_server()
+
+    from harness.workspace import Workspace
+
+    # Seed a workspace with one active plan.
+    ws = Workspace(tmp_path, session_id="act-001")
+    ws.ensure_layout()
+    ws.project_create("auth-redesign", goal="goal")
+    ws.plan_create(
+        "auth-redesign",
+        "token-refresh",
+        "Implement offline-capable token refresh",
+        phases=[{"title": "Schema"}],
+    )
+
+    engram = SimpleNamespace(
+        session_dir_rel="memory/activity/2026/04/25/act-007",
+        workspace_dir=ws.dir,
+    )
+    components = SimpleNamespace(engram_memory=engram)
+    session = SimpleNamespace(components=components)
+
+    engram_dir, project, plan_id = srv._engram_session_metadata(session)
+    assert engram_dir == "memory/activity/2026/04/25/act-007"
+    assert project == "auth-redesign"
+    assert plan_id == "token-refresh"
+
+
+def test_engram_session_metadata_returns_none_plan_when_workspace_empty(tmp_path):
+    """Engram present but no active plans in workspace → engram_dir set, plan fields None."""
+    srv = _import_server()
+
+    from harness.workspace import Workspace
+
+    # Workspace exists but has no plans.
+    ws = Workspace(tmp_path, session_id="act-001")
+    ws.ensure_layout()
+
+    engram = SimpleNamespace(
+        session_dir_rel="memory/activity/2026/04/25/act-007",
+        workspace_dir=ws.dir,
+    )
+    components = SimpleNamespace(engram_memory=engram)
+    session = SimpleNamespace(components=components)
+
+    engram_dir, project, plan_id = srv._engram_session_metadata(session)
+    assert engram_dir == "memory/activity/2026/04/25/act-007"
+    assert project is None
+    assert plan_id is None
+
+
 def test_lifespan_signals_running_sessions_on_shutdown():
     srv = _import_server()
 

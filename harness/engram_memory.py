@@ -622,72 +622,45 @@ class EngramMemory:
     def _active_plan_briefing(self, max_chars: int = 2000) -> str:
         """Return a brief briefing for the most recently active workspace plan, if any.
 
-        Scans ``projects/*/plans/*.run-state.json`` under
-        ``self.workspace_dir`` (the agent's workspace, which is a peer of
-        memory rather than a child of the Engram content root). Picks the
-        most-recently-modified run-state file whose ``status == "active"``,
-        loads the sibling plan YAML, and renders a short pointer that
-        tells the agent to call ``work_project_plan`` with op='brief' for
-        the full briefing. Returns an empty string when no active plan is
-        found, or when no workspace was wired in at construction; callers
-        treat that as "nothing extra to load into the session primer".
+        Delegates the workspace scan to ``Workspace.list_active_plans``
+        (single source of truth — ``cmd_status._print_active_plans``
+        uses the same helper). Picks the most-recently-modified active
+        plan and renders a short pointer that tells the agent to call
+        ``work_project_plan`` with op='brief' for the full briefing.
+        Returns an empty string when no workspace was wired in, or
+        when no active plan exists; callers treat that as "nothing
+        extra to load into the session primer".
         """
         if self.workspace_dir is None:
             return ""
 
-        import json
+        from harness.workspace import Workspace
 
-        import yaml
-
-        # Pair paths with their mtimes up front so a race between
-        # glob() and stat() (stale symlink, file removed mid-scan)
-        # doesn't propagate OSError into start_session(). Unreadable
-        # entries are silently skipped, matching the tolerance the
-        # previous find_active_plans implementation had.
-        candidates: list[tuple[float, Path]] = []
-        for p in self.workspace_dir.glob("projects/*/plans/*.run-state.json"):
-            try:
-                mtime = p.stat().st_mtime
-            except OSError:
-                continue
-            candidates.append((mtime, p))
-        candidates.sort(key=lambda pair: pair[0], reverse=True)
-        state_paths = [p for _, p in candidates]
-        for state_path in state_paths:
-            try:
-                state = json.loads(state_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            if state.get("status") != "active":
-                continue
-            # <plan_id>.run-state.json → <plan_id>.yaml
-            plan_id = state_path.name[: -len(".run-state.json")]
-            plan_path = state_path.with_name(f"{plan_id}.yaml")
-            project = state_path.parent.parent.name
-            try:
-                plan = yaml.safe_load(plan_path.read_text(encoding="utf-8")) or {}
-            except (OSError, yaml.YAMLError):
-                continue
-            phases: list[dict] = plan.get("phases", [])
-            current_idx = int(state.get("current_phase", 0))
-            phase_title = (
-                phases[current_idx].get("title", "?") if 0 <= current_idx < len(phases) else "?"
-            )
-            purpose = plan.get("purpose", "(no purpose)")
-            rel_in_ws = state_path.parent.relative_to(self.workspace_dir).as_posix()
-            lines = [
-                "\n## Active plan detected",
-                "",
-                f"**{plan_id}** — {purpose}",
-                f"Current phase ({current_idx + 1}/{len(phases)}): {phase_title}",
-                f"Path: `workspace/{rel_in_ws}/`",
-                "",
-                "Call `work_project_plan` with "
-                f"op='brief', project={project!r}, plan_id={plan_id!r} "
-                "to get a full briefing and continue.",
-            ]
-            return "\n".join(lines) + "\n"
-        return ""
+        # Scan the configured directory (may not be named ``workspace/``).
+        workspace = Workspace(self.workspace_dir.parent, workspace_path=self.workspace_dir)
+        active = workspace.list_active_plans()
+        if not active:
+            return ""
+        ap = active[0]
+        phases: list[dict] = ap.plan_doc.get("phases", [])
+        current_idx = int(ap.run_state.get("current_phase", 0))
+        phase_title = (
+            phases[current_idx].get("title", "?") if 0 <= current_idx < len(phases) else "?"
+        )
+        purpose = ap.plan_doc.get("purpose", "(no purpose)")
+        rel_in_ws = ap.state_path.parent.relative_to(self.workspace_dir).as_posix()
+        lines = [
+            "\n## Active plan detected",
+            "",
+            f"**{ap.plan_id}** — {purpose}",
+            f"Current phase ({current_idx + 1}/{len(phases)}): {phase_title}",
+            f"Path: `workspace/{rel_in_ws}/`",
+            "",
+            "Call `work_project_plan` with "
+            f"op='brief', project={ap.project!r}, plan_id={ap.plan_id!r} "
+            "to get a full briefing and continue.",
+        ]
+        return "\n".join(lines) + "\n"
 
     def _resolve_need(self, need: str, *, purpose: str, char_budget: int) -> str:
         """Map a single context descriptor to a budget-bounded excerpt."""
