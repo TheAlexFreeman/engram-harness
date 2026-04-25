@@ -15,9 +15,12 @@ import pytest
 import harness.otel_export as otel_mod
 from harness.otel_export import (
     _build_endpoint,
+    _gen_ai_operation,
+    _gen_ai_system_for_model,
     _iso_to_ns,
     _session_has_errors,
     _session_trace_id,
+    _SpanCommonContext,
     export_session_spans,
 )
 
@@ -233,3 +236,248 @@ def test_sampling_always_exports_error_sessions(
 
     # Should have exported 1 span (bypassed sample_rate=0.0 because of error)
     assert result == 1
+
+
+# ---------------------------------------------------------------------------
+# GenAI semantic-convention helpers
+# ---------------------------------------------------------------------------
+
+
+def test_gen_ai_system_anthropic() -> None:
+    assert _gen_ai_system_for_model("claude-sonnet-4-6") == "anthropic"
+    assert _gen_ai_system_for_model("claude-opus-4-7") == "anthropic"
+
+
+def test_gen_ai_system_xai() -> None:
+    assert _gen_ai_system_for_model("grok-4.20-0309-reasoning") == "xai"
+    assert _gen_ai_system_for_model("XAI-grok") == "xai"
+
+
+def test_gen_ai_system_openai() -> None:
+    assert _gen_ai_system_for_model("gpt-4o-mini") == "openai"
+    assert _gen_ai_system_for_model("o1-preview") == "openai"
+
+
+def test_gen_ai_system_unknown_returns_none() -> None:
+    assert _gen_ai_system_for_model("mystery-model-9000") is None
+    assert _gen_ai_system_for_model("") is None
+    assert _gen_ai_system_for_model(None) is None
+
+
+def test_gen_ai_operation_mapping() -> None:
+    assert _gen_ai_operation("tool_call") == "execute_tool"
+    assert _gen_ai_operation("chat") == "chat"
+    assert _gen_ai_operation("embeddings") == "embeddings"
+    # Unknown span types pass through unchanged.
+    assert _gen_ai_operation("custom") == "custom"
+
+
+# ---------------------------------------------------------------------------
+# _emit_span attribute population
+# ---------------------------------------------------------------------------
+
+
+class _FakeSpan:
+    """Records every set_attribute / set_status / end call for inspection."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.attrs: dict[str, object] = {}
+        self.status_code = None
+        self.ended = False
+
+    def set_attribute(self, key: str, value: object) -> None:
+        self.attrs[key] = value
+
+    def set_status(self, code) -> None:
+        self.status_code = code
+
+    def end(self, end_time=None) -> None:  # noqa: ARG002
+        self.ended = True
+
+
+def _record_emit(raw: dict, common: _SpanCommonContext | None = None) -> _FakeSpan:
+    """Run ``_emit_span`` against in-memory fakes and return the captured span."""
+    spans: list[_FakeSpan] = []
+
+    fake_status_code = mock.MagicMock()
+    fake_status_code.OK = "OK"
+    fake_status_code.ERROR = "ERROR"
+
+    fake_kind = mock.MagicMock()
+    fake_kind.CLIENT = "CLIENT"
+
+    fake_trace_module = mock.MagicMock(SpanKind=fake_kind, StatusCode=fake_status_code)
+
+    def fake_start_span(_tracer, name, _ctx, *, kind=None, start_time=None):  # noqa: ARG001
+        s = _FakeSpan(name)
+        spans.append(s)
+        return s
+
+    with (
+        mock.patch.dict("sys.modules", {"opentelemetry.trace": fake_trace_module}),
+        mock.patch("harness.otel_export._start_span", side_effect=fake_start_span),
+    ):
+        otel_mod._emit_span(mock.MagicMock(), raw, mock.MagicMock(), common)
+
+    assert len(spans) == 1
+    return spans[0]
+
+
+def test_emit_span_tool_call_attributes() -> None:
+    raw = {
+        "span_type": "tool_call",
+        "name": "read_file",
+        "status": "ok",
+        "timestamp": "2026-04-25T10:00:00",
+        "duration_ms": 12,
+        "cost": {"usd": 0.001},
+        "metadata": {"turn": 2, "seq": 7, "args_summary": 'path="README.md"'},
+    }
+    common = _SpanCommonContext(
+        session_id="ses-abc",
+        agent_name="engram-harness",
+        gen_ai_system="anthropic",
+        model="claude-sonnet-4-6",
+    )
+    span = _record_emit(raw, common)
+
+    assert span.name == "execute_tool read_file"
+    assert span.attrs["gen_ai.operation.name"] == "execute_tool"
+    assert span.attrs["gen_ai.system"] == "anthropic"
+    assert span.attrs["gen_ai.conversation.id"] == "ses-abc"
+    assert span.attrs["gen_ai.agent.id"] == "ses-abc"
+    assert span.attrs["gen_ai.agent.name"] == "engram-harness"
+    assert span.attrs["gen_ai.tool.name"] == "read_file"
+    assert span.attrs["gen_ai.tool.type"] == "function"
+    assert span.attrs["gen_ai.tool.call.id"] == "7"
+    assert span.attrs["gen_ai.tool.input"] == 'path="README.md"'
+    assert span.attrs["gen_ai.usage.cost_usd"] == 0.001
+    assert span.ended is True
+
+
+def test_emit_span_chat_attributes_with_tokens() -> None:
+    raw = {
+        "span_type": "chat",
+        "name": "chat",
+        "status": "ok",
+        "metadata": {
+            "model": "claude-sonnet-4-6",
+            "input_tokens": 1234,
+            "output_tokens": 567,
+        },
+    }
+    common = _SpanCommonContext(
+        session_id="ses-chat",
+        agent_name="engram-harness",
+        gen_ai_system="anthropic",
+        model="claude-sonnet-4-6",
+    )
+    span = _record_emit(raw, common)
+
+    assert span.name == "chat claude-sonnet-4-6"
+    assert span.attrs["gen_ai.operation.name"] == "chat"
+    assert span.attrs["gen_ai.system"] == "anthropic"
+    assert span.attrs["gen_ai.request.model"] == "claude-sonnet-4-6"
+    assert span.attrs["gen_ai.response.model"] == "claude-sonnet-4-6"
+    assert span.attrs["gen_ai.usage.input_tokens"] == 1234
+    assert span.attrs["gen_ai.usage.output_tokens"] == 567
+
+
+def test_emit_span_falls_back_when_no_common_context() -> None:
+    """``_emit_span`` should still emit operation_name + agent_name with a
+    blank context — used by tests / direct callers that don't pass through
+    a session.
+    """
+    raw = {"span_type": "tool_call", "name": "ls", "status": "ok"}
+    span = _record_emit(raw, None)
+    assert span.name == "execute_tool ls"
+    assert span.attrs["gen_ai.operation.name"] == "execute_tool"
+    assert "gen_ai.system" not in span.attrs
+    # Agent-name default is the harness service.
+    assert span.attrs["gen_ai.agent.name"] == "engram-harness"
+
+
+def test_emit_span_error_status() -> None:
+    raw = {"span_type": "tool_call", "name": "bash", "status": "error"}
+    span = _record_emit(raw)
+    assert span.status_code is not None
+    # The fake StatusCode set ERROR == "ERROR".
+    assert str(span.status_code) == "ERROR"
+
+
+# ---------------------------------------------------------------------------
+# export_session_spans threading the model + agent_name kwargs
+# ---------------------------------------------------------------------------
+
+
+def test_export_session_spans_passes_model_to_root_span(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spans_file = tmp_path / "spans.jsonl"
+    spans_file.write_text(json.dumps({"span_type": "tool_call", "status": "ok"}) + "\n")
+    monkeypatch.delenv("OTEL_SAMPLE_RATE", raising=False)
+
+    captured_root: list[_FakeSpan] = []
+    captured_emit_args: list[tuple] = []
+
+    def fake_start_span(_tracer, name, _ctx, **kwargs):  # noqa: ARG001
+        s = _FakeSpan(name)
+        captured_root.append(s)
+        return s
+
+    def fake_emit_span(_tracer, raw, _parent_ctx, common=None):  # noqa: ARG001
+        captured_emit_args.append((raw, common))
+
+    fake_provider = mock.MagicMock()
+    fake_tracer = mock.MagicMock()
+    fake_provider.get_tracer.return_value = fake_tracer
+
+    with (
+        mock.patch.object(otel_mod, "_OTEL_AVAILABLE", True),
+        mock.patch("harness.otel_export._start_span", side_effect=fake_start_span),
+        mock.patch("harness.otel_export._span_to_context", return_value=mock.MagicMock()),
+        mock.patch("harness.otel_export._build_root_context", return_value=mock.MagicMock()),
+        mock.patch("harness.otel_export._emit_span", side_effect=fake_emit_span),
+        mock.patch.dict(
+            "sys.modules",
+            {
+                "opentelemetry.exporter.otlp.proto.http.trace_exporter": mock.MagicMock(
+                    OTLPSpanExporter=mock.MagicMock()
+                ),
+                "opentelemetry.sdk.resources": mock.MagicMock(Resource=mock.MagicMock()),
+                "opentelemetry.sdk.trace": mock.MagicMock(
+                    TracerProvider=mock.MagicMock(return_value=fake_provider)
+                ),
+                "opentelemetry.sdk.trace.export": mock.MagicMock(
+                    SimpleSpanProcessor=mock.MagicMock()
+                ),
+            },
+        ),
+    ):
+        result = export_session_spans(
+            spans_file,
+            session_id="ses-001",
+            model="claude-sonnet-4-6",
+            agent_name="engram-harness",
+        )
+
+    assert result == 1
+    assert len(captured_root) == 1
+    root = captured_root[0]
+    assert root.name == "invoke_agent engram-harness"
+    assert root.attrs["gen_ai.system"] == "anthropic"
+    assert root.attrs["gen_ai.request.model"] == "claude-sonnet-4-6"
+    assert root.attrs["gen_ai.conversation.id"] == "ses-001"
+    assert root.attrs["gen_ai.agent.id"] == "ses-001"
+    assert root.attrs["gen_ai.agent.name"] == "engram-harness"
+    assert root.attrs["gen_ai.operation.name"] == "invoke_agent"
+
+    # The common context handed to per-span _emit_span should carry the model
+    # and resolved system through.
+    assert len(captured_emit_args) == 1
+    _, common = captured_emit_args[0]
+    assert common is not None
+    assert common.session_id == "ses-001"
+    assert common.gen_ai_system == "anthropic"
+    assert common.model == "claude-sonnet-4-6"
