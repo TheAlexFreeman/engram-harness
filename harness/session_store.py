@@ -163,8 +163,7 @@ class SessionStore:
         documented "drop and re-index from JSONL traces" workflow.
         """
         existing = {
-            row["name"]
-            for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
+            row["name"] for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
         }
         additive: list[tuple[str, str]] = [
             ("active_plan_project", "TEXT"),

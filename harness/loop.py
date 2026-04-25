@@ -365,10 +365,7 @@ def run(
     # stays honest). Skipped when disabled, when the run was cut short by
     # the user, or when the model exhausted its output budget — none of
     # those leave a coherent state to reflect on.
-    skip_reflection = (
-        result.stopped_by_user
-        or getattr(result, "output_limit_reached", False)
-    )
+    skip_reflection = result.stopped_by_user or getattr(result, "output_limit_reached", False)
     reflection_usage = maybe_run_reflection(
         mode,
         messages,
