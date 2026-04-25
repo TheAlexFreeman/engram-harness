@@ -15,7 +15,7 @@ conventions (https://opentelemetry.io/docs/specs/semconv/gen-ai/) so traces
 are ingestible by Phoenix, LangSmith, Braintrust, Datadog, Helicone, etc.
 without translation. Span names use canonical operation forms
 (``invoke_agent <agent>``, ``execute_tool <tool>``, ``chat <model>``); the
-``gen_ai.*`` attribute namespace covers operation, system, conversation,
+``gen_ai.*`` attribute namespace covers operation, provider, conversation,
 agent, tool, and usage data.
 
 Downstream consumers that pin a specific semconv version should set
@@ -49,12 +49,12 @@ _DEFAULT_OTLP_BASE = "http://localhost:4318"
 _DEFAULT_AGENT_NAME = "engram-harness"
 
 
-def _gen_ai_system_for_model(model: str | None) -> str | None:
-    """Map a model identifier to the OTel GenAI ``gen_ai.system`` value.
+def _gen_ai_provider_name_for_model(model: str | None) -> str | None:
+    """Map a model identifier to OTel GenAI ``gen_ai.provider.name``.
 
-    Returns the canonical provider name (``"anthropic"``, ``"openai"``,
-    ``"xai"``) when recognizable, ``None`` when the caller didn't pass a
-    model or the family is unknown.
+    Values follow the well-known set in the GenAI semantic conventions
+    (https://opentelemetry.io/docs/specs/semconv/gen-ai/). Returns ``None``
+    when no model is given or the family is unknown.
     """
     if not model:
         return None
@@ -62,12 +62,17 @@ def _gen_ai_system_for_model(model: str | None) -> str | None:
     if "claude" in m or "anthropic" in m:
         return "anthropic"
     if "grok" in m or "xai" in m or "x.ai" in m:
-        return "xai"
+        return "x_ai"
     if "gpt" in m or "o1" in m or "openai" in m:
         return "openai"
     if "gemini" in m or "palm" in m:
-        return "google.gemini"
+        return "gcp.gemini"
     return None
+
+
+# Deprecated name kept for callers that imported the helper before the
+# semconv rename from ``gen_ai.system`` to ``gen_ai.provider.name``.
+_gen_ai_system_for_model = _gen_ai_provider_name_for_model
 
 
 def _gen_ai_operation(span_type: str) -> str:
@@ -111,9 +116,9 @@ def export_session_spans(
     falling back to ``http://localhost:4318``.
 
     ``model`` is the LLM identifier driving the session — used to populate
-    ``gen_ai.system`` and ``gen_ai.request.model`` on the root invocation
-    span. ``agent_name`` becomes ``gen_ai.agent.name`` (defaults to the
-    service name).
+    ``gen_ai.provider.name`` and ``gen_ai.request.model`` on the root
+    invocation span. ``agent_name`` becomes ``gen_ai.agent.name`` (defaults
+    to the service name).
 
     Returns the number of spans exported. Returns 0 (without raising) if the
     OTel SDK is not installed, the spans file is missing/empty, or the session
@@ -166,25 +171,24 @@ def export_session_spans(
     root_ctx = _build_root_context(trace_id)
 
     resolved_agent = agent_name or service_name
-    gen_ai_system = _gen_ai_system_for_model(model)
+    gen_ai_provider = _gen_ai_provider_name_for_model(model)
 
     root_span_name = f"invoke_agent {resolved_agent}"
     root_span = _start_span(tracer, root_span_name, root_ctx)
     _set_attr(root_span, "session.id", session_id or "")
     _set_attr(root_span, "gen_ai.operation.name", "invoke_agent")
-    _set_attr(root_span, "gen_ai.agent.id", session_id or "")
     _set_attr(root_span, "gen_ai.agent.name", resolved_agent)
     if session_id:
         _set_attr(root_span, "gen_ai.conversation.id", session_id)
-    if gen_ai_system:
-        _set_attr(root_span, "gen_ai.system", gen_ai_system)
+    if gen_ai_provider:
+        _set_attr(root_span, "gen_ai.provider.name", gen_ai_provider)
     if model:
         _set_attr(root_span, "gen_ai.request.model", model)
 
     span_ctx = _SpanCommonContext(
         session_id=session_id or "",
         agent_name=resolved_agent,
-        gen_ai_system=gen_ai_system,
+        gen_ai_provider_name=gen_ai_provider,
         model=model,
     )
 
@@ -215,7 +219,7 @@ class _SpanCommonContext:
 
     session_id: str = ""
     agent_name: str = _DEFAULT_AGENT_NAME
-    gen_ai_system: str | None = None
+    gen_ai_provider_name: str | None = None
     model: str | None = None
 
 
@@ -262,11 +266,10 @@ def _emit_span(
 
     # Attributes that apply to every gen_ai span.
     _set_attr(span, "gen_ai.operation.name", operation_name)
-    if common.gen_ai_system:
-        _set_attr(span, "gen_ai.system", common.gen_ai_system)
+    if common.gen_ai_provider_name:
+        _set_attr(span, "gen_ai.provider.name", common.gen_ai_provider_name)
     if common.session_id:
         _set_attr(span, "gen_ai.conversation.id", common.session_id)
-        _set_attr(span, "gen_ai.agent.id", common.session_id)
     _set_attr(span, "gen_ai.agent.name", common.agent_name)
 
     if span_type == "tool_call":
@@ -376,6 +379,7 @@ __all__ = [
     "export_session_spans",
     "_build_endpoint",
     "_OTEL_AVAILABLE",
+    "_gen_ai_provider_name_for_model",
     "_gen_ai_system_for_model",
     "_gen_ai_operation",
 ]

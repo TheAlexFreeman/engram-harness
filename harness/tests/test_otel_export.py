@@ -16,7 +16,7 @@ import harness.otel_export as otel_mod
 from harness.otel_export import (
     _build_endpoint,
     _gen_ai_operation,
-    _gen_ai_system_for_model,
+    _gen_ai_provider_name_for_model,
     _iso_to_ns,
     _session_has_errors,
     _session_trace_id,
@@ -243,25 +243,29 @@ def test_sampling_always_exports_error_sessions(
 # ---------------------------------------------------------------------------
 
 
-def test_gen_ai_system_anthropic() -> None:
-    assert _gen_ai_system_for_model("claude-sonnet-4-6") == "anthropic"
-    assert _gen_ai_system_for_model("claude-opus-4-7") == "anthropic"
+def test_gen_ai_provider_anthropic() -> None:
+    assert _gen_ai_provider_name_for_model("claude-sonnet-4-6") == "anthropic"
+    assert _gen_ai_provider_name_for_model("claude-opus-4-7") == "anthropic"
 
 
-def test_gen_ai_system_xai() -> None:
-    assert _gen_ai_system_for_model("grok-4.20-0309-reasoning") == "xai"
-    assert _gen_ai_system_for_model("XAI-grok") == "xai"
+def test_gen_ai_provider_x_ai() -> None:
+    assert _gen_ai_provider_name_for_model("grok-4.20-0309-reasoning") == "x_ai"
+    assert _gen_ai_provider_name_for_model("XAI-grok") == "x_ai"
 
 
-def test_gen_ai_system_openai() -> None:
-    assert _gen_ai_system_for_model("gpt-4o-mini") == "openai"
-    assert _gen_ai_system_for_model("o1-preview") == "openai"
+def test_gen_ai_provider_openai() -> None:
+    assert _gen_ai_provider_name_for_model("gpt-4o-mini") == "openai"
+    assert _gen_ai_provider_name_for_model("o1-preview") == "openai"
 
 
-def test_gen_ai_system_unknown_returns_none() -> None:
-    assert _gen_ai_system_for_model("mystery-model-9000") is None
-    assert _gen_ai_system_for_model("") is None
-    assert _gen_ai_system_for_model(None) is None
+def test_gen_ai_provider_gemini() -> None:
+    assert _gen_ai_provider_name_for_model("gemini-2.0-flash") == "gcp.gemini"
+
+
+def test_gen_ai_provider_unknown_returns_none() -> None:
+    assert _gen_ai_provider_name_for_model("mystery-model-9000") is None
+    assert _gen_ai_provider_name_for_model("") is None
+    assert _gen_ai_provider_name_for_model(None) is None
 
 
 def test_gen_ai_operation_mapping() -> None:
@@ -337,16 +341,15 @@ def test_emit_span_tool_call_attributes() -> None:
     common = _SpanCommonContext(
         session_id="ses-abc",
         agent_name="engram-harness",
-        gen_ai_system="anthropic",
+        gen_ai_provider_name="anthropic",
         model="claude-sonnet-4-6",
     )
     span = _record_emit(raw, common)
 
     assert span.name == "execute_tool read_file"
     assert span.attrs["gen_ai.operation.name"] == "execute_tool"
-    assert span.attrs["gen_ai.system"] == "anthropic"
+    assert span.attrs["gen_ai.provider.name"] == "anthropic"
     assert span.attrs["gen_ai.conversation.id"] == "ses-abc"
-    assert span.attrs["gen_ai.agent.id"] == "ses-abc"
     assert span.attrs["gen_ai.agent.name"] == "engram-harness"
     assert span.attrs["gen_ai.tool.name"] == "read_file"
     assert span.attrs["gen_ai.tool.type"] == "function"
@@ -370,14 +373,14 @@ def test_emit_span_chat_attributes_with_tokens() -> None:
     common = _SpanCommonContext(
         session_id="ses-chat",
         agent_name="engram-harness",
-        gen_ai_system="anthropic",
+        gen_ai_provider_name="anthropic",
         model="claude-sonnet-4-6",
     )
     span = _record_emit(raw, common)
 
     assert span.name == "chat claude-sonnet-4-6"
     assert span.attrs["gen_ai.operation.name"] == "chat"
-    assert span.attrs["gen_ai.system"] == "anthropic"
+    assert span.attrs["gen_ai.provider.name"] == "anthropic"
     assert span.attrs["gen_ai.request.model"] == "claude-sonnet-4-6"
     assert span.attrs["gen_ai.response.model"] == "claude-sonnet-4-6"
     assert span.attrs["gen_ai.usage.input_tokens"] == 1234
@@ -393,7 +396,7 @@ def test_emit_span_falls_back_when_no_common_context() -> None:
     span = _record_emit(raw, None)
     assert span.name == "execute_tool ls"
     assert span.attrs["gen_ai.operation.name"] == "execute_tool"
-    assert "gen_ai.system" not in span.attrs
+    assert "gen_ai.provider.name" not in span.attrs
     # Agent-name default is the harness service.
     assert span.attrs["gen_ai.agent.name"] == "engram-harness"
 
@@ -466,10 +469,9 @@ def test_export_session_spans_passes_model_to_root_span(
     assert len(captured_root) == 1
     root = captured_root[0]
     assert root.name == "invoke_agent engram-harness"
-    assert root.attrs["gen_ai.system"] == "anthropic"
+    assert root.attrs["gen_ai.provider.name"] == "anthropic"
     assert root.attrs["gen_ai.request.model"] == "claude-sonnet-4-6"
     assert root.attrs["gen_ai.conversation.id"] == "ses-001"
-    assert root.attrs["gen_ai.agent.id"] == "ses-001"
     assert root.attrs["gen_ai.agent.name"] == "engram-harness"
     assert root.attrs["gen_ai.operation.name"] == "invoke_agent"
 
@@ -479,5 +481,5 @@ def test_export_session_spans_passes_model_to_root_span(
     _, common = captured_emit_args[0]
     assert common is not None
     assert common.session_id == "ses-001"
-    assert common.gen_ai_system == "anthropic"
+    assert common.gen_ai_provider_name == "anthropic"
     assert common.model == "claude-sonnet-4-6"

@@ -121,7 +121,7 @@ def run_trace_bridge(
         commit: If True, stage and commit all artifacts in one commit. Set
             False in tests that prefer to inspect the working tree.
         model: LLM identifier driving the session. Forwarded to the OTLP
-            exporter so spans get the correct ``gen_ai.system`` and
+            exporter so spans get the correct ``gen_ai.provider.name`` and
             ``gen_ai.request.model`` attributes. Optional; falls through to
             empty when callers don't have it.
     """
