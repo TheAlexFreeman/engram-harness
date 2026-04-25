@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -17,6 +18,13 @@ from harness.config import (
 )
 from harness.report import print_usage
 from harness.runner import run_batch, run_interactive, run_trace_bridge_if_enabled
+from harness.session_index import (
+    new_cli_session_id,
+    open_session_store_from_env,
+    record_completed_session,
+)
+from harness.session_store import SessionRecord
+from harness.sinks.session_tracker import SessionStateTrackerSink
 from harness.tools.fs import WorkspaceScope
 
 
@@ -368,18 +376,88 @@ def main() -> None:
     else:
         _maybe_warn_workspace_gitignore(config.workspace)
 
+    # Open the SessionStore index up-front (only if HARNESS_DB_PATH is set)
+    # so the same SQLite file accumulates rows from CLI, server, and
+    # `harness status` runs. The previous-session bootstrap block reads
+    # from it, so writing here closes the loop: consecutive CLI sessions
+    # will see each other's continuity hints.
+    store = open_session_store_from_env()
+    session_id = new_cli_session_id()
+    tool_call_log: list[dict] = []
+    extra_sinks = [SessionStateTrackerSink(tool_call_log)] if store is not None else None
+
     scope = WorkspaceScope(root=config.workspace)
     base_tools = build_tools(scope, profile=config.tool_profile)
-    components = build_session(config, tools=base_tools)
+    components = build_session(config, tools=base_tools, extra_trace_sinks=extra_sinks)
 
-    if args.interactive:
-        usage = run_interactive(args, components)
-        run_trace_bridge_if_enabled(components)
-        print_usage(usage, components)
-    else:
-        batch_result = run_batch(args, components)
-        run_trace_bridge_if_enabled(components)
-        print("\n" + "=" * 60)
-        print(batch_result.final_text)
-        print("=" * 60)
-        print_usage(batch_result.usage, components)
+    if store is not None:
+        _insert_cli_session_row(store, session_id, args, config, components)
+
+    final_text: str | None = None
+    turns_used: int | None = None
+    max_turns_reached = False
+    status = "completed"
+    usage = None
+    try:
+        if args.interactive:
+            usage = run_interactive(args, components)
+            run_trace_bridge_if_enabled(components)
+            print_usage(usage, components)
+        else:
+            batch_result = run_batch(args, components)
+            usage = batch_result.usage
+            final_text = batch_result.final_text
+            turns_used = batch_result.turns_used
+            max_turns_reached = batch_result.max_turns_reached
+            run_trace_bridge_if_enabled(components)
+            print("\n" + "=" * 60)
+            print(batch_result.final_text)
+            print("=" * 60)
+            print_usage(batch_result.usage, components)
+    except BaseException:
+        status = "error"
+        raise
+    finally:
+        if store is not None and usage is not None:
+            record_completed_session(
+                store,
+                session_id=session_id,
+                status=status,
+                ended_at=datetime.now().isoformat(timespec="seconds"),
+                turns_used=turns_used,
+                usage=usage,
+                tool_call_log=tool_call_log,
+                final_text=final_text,
+                max_turns_reached=max_turns_reached,
+                engram_memory=components.engram_memory,
+            )
+            store.close()
+        elif store is not None:
+            # Run failed before usage was assigned — close the store so the
+            # SQLite file isn't left locked, but skip the update.
+            store.close()
+
+
+def _insert_cli_session_row(store, session_id, args, config, components):
+    """Write the initial 'running' row for a CLI session into SessionStore.
+
+    Best-effort. The completion-side write in record_completed_session
+    will UPDATE this row with final stats.
+    """
+    task = (str(args.task) if args.task else "(interactive)").strip()
+    try:
+        store.insert_session(
+            SessionRecord(
+                session_id=session_id,
+                task=task,
+                status="running",
+                model=config.model,
+                mode=config.mode,
+                memory_backend=config.memory_backend,
+                workspace=str(config.workspace),
+                created_at=datetime.now().isoformat(timespec="seconds"),
+                trace_path=str(components.trace_path),
+            )
+        )
+    except Exception:  # noqa: BLE001
+        pass
