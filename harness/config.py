@@ -87,6 +87,38 @@ def _harness_project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _build_previous_session_provider(config: SessionConfig) -> Any | None:
+    """Return a callable that fetches the most recent prior session for the workspace.
+
+    Reads ``HARNESS_DB_PATH`` to locate the SessionStore database. When
+    no env var is set or the file isn't a usable SQLite database, returns
+    None — EngramMemory then skips the previous-session bootstrap block
+    silently. The provider closes over both the store handle and the
+    workspace key so EngramMemory doesn't have to know either.
+    """
+    db_env = os.environ.get("HARNESS_DB_PATH")
+    if not db_env:
+        return None
+    db_path = Path(db_env).expanduser()
+    if not db_path.is_file():
+        return None
+    try:
+        from harness.session_store import SessionStore
+
+        store = SessionStore(db_path)
+    except Exception:  # noqa: BLE001
+        return None
+    workspace_key = str(Path(config.workspace).resolve())
+
+    def provider() -> Any | None:
+        try:
+            return store.most_recent_for_workspace(workspace_key)
+        except Exception:  # noqa: BLE001
+            return None
+
+    return provider
+
+
 def config_from_args(args: argparse.Namespace) -> SessionConfig:
     """Convert parsed CLI arguments to a SessionConfig."""
     return SessionConfig(
@@ -167,8 +199,17 @@ def _build_memory(
     # the engram (memory) and harness (tools/loop) packages. EngramMemory
     # needs the path to surface active-plan briefings during its bootstrap.
     workspace_root = project_root / "workspace"
+    # When a SessionStore is reachable (HARNESS_DB_PATH set), wire a
+    # provider so the bootstrap can surface a "previous session"
+    # continuity block. EngramMemory doesn't import SessionStore — it
+    # just calls the closure and reads documented attributes.
+    previous_session_provider = _build_previous_session_provider(config)
     try:
-        engram = EngramMemory(Path(repo_path), workspace_dir=workspace_root)
+        engram = EngramMemory(
+            Path(repo_path),
+            workspace_dir=workspace_root,
+            previous_session_provider=previous_session_provider,
+        )
     except Exception as exc:  # noqa: BLE001
         print(
             f"[warning] failed to open Engram repo at {repo_path}: {exc}. "

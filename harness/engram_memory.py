@@ -24,11 +24,20 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from harness.memory import Memory
+
+if TYPE_CHECKING:
+    from harness.session_store import SessionRecord
+
+# Type-only alias — runtime never imports SessionStore. The provider can be
+# any callable returning a SessionRecord-shaped object (or None); the
+# bootstrap pulls a small, well-known subset of fields via getattr so test
+# doubles can pass a SimpleNamespace without dragging in SessionStore.
+PreviousSessionProvider = Callable[[], "SessionRecord | None"]
 
 _log = logging.getLogger(__name__)
 
@@ -61,6 +70,12 @@ _BOOTSTRAP_FILE_HEAD_CHARS = 4000
 # Maximum size of total bootstrap text (best-effort budget; ~7k tokens ≈ 28k chars).
 _BOOTSTRAP_BUDGET_CHARS = 28_000
 
+# Recency window for the previous-session continuity block. A session that
+# ended further back than this is more likely to mislead than help, so the
+# bootstrap drops it. Tunable later if a use case appears for longer windows.
+_PREVIOUS_SESSION_RECENCY = timedelta(days=7)
+_PREVIOUS_SESSION_FINAL_TEXT_CHARS = 600
+
 _SESSION_ID_PATTERN = re.compile(r"act-(\d{3})$")
 
 
@@ -74,6 +89,28 @@ def _truncate_head(text: str, limit: int) -> str:
         return text
     head = text[:limit].rstrip()
     return head + f"\n\n…[truncated, {len(text) - limit} more chars]\n"
+
+
+def _format_relative(when: datetime, *, now: datetime | None = None) -> str:
+    """Render a coarse "X ago" string for the previous-session header.
+
+    Resolution is deliberately low (minutes / hours / days). The
+    bootstrap is human-readable orientation, not a precise log; a
+    rough relative time keeps the line readable.
+    """
+    now = now or datetime.now()
+    delta = now - when
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return "just now"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    days = hours // 24
+    return f"{days} day{'s' if days != 1 else ''} ago"
 
 
 @dataclass
@@ -127,6 +164,7 @@ class EngramMemory:
         session_id: str | None = None,
         embed: bool | None = None,
         workspace_dir: Path | None = None,
+        previous_session_provider: PreviousSessionProvider | None = None,
     ):
         """Open an Engram repo for use as a MemoryBackend.
 
@@ -144,6 +182,15 @@ class EngramMemory:
                 is a peer of memory rather than a subdirectory of the Engram
                 repo, so it must be supplied explicitly. When ``None``, the
                 bootstrap skips the active-plan briefing.
+            previous_session_provider: Optional callable returning a
+                ``SessionRecord`` (or any object exposing the same
+                attributes) for the most recent prior session against
+                this workspace. When supplied and the result is recent
+                enough, ``start_session`` renders a "Previous session"
+                continuity block in the bootstrap. The provider lets
+                callers wire in whatever session index they have
+                (``SessionStore`` is the production case) without
+                EngramMemory importing it directly.
         """
         from harness._engram_fs import GitRepo
 
@@ -179,6 +226,9 @@ class EngramMemory:
         self.workspace_dir: Path | None = (
             Path(workspace_dir).resolve() if workspace_dir is not None else None
         )
+        self._previous_session_provider: PreviousSessionProvider | None = (
+            previous_session_provider
+        )
         self._records: list[_BufferedRecord] = []
         self._recall_events: list[_RecallEvent] = []
         self._trace_events: list[_TraceEvent] = []
@@ -212,6 +262,8 @@ class EngramMemory:
           the working/USER + working/CURRENT scratchpads. These are
           task-independent primer material — always useful, cheap, stable.
         - Active plan briefing (operational state — not knowledge).
+        - Previous-session continuity hint when a recent prior session
+          for this workspace exists in the SessionStore-backed index.
         """
         self.task = task
         sections: list[str] = []
@@ -237,6 +289,10 @@ class EngramMemory:
         active_plan = self._active_plan_briefing()
         if active_plan:
             sections.append(active_plan)
+
+        prev_session = self._previous_session_block()
+        if prev_session:
+            sections.append(prev_session)
 
         return "".join(sections)
 
@@ -662,6 +718,83 @@ class EngramMemory:
             "to get a full briefing and continue.",
         ]
         return "\n".join(lines) + "\n"
+
+    def _previous_session_block(self) -> str:
+        """Render a continuity hint about the most recent prior session.
+
+        Returns "" when no provider was wired, when the provider yields
+        nothing, or when the previous session is older than
+        ``_PREVIOUS_SESSION_RECENCY``. The recency gate keeps a stale
+        result (months-old session) from polluting the primer with
+        misleading context.
+        """
+        if self._previous_session_provider is None:
+            return ""
+        try:
+            rec = self._previous_session_provider()
+        except Exception:  # noqa: BLE001
+            # Defensive: a SessionStore I/O hiccup must never break bootstrap.
+            return ""
+        if rec is None:
+            return ""
+
+        ended_iso = (getattr(rec, "ended_at", None) or "").strip()
+        ended_dt: datetime | None = None
+        if ended_iso:
+            try:
+                ended_dt = datetime.fromisoformat(ended_iso)
+            except ValueError:
+                ended_dt = None
+        if ended_dt is not None and datetime.now() - ended_dt > _PREVIOUS_SESSION_RECENCY:
+            return ""
+
+        prev_session_id = getattr(rec, "session_id", "") or ""
+        # Don't surface ourselves if we were re-handed our own row (e.g.
+        # the same harness session_id as this one).
+        if prev_session_id and prev_session_id == self.session_id:
+            return ""
+
+        task = (getattr(rec, "task", "") or "").strip()
+        status = (getattr(rec, "status", "") or "").strip()
+        final_text = (getattr(rec, "final_text", None) or "").strip()
+        engram_dir = (getattr(rec, "engram_session_dir", None) or "").strip()
+        plan_project = getattr(rec, "active_plan_project", None) or ""
+        plan_id = getattr(rec, "active_plan_id", None) or ""
+
+        when = _format_relative(ended_dt) if ended_dt is not None else "previously"
+        header_bits: list[str] = []
+        if prev_session_id:
+            header_bits.append(prev_session_id)
+        header_bits.append(f"ended {when}")
+        if status:
+            header_bits.append(f"status={status}")
+        header = " · ".join(header_bits)
+
+        lines: list[str] = [
+            "\n## Previous session",
+            "",
+            f"_{header}_",
+        ]
+        if task:
+            lines.append(f"**Task:** {task[:240]}")
+        if final_text:
+            snippet = _truncate_head(final_text, _PREVIOUS_SESSION_FINAL_TEXT_CHARS)
+            lines.append("")
+            lines.append("**Last response:**")
+            lines.append("")
+            lines.append("> " + snippet.replace("\n", "\n> "))
+        if plan_project and plan_id:
+            lines.append("")
+            lines.append(
+                "Resume the linked plan with "
+                f"`work_project_plan` op='brief', project={plan_project!r}, "
+                f"plan_id={plan_id!r}."
+            )
+        if engram_dir:
+            lines.append("")
+            lines.append(f"Engram session dir: `{engram_dir}`")
+        lines.append("")
+        return "\n".join(lines)
 
     def _resolve_need(self, need: str, *, purpose: str, char_budget: int) -> str:
         """Map a single context descriptor to a budget-bounded excerpt."""

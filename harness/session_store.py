@@ -329,6 +329,19 @@ class SessionStore:
             ).fetchall()
         return [SessionRecord.from_row(dict(r)) for r in rows]
 
+    def most_recent_for_workspace(self, workspace: str) -> SessionRecord | None:
+        """Return the most recently created session row for *workspace*, or None.
+
+        Used by the EngramMemory bootstrap to surface a "previous session"
+        continuity block. Picks by ``created_at`` to match the
+        ``list_sessions`` ordering — not by ``ended_at``, so a session
+        that started later but ended sooner still wins. Callers gate on
+        recency themselves (the bootstrap drops anything older than a
+        small N-day window so stale results don't pollute the primer).
+        """
+        rows = self.list_sessions(workspace=workspace, limit=1)
+        return rows[0] if rows else None
+
     def stats(self, *, workspace: str | None = None) -> dict[str, Any]:
         where = "WHERE workspace = ?" if workspace else ""
         params = (workspace,) if workspace else ()

@@ -266,3 +266,69 @@ def test_config_from_args_tool_profile_no_shell():
     ns = _minimal_namespace(tool_profile="no_shell")
     config = config_from_args(ns)
     assert config.tool_profile is ToolProfile.NO_SHELL
+
+
+# ---------------------------------------------------------------------------
+# _build_previous_session_provider — bootstrap continuity wiring
+# ---------------------------------------------------------------------------
+
+
+def test_build_previous_session_provider_returns_none_without_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("HARNESS_DB_PATH", raising=False)
+    from harness.config import _build_previous_session_provider
+
+    config = SessionConfig(workspace=tmp_path)
+    assert _build_previous_session_provider(config) is None
+
+
+def test_build_previous_session_provider_returns_none_when_db_missing(
+    tmp_path, monkeypatch
+):
+    """A pointer to a nonexistent DB silently disables the bootstrap block."""
+    monkeypatch.setenv("HARNESS_DB_PATH", str(tmp_path / "no-such.db"))
+    from harness.config import _build_previous_session_provider
+
+    config = SessionConfig(workspace=tmp_path)
+    assert _build_previous_session_provider(config) is None
+
+
+def test_build_previous_session_provider_returns_callable(tmp_path, monkeypatch):
+    """A real DB → a callable that delegates to SessionStore."""
+    from harness.session_store import SessionRecord, SessionStore
+
+    db_path = tmp_path / "sessions.db"
+    store = SessionStore(db_path)
+    workspace_path = str(tmp_path.resolve())
+    store.insert_session(
+        SessionRecord(
+            session_id="ses_prev",
+            task="prior task",
+            status="completed",
+            workspace=workspace_path,
+            created_at="2026-04-25T00:00:00.000",
+        )
+    )
+    store.close()
+
+    monkeypatch.setenv("HARNESS_DB_PATH", str(db_path))
+    from harness.config import _build_previous_session_provider
+
+    config = SessionConfig(workspace=tmp_path)
+    provider = _build_previous_session_provider(config)
+    assert callable(provider)
+    rec = provider()
+    assert rec is not None
+    assert rec.session_id == "ses_prev"
+
+
+def test_build_previous_session_provider_swallows_db_errors(tmp_path, monkeypatch):
+    """A SessionStore that fails to open returns None (silent fall-through)."""
+    bad_db = tmp_path / "bad.db"
+    bad_db.write_bytes(b"not a sqlite database")
+    monkeypatch.setenv("HARNESS_DB_PATH", str(bad_db))
+    from harness.config import _build_previous_session_provider
+
+    config = SessionConfig(workspace=tmp_path)
+    # SessionStore raises on open of a non-DB file; the helper must
+    # absorb it so config building doesn't blow up.
+    assert _build_previous_session_provider(config) is None
