@@ -74,3 +74,5 @@ pytest-cache-files-*/
 # --- Frontend build artifacts ---
 frontend/node_modules/
 frontend/dist/
+
+.playwright-cli/
