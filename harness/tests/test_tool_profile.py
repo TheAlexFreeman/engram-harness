@@ -96,3 +96,27 @@ def test_default_profile_is_full(scope):
     tools = build_tools(scope)
     assert "bash" in tools
     assert "write_file" in tools
+
+
+def test_full_profile_has_python_tools(scope):
+    from harness.cli import build_tools
+
+    tools = build_tools(scope, profile=ToolProfile.FULL)
+    assert "python_eval" in tools
+    assert "run_script" in tools
+
+
+def test_no_shell_excludes_python_tools(scope):
+    from harness.cli import build_tools
+
+    tools = build_tools(scope, profile=ToolProfile.NO_SHELL)
+    assert "python_eval" not in tools
+    assert "run_script" not in tools
+
+
+def test_read_only_excludes_python_tools(scope):
+    from harness.cli import build_tools
+
+    tools = build_tools(scope, profile=ToolProfile.READ_ONLY)
+    assert "python_eval" not in tools
+    assert "run_script" not in tools
