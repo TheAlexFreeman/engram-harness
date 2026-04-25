@@ -230,9 +230,7 @@ class EngramMemory:
         self.workspace_dir: Path | None = (
             Path(workspace_dir).resolve() if workspace_dir is not None else None
         )
-        self._previous_session_provider: PreviousSessionProvider | None = (
-            previous_session_provider
-        )
+        self._previous_session_provider: PreviousSessionProvider | None = previous_session_provider
         self._records: list[_BufferedRecord] = []
         self._recall_events: list[_RecallEvent] = []
         self._trace_events: list[_TraceEvent] = []

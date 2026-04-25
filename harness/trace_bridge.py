@@ -848,15 +848,13 @@ def _emit_session_rollups(
                 helpfulness_by_file[f] = score
         rows_added = len(raw_entries)
         files_touched = len(helpfulness_by_file)
-        mean_helpfulness = round(
-            sum(helpfulness_by_file.values()) / files_touched, 3
-        )
+        mean_helpfulness = round(sum(helpfulness_by_file.values()) / files_touched, 3)
         max_helpfulness = round(max(helpfulness_by_file.values()), 3)
         top_files = [
             {"file": f, "helpfulness": round(s, 3)}
-            for f, s in sorted(
-                helpfulness_by_file.items(), key=lambda kv: kv[1], reverse=True
-            )[:_TOP_FILES_PER_ROLLUP]
+            for f, s in sorted(helpfulness_by_file.items(), key=lambda kv: kv[1], reverse=True)[
+                :_TOP_FILES_PER_ROLLUP
+            ]
         ]
         rollup_row = {
             "session_id": canonical_session_id,
@@ -893,9 +891,7 @@ def _rollup_paths(memory: EngramMemory, content_prefix: str) -> list[str]:
     return out
 
 
-def _rollup_already_recorded(
-    rollup_path: Path, session_id: str, date: str
-) -> bool:
+def _rollup_already_recorded(rollup_path: Path, session_id: str, date: str) -> bool:
     """Idempotency guard so rerunning the bridge doesn't duplicate rollup rows."""
     if not rollup_path.is_file():
         return False

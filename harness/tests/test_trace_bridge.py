@@ -306,9 +306,7 @@ def test_session_rollup_writes_per_namespace_jsonl(
     rollup_path = repo / "core" / "memory" / "knowledge" / "_session-rollups.jsonl"
     assert rollup_path.is_file(), "rollup file should land alongside ACCESS.jsonl"
     rows = [
-        json.loads(line)
-        for line in rollup_path.read_text(encoding="utf-8").splitlines()
-        if line
+        json.loads(line) for line in rollup_path.read_text(encoding="utf-8").splitlines() if line
     ]
     assert len(rows) == 1
     row = rows[0]
@@ -383,9 +381,7 @@ def test_session_rollup_is_idempotent_across_reruns(
     run_trace_bridge(trace, memory)
 
     rollup_path = repo / "core" / "memory" / "knowledge" / "_session-rollups.jsonl"
-    rows = [
-        line for line in rollup_path.read_text(encoding="utf-8").splitlines() if line
-    ]
+    rows = [line for line in rollup_path.read_text(encoding="utf-8").splitlines() if line]
     assert len(rows) == 1
 
 

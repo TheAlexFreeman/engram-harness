@@ -713,9 +713,7 @@ def test_list_active_plans_returns_only_active_plans(ws: Workspace) -> None:
     ws.plan_create("p", "active-a", "active plan", phases=[{"title": "P1"}])
     ws.plan_create("p", "done-a", "done plan", phases=[{"title": "P1"}])
     # Mark the second plan completed.
-    state_path = (
-        ws.dir / "projects" / "p" / "plans" / "done-a.run-state.json"
-    )
+    state_path = ws.dir / "projects" / "p" / "plans" / "done-a.run-state.json"
     import json as _json
 
     state = _json.loads(state_path.read_text(encoding="utf-8"))

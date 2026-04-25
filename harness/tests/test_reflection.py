@@ -137,9 +137,7 @@ def test_maybe_run_reflection_emits_trace_event_on_success():
     mode = _ReflectingMode([_no_tool_response("ok")])
     memory = SimpleNamespace(session_reflection="")
     events: list[dict[str, Any]] = []
-    tracer = SimpleNamespace(
-        event=lambda kind, **data: events.append({"kind": kind, **data})
-    )
+    tracer = SimpleNamespace(event=lambda kind, **data: events.append({"kind": kind, **data}))
     maybe_run_reflection(mode, [], memory, tracer, enabled=True)
     refl = [e for e in events if e["kind"] == "reflection_turn"]
     assert refl and refl[0]["status"] == "ok"
@@ -148,9 +146,7 @@ def test_maybe_run_reflection_emits_trace_event_on_success():
 def test_maybe_run_reflection_emits_trace_event_on_error():
     mode = _ExplodingReflectMode([_no_tool_response("ok")])
     events: list[dict[str, Any]] = []
-    tracer = SimpleNamespace(
-        event=lambda kind, **data: events.append({"kind": kind, **data})
-    )
+    tracer = SimpleNamespace(event=lambda kind, **data: events.append({"kind": kind, **data}))
     maybe_run_reflection(mode, [], SimpleNamespace(session_reflection=""), tracer, enabled=True)
     refl = [e for e in events if e["kind"] == "reflection_turn"]
     assert refl and refl[0]["status"] == "error"
@@ -253,9 +249,7 @@ def test_trace_bridge_uses_llm_reflection_when_stashed(engram_repo: Path) -> Non
     from harness.trace_bridge import _render_reflection, _SessionStats
 
     mem = _seeded_memory(engram_repo)
-    mem.session_reflection = (
-        "I retrieved too much knowledge upfront and then ignored half of it."
-    )
+    mem.session_reflection = "I retrieved too much knowledge upfront and then ignored half of it."
     stats = _SessionStats()
     stats.tool_call_count = 5
     stats.session_date = "2026-04-25"
