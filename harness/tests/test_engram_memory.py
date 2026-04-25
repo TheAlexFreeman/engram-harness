@@ -235,9 +235,7 @@ def test_active_plan_briefing_returns_empty_when_no_plans(
     assert mem._active_plan_briefing() == ""
 
 
-def test_active_plan_briefing_picks_the_active_plan(
-    engram_repo: Path, tmp_path: Path
-) -> None:
+def test_active_plan_briefing_picks_the_active_plan(engram_repo: Path, tmp_path: Path) -> None:
     workspace_dir = _seed_workspace_plan(
         tmp_path / "ws_root",
         project="alpha",
@@ -255,9 +253,7 @@ def test_active_plan_briefing_picks_the_active_plan(
     assert "resume_plan" not in out
 
 
-def test_active_plan_briefing_skips_completed_plans(
-    engram_repo: Path, tmp_path: Path
-) -> None:
+def test_active_plan_briefing_skips_completed_plans(engram_repo: Path, tmp_path: Path) -> None:
     workspace_dir = _seed_workspace_plan(
         tmp_path / "ws_root",
         project="alpha",
@@ -286,9 +282,7 @@ def test_active_plan_briefing_tolerates_malformed_run_state(
     assert mem._active_plan_briefing() == ""
 
 
-def test_active_plan_briefing_tolerates_stat_errors(
-    engram_repo: Path, tmp_path: Path
-) -> None:
+def test_active_plan_briefing_tolerates_stat_errors(engram_repo: Path, tmp_path: Path) -> None:
     """A stale symlink or vanished run-state file must not raise OSError.
 
     glob() + stat() is racy: a deleted file between glob and sort
