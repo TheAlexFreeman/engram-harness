@@ -40,65 +40,39 @@ def _resolve_workspace_dir(workspace: str | None) -> Path:
 def _print_active_plans(workspace_dir: Path) -> None:
     """List active workspace plans under the agent's workspace directory.
 
-    Scans ``projects/*/plans/*.run-state.json`` under *workspace_dir*
-    for plans with status=active, loads the sibling YAML for
-    purpose/phase titles, and prints a compact per-plan line. Silent
-    when the workspace doesn't exist yet (a fresh project that's never
-    used the work tools).
+    Delegates the scan to ``Workspace.list_active_plans`` so this view
+    and ``EngramMemory._active_plan_briefing`` agree on the answer.
+    Silent when the workspace doesn't exist yet (a fresh project that's
+    never used the work tools).
     """
-    import json
-
-    import yaml
-
     print(f"\nWorkspace: {workspace_dir}")
     if not workspace_dir.is_dir():
         print("Active plans: workspace not initialized")
         return
-    # Guard stat() against stale symlinks / files deleted between glob and
-    # sort, matching the tolerance in _active_plan_briefing.
-    _candidates: list[tuple[float, Path]] = []
-    for p in workspace_dir.glob("projects/*/plans/*.run-state.json"):
-        try:
-            _candidates.append((p.stat().st_mtime, p))
-        except OSError:
-            continue
-    _candidates.sort(key=lambda pair: pair[0], reverse=True)
-    state_paths = [p for _, p in _candidates]
-    active: list[tuple[Path, dict, dict]] = []
-    for state_path in state_paths:
-        try:
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if state.get("status") != "active":
-            continue
-        plan_id = state_path.name[: -len(".run-state.json")]
-        plan_path = state_path.with_name(f"{plan_id}.yaml")
-        try:
-            plan = yaml.safe_load(plan_path.read_text(encoding="utf-8")) or {}
-        except (OSError, yaml.YAMLError):
-            continue
-        active.append((state_path, state, plan))
+
+    from harness.workspace import Workspace
+
+    workspace = Workspace(workspace_dir.parent)
+    active = workspace.list_active_plans()
 
     if not active:
         print("Active plans: none")
         return
 
     print(f"Active plans ({len(active)}):")
-    for state_path, state, plan in active:
-        plan_id = state.get("plan_id") or state_path.name[: -len(".run-state.json")]
-        purpose = plan.get("purpose", "?")
-        phases: list = plan.get("phases", [])
-        current_idx = int(state.get("current_phase", 0))
+    for ap in active:
+        plan_id = ap.run_state.get("plan_id") or ap.plan_id
+        purpose = ap.plan_doc.get("purpose", "?")
+        phases: list = ap.plan_doc.get("phases", [])
+        current_idx = int(ap.run_state.get("current_phase", 0))
         phase_title = (
             phases[current_idx].get("title", "—") if 0 <= current_idx < len(phases) else "—"
         )
-        sessions_used = int(state.get("sessions_used", 0))
-        max_sessions = (plan.get("budget") or {}).get("max_sessions")
+        sessions_used = int(ap.run_state.get("sessions_used", 0))
+        max_sessions = (ap.plan_doc.get("budget") or {}).get("max_sessions")
         budget_str = f"{sessions_used}/{max_sessions}" if max_sessions else str(sessions_used)
-        project = state_path.parent.parent.name
         print(
-            f"  {plan_id:<18} [{project[:16]:<16}] {purpose[:40]:<42}"
+            f"  {plan_id:<18} [{ap.project[:16]:<16}] {purpose[:40]:<42}"
             f"Phase {current_idx + 1}/{len(phases)}: {phase_title[:28]:<30}"
             f"{budget_str} session(s)"
         )

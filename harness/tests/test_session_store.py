@@ -85,6 +85,89 @@ def test_complete_session(store):
     assert fetched.final_text == "Done!"
 
 
+def test_complete_session_persists_engram_and_plan_link(store):
+    """engram_session_dir + active_plan_* are stored when supplied."""
+    rec = _make_record()
+    store.insert_session(rec)
+    store.complete_session(
+        "ses_001",
+        status="completed",
+        ended_at="2026-04-21T00:05:00.000",
+        engram_session_dir="memory/activity/2026/04/21/act-007",
+        active_plan_project="auth-redesign",
+        active_plan_id="token-refresh",
+    )
+    fetched = store.get_session("ses_001")
+    assert fetched.engram_session_dir == "memory/activity/2026/04/21/act-007"
+    assert fetched.active_plan_project == "auth-redesign"
+    assert fetched.active_plan_id == "token-refresh"
+
+
+def test_init_schema_adds_columns_to_existing_db(tmp_path):
+    """ALTER TABLE migration brings older DBs forward.
+
+    Fabricate a pre-active_plan database by hand-writing the older
+    sessions schema (no active_plan_project / active_plan_id columns),
+    then open via SessionStore and verify the columns are added and
+    writable through the high-level API.
+    """
+    import sqlite3
+
+    db_path = tmp_path / "old.db"
+    # Older schema — same table layout as before this PR, intentionally
+    # missing active_plan_project / active_plan_id. Mirrors what an
+    # existing user's DB would look like on first upgrade.
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE sessions (
+            session_id     TEXT PRIMARY KEY,
+            task           TEXT NOT NULL,
+            status         TEXT NOT NULL DEFAULT 'running',
+            model          TEXT,
+            mode           TEXT,
+            memory_backend TEXT,
+            workspace      TEXT,
+            created_at     TEXT NOT NULL,
+            ended_at       TEXT,
+            turns_used           INTEGER,
+            input_tokens         INTEGER,
+            output_tokens        INTEGER,
+            cache_read_tokens    INTEGER,
+            cache_write_tokens   INTEGER,
+            reasoning_tokens     INTEGER,
+            total_cost_usd       REAL,
+            tool_counts    TEXT,
+            error_count    INTEGER DEFAULT 0,
+            final_text         TEXT,
+            max_turns_reached  INTEGER DEFAULT 0,
+            trace_path          TEXT,
+            engram_session_dir  TEXT
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # Open via SessionStore — _ensure_additive_columns should add the new ones.
+    store = SessionStore(db_path)
+    cols = {row["name"] for row in store._conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    assert "active_plan_project" in cols
+    assert "active_plan_id" in cols
+    # Writes through the high-level API land.
+    store.insert_session(_make_record("ses_migrated"))
+    store.complete_session(
+        "ses_migrated",
+        status="completed",
+        ended_at="2026-04-21T00:00:00.000",
+        active_plan_project="proj",
+        active_plan_id="plan",
+    )
+    fetched = store.get_session("ses_migrated")
+    assert fetched.active_plan_project == "proj"
+    assert fetched.active_plan_id == "plan"
+
+
 # ---------------------------------------------------------------------------
 # list_sessions filters
 # ---------------------------------------------------------------------------

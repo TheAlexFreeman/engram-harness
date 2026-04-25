@@ -34,7 +34,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 
     -- File references
     trace_path          TEXT,   -- absolute path to JSONL trace file
-    engram_session_dir  TEXT    -- path to engram activity dir, if applicable
+    engram_session_dir  TEXT,   -- path to engram activity dir, if applicable
+
+    -- Workspace plan link, populated at session-end from the most-recently
+    -- modified active plan in the agent's workspace. Together they form an
+    -- index that lets the harness answer "which session(s) advanced plan X"
+    -- without re-scanning workspace state. The matching index is created in
+    -- SessionStore._ensure_indexes() so older DBs ALTER first, then index.
+    active_plan_project TEXT,
+    active_plan_id      TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_created   ON sessions(created_at DESC);

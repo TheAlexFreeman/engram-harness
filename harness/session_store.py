@@ -46,6 +46,8 @@ class SessionRecord:
     max_turns_reached: bool = False
     trace_path: str | None = None
     engram_session_dir: str | None = None
+    active_plan_project: str | None = None
+    active_plan_id: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         d = {
@@ -71,6 +73,8 @@ class SessionRecord:
             "max_turns_reached": 1 if self.max_turns_reached else 0,
             "trace_path": self.trace_path,
             "engram_session_dir": self.engram_session_dir,
+            "active_plan_project": self.active_plan_project,
+            "active_plan_id": self.active_plan_id,
         }
         return d
 
@@ -105,6 +109,8 @@ class SessionRecord:
             max_turns_reached=bool(row.get("max_turns_reached", 0)),
             trace_path=row.get("trace_path"),
             engram_session_dir=row.get("engram_session_dir"),
+            active_plan_project=row.get("active_plan_project"),
+            active_plan_id=row.get("active_plan_id"),
         )
 
 
@@ -131,9 +137,55 @@ class SessionStore:
         self._init_schema()
 
     def _init_schema(self) -> None:
+        """Initialize or upgrade the schema, in three ordered passes.
+
+        1. ``CREATE TABLE IF NOT EXISTS`` for the base table — schema.sql
+           handles fresh DBs and is a no-op for existing ones.
+        2. ``ALTER TABLE ADD COLUMN`` for any additive columns the live
+           table is missing — brings older DBs forward.
+        3. ``CREATE INDEX IF NOT EXISTS`` for indexes that may reference
+           columns added in step 2 — safe to run after the migration.
+        """
         schema = _SCHEMA_PATH.read_text(encoding="utf-8")
         self._conn.executescript(schema)
+        self._ensure_additive_columns()
+        self._ensure_indexes()
         self._conn.commit()
+
+    def _ensure_additive_columns(self) -> None:
+        """Add columns that older databases are missing.
+
+        SQLite's ``CREATE TABLE IF NOT EXISTS`` is a no-op when the table
+        already exists, even when new columns have been added since. Run
+        ``ALTER TABLE ADD COLUMN`` for any column the live table is
+        missing — idempotent and safe across upgrades. Real schema
+        changes (renames, removals, type changes) still require the
+        documented "drop and re-index from JSONL traces" workflow.
+        """
+        existing = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        additive: list[tuple[str, str]] = [
+            ("active_plan_project", "TEXT"),
+            ("active_plan_id", "TEXT"),
+        ]
+        for name, decl in additive:
+            if name not in existing:
+                self._conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {decl}")
+
+    def _ensure_indexes(self) -> None:
+        """Create indexes that depend on columns added by _ensure_additive_columns.
+
+        Defining these here (rather than in schema.sql) lets older
+        databases gain the columns first via ALTER TABLE, then the
+        index, without the ``no such column`` error that ``executescript``
+        would raise if the index ran before the migration.
+        """
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_active_plan "
+            "ON sessions(active_plan_project, active_plan_id)"
+        )
 
     def insert_session(self, record: SessionRecord) -> None:
         d = record.as_dict()
@@ -168,6 +220,8 @@ class SessionStore:
         final_text: str | None = None,
         max_turns_reached: bool = False,
         engram_session_dir: str | None = None,
+        active_plan_project: str | None = None,
+        active_plan_id: str | None = None,
     ) -> None:
         tool_counts_json = json.dumps(tool_counts) if tool_counts else None
         params = {
@@ -186,6 +240,8 @@ class SessionStore:
             "final_text": final_text,
             "max_turns_reached": 1 if max_turns_reached else 0,
             "engram_session_dir": engram_session_dir,
+            "active_plan_project": active_plan_project,
+            "active_plan_id": active_plan_id,
         }
         with self._write_lock:
             self._conn.execute(
@@ -204,7 +260,9 @@ class SessionStore:
                     error_count = :error_count,
                     final_text = :final_text,
                     max_turns_reached = :max_turns_reached,
-                    engram_session_dir = :engram_session_dir
+                    engram_session_dir = :engram_session_dir,
+                    active_plan_project = :active_plan_project,
+                    active_plan_id = :active_plan_id
                 WHERE session_id = :session_id
                 """,
                 params,
