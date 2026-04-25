@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -468,3 +470,103 @@ def test_parse_duration_rejects_garbage() -> None:
 
     with pytest.raises(argparse.ArgumentTypeError):
         _parse_duration("forever")
+
+
+def test_load_drift_session_records_paginates(tmp_path) -> None:
+    """All rows are loaded when count exceeds one page (no 10k silent cap)."""
+    from harness.cmd_drift import _load_drift_session_records
+    from harness.session_store import SessionRecord, SessionStore
+
+    db_path = tmp_path / "many.db"
+    store = SessionStore(db_path)
+    now = datetime(2026, 4, 25, 12, 0, 0)
+    n = 2100
+    for i in range(n):
+        store.insert_session(
+            SessionRecord(
+                session_id=f"s-{i}",
+                task="t",
+                status="completed",
+                created_at=(now - timedelta(hours=i)).isoformat(),
+                ended_at=(now - timedelta(hours=i)).isoformat(),
+                turns_used=1,
+                total_cost_usd=0.01,
+                error_count=0,
+            )
+        )
+    rows = _load_drift_session_records(store, page_size=2_000)
+    store.close()
+    assert len(rows) == n
+
+
+def test_cmd_drift_workspace_filter_is_resolved(monkeypatch, capsys, tmp_path: Path) -> None:
+    """``--workspace .`` must match DB rows stored with a resolved absolute path."""
+    from harness import cmd_drift
+    from harness.session_store import SessionRecord, SessionStore
+
+    db_path = tmp_path / "ws.db"
+    store = SessionStore(db_path)
+    now = datetime(2026, 4, 25, 12, 0, 0)
+    root = tmp_path / "project"
+    root.mkdir()
+    ws_abs = str(root.resolve())
+    # Default windows: 7d current, 28d baseline before that. Place 4 rows in
+    # the current window and 12 in the baseline so counts are deterministic.
+    for i in range(12):
+        store.insert_session(
+            SessionRecord(
+                session_id=f"base-{i}",
+                task="t",
+                status="completed",
+                workspace=ws_abs,
+                created_at=(now - timedelta(days=10, hours=i)).isoformat(),
+                ended_at=(now - timedelta(days=10, hours=i)).isoformat(),
+                turns_used=10,
+                total_cost_usd=0.05,
+                error_count=0,
+            )
+        )
+    for i in range(4):
+        store.insert_session(
+            SessionRecord(
+                session_id=f"cur-{i}",
+                task="t",
+                status="completed",
+                workspace=ws_abs,
+                created_at=(now - timedelta(days=2, hours=i)).isoformat(),
+                ended_at=(now - timedelta(days=2, hours=i)).isoformat(),
+                turns_used=10,
+                total_cost_usd=0.05,
+                error_count=0,
+            )
+        )
+    for i in range(4):
+        store.insert_session(
+            SessionRecord(
+                session_id=f"other-{i}",
+                task="t",
+                status="completed",
+                workspace="/somewhere/else",
+                created_at=(now - timedelta(days=2, hours=i)).isoformat(),
+                ended_at=(now - timedelta(days=2, hours=i)).isoformat(),
+                turns_used=20,
+                total_cost_usd=0.5,
+                error_count=0,
+            )
+        )
+    store.close()
+
+    monkeypatch.chdir(root)
+    monkeypatch.setattr("sys.argv", ["harness", "drift", "--db", str(db_path), "--workspace", "."])
+    with patch("harness.cmd_drift.datetime") as fake_dt:
+        fake_dt.now.return_value = now
+        fake_dt.fromisoformat.side_effect = datetime.fromisoformat
+        cmd_drift.main()
+
+    out = capsys.readouterr().out
+    # 16 project sessions only: 12 in baseline, 4 in current (others are different workspace)
+    m = re.search(r"session_count\s+(\d+)\s+(\d+)", out)
+    assert m is not None
+    assert m.group(1) == "4" and m.group(2) == "12"
+    assert "$0.0500" in out
+    assert "$0.5000" not in out

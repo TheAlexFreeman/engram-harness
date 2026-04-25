@@ -16,6 +16,10 @@ import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from harness.session_store import SessionStore
 
 from harness.analytics import (
     DEFAULT_BASELINE_WINDOW,
@@ -24,6 +28,30 @@ from harness.analytics import (
     compute_drift_report,
     render_drift_report,
 )
+
+
+def _load_drift_session_records(
+    store: "SessionStore",
+    *,
+    workspace: str | None = None,
+    page_size: int = 2_000,
+) -> list:
+    """Load all session rows the drift analyzer may need, paginating to avoid a hard cap.
+
+    ``list_sessions`` returns newest-first; without paging, a fixed limit can drop
+    older rows and truncate the baseline window in high-volume databases.
+    """
+    all_rows: list = []
+    offset = 0
+    while True:
+        page = store.list_sessions(workspace=workspace, limit=page_size, offset=offset)
+        if not page:
+            break
+        all_rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    return all_rows
 
 
 def _parse_duration(text: str) -> timedelta:
@@ -109,6 +137,10 @@ def main() -> None:
     )
     args = parser.parse_args(sys.argv[2:])
 
+    workspace_filter: str | None = None
+    if args.workspace is not None:
+        workspace_filter = str(Path(args.workspace).expanduser().resolve())
+
     db_env = os.getenv("HARNESS_DB_PATH")
     db_path = Path(args.db) if args.db else (Path(db_env) if db_env else None)
     if db_path is None:
@@ -128,11 +160,7 @@ def main() -> None:
         sys.exit(0)
 
     store = SessionStore(db_path)
-    # Pull a generous batch — enough to cover the union of both windows
-    # at typical activity levels. Users with very high session volume can
-    # extend by passing --baseline-window upwards; the natural cap is
-    # SQLite's default 50-row limit, so we override here.
-    records = store.list_sessions(workspace=args.workspace, limit=10_000)
+    records = _load_drift_session_records(store, workspace=workspace_filter, page_size=2_000)
     store.close()
 
     report = compute_drift_report(
