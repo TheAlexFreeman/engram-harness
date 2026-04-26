@@ -462,7 +462,12 @@ def main() -> None:
 
     scope = WorkspaceScope(root=config.workspace)
     base_tools = build_tools(scope, profile=config.tool_profile)
-    components = build_session(config, tools=base_tools, extra_trace_sinks=extra_sinks)
+    components = build_session(
+        config,
+        tools=base_tools,
+        extra_trace_sinks=extra_sinks,
+        scope=scope,
+    )
 
     if store is not None:
         _insert_cli_session_row(store, session_id, args, config, components)

@@ -12,6 +12,11 @@ MAX_GREP_MATCHES = 2_000
 MAX_GREP_FILES_SCANNED = 8_000
 MAX_GREP_BYTES_PER_FILE = 512_000
 TRUNCATION_SUFFIX = "\n\n[harness: output truncated]"
+_MEMORY_NAMESPACE_ROOTS = frozenset({"knowledge", "skills", "users", "activity", "working"})
+
+
+def path_is_within_boundary(path: Path, boundary: Path) -> bool:
+    return path == boundary or boundary in path.parents
 
 
 def normalize_workspace_relative(relative: str) -> str:
@@ -93,6 +98,15 @@ def truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
 
 
 @dataclass
+class ResolvedPath:
+    """A path resolved against one of the scope's safety boundaries."""
+
+    path: Path
+    boundary: Path
+    namespace: str
+
+
+@dataclass
 class WorkspaceScope:
     """Confines filesystem operations under ``root``.
 
@@ -103,17 +117,39 @@ class WorkspaceScope:
     """
 
     root: Path
+    memory_root: Path | None = None
 
     def _root_resolved(self) -> Path:
         return self.root.resolve()
 
+    def _memory_root_resolved(self) -> Path | None:
+        return self.memory_root.resolve() if self.memory_root is not None else None
+
     def resolve(self, relative: str) -> Path:
         """Resolve a workspace-relative path. The normalized path MUST stay under root."""
+        return self.resolve_entry(relative).path
+
+    def resolve_entry(self, relative: str) -> ResolvedPath:
+        """Resolve a path against the workspace or mounted memory root."""
         orig_relative = relative
         relative = normalize_workspace_relative(relative)
+        if self._is_explicit_memory_path(relative):
+            return self._resolve_memory(relative, orig_relative, explicit=True)
+
+        if self._is_bare_memory_path(relative):
+            workspace_entry = self._try_resolve_workspace(relative, orig_relative)
+            if workspace_entry.path.exists():
+                return workspace_entry
+            if self.memory_root is not None:
+                return self._resolve_memory(relative, orig_relative, explicit=False)
+            return workspace_entry
+
+        return self._resolve_workspace(relative, orig_relative)
+
+    def _resolve_workspace(self, relative: str, orig_relative: str) -> ResolvedPath:
         p = (self.root / relative).resolve()
         root_r = self._root_resolved()
-        if root_r not in p.parents and p != root_r:
+        if not path_is_within_boundary(p, root_r):
             raise ValueError(
                 f"path {orig_relative!r} (normalized to {relative!r}) escapes workspace {self.root}. "
                 "Tool paths must be clean relative paths like 'harness/loop.py', 'README.md', "
@@ -122,7 +158,66 @@ class WorkspaceScope:
                 "or absolute paths. If you see this error repeatedly, first call list_files "
                 "or glob_files('**/*.py') to explore, then use a simple clean path."
             )
-        return p
+        return ResolvedPath(path=p, boundary=root_r, namespace="workspace")
+
+    def _try_resolve_workspace(self, relative: str, orig_relative: str) -> ResolvedPath:
+        try:
+            return self._resolve_workspace(relative, orig_relative)
+        except ValueError:
+            if self.memory_root is not None:
+                return self._resolve_memory(relative, orig_relative, explicit=False)
+            raise
+
+    def _resolve_memory(
+        self,
+        relative: str,
+        orig_relative: str,
+        *,
+        explicit: bool,
+    ) -> ResolvedPath:
+        memory_root = self._memory_root_resolved()
+        if memory_root is None:
+            if explicit:
+                raise ValueError(
+                    f"path {orig_relative!r} uses the memory namespace, but no memory root is mounted"
+                )
+            return self._resolve_workspace(relative, orig_relative)
+
+        memory_relative = self._strip_memory_prefix(relative, explicit=explicit)
+        if not memory_relative:
+            p = memory_root
+        else:
+            parts = [part for part in memory_relative.split("/") if part]
+            if any(part in ("..", ".") for part in parts):
+                raise ValueError(f"path may not contain traversal segments: {orig_relative!r}")
+            p = (memory_root / "/".join(parts)).resolve()
+
+        if not path_is_within_boundary(p, memory_root):
+            raise ValueError(
+                f"path {orig_relative!r} (normalized to {relative!r}) escapes mounted memory root "
+                f"{memory_root}"
+            )
+        return ResolvedPath(path=p, boundary=memory_root, namespace="memory")
+
+    def _is_explicit_memory_path(self, relative: str) -> bool:
+        return relative in {"memory", "memory:"} or relative.startswith(("memory/", "memory:"))
+
+    def _is_bare_memory_path(self, relative: str) -> bool:
+        if relative == "HOME.md":
+            return True
+        head = relative.split("/", 1)[0]
+        return head in _MEMORY_NAMESPACE_ROOTS
+
+    def _strip_memory_prefix(self, relative: str, *, explicit: bool) -> str:
+        if relative == "memory:" or relative == "memory":
+            return ""
+        if relative.startswith("memory:/"):
+            return relative[len("memory:/") :]
+        if relative.startswith("memory:"):
+            return relative[len("memory:") :].lstrip("/")
+        if explicit and relative.startswith("memory/"):
+            return relative[len("memory/") :]
+        return relative
 
     def describe_path(self, path: Path) -> str:
         """Stable relative path string for messages (POSIX-style)."""
@@ -130,6 +225,13 @@ class WorkspaceScope:
             cr = path.resolve()
         except OSError:
             cr = path
+        memory_root = self._memory_root_resolved()
+        if memory_root is not None:
+            try:
+                rel = cr.relative_to(memory_root)
+                return f"memory/{rel.as_posix()}" if rel.as_posix() != "." else "memory"
+            except ValueError:
+                pass
         try:
             rel = cr.relative_to(self._root_resolved())
             return rel.as_posix()

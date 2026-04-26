@@ -468,6 +468,7 @@ def build_session(
     *,
     extra_trace_sinks: list[Any] | None = None,
     stream_sink_override: Any | None = None,
+    scope: Any | None = None,
 ) -> SessionComponents:
     """Construct all session objects from config.
 
@@ -484,11 +485,18 @@ def build_session(
         Used by the API server to inject SSE sinks.
     stream_sink_override
         Replace the default stream sink. Used by the API server.
+    scope
+        Optional WorkspaceScope used by the filesystem tools. When Engram
+        memory is active, its mounted memory root is set before the mode sees
+        tool descriptions.
     """
     memory, engram_memory, extra_tools = _build_memory(config)
 
     if tools is None:
         tools = {}
+
+    if scope is not None and engram_memory is not None:
+        scope.memory_root = engram_memory.content_root / "memory"
 
     # Merge any extra tools from memory backend (e.g. recall, plan tools)
     if extra_tools:

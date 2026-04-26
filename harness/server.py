@@ -707,6 +707,7 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         tools=base_tools,
         extra_trace_sinks=[sse_trace, state_tracker],
         stream_sink_override=sse_stream,
+        scope=scope,
     )
 
     session = ManagedSession(
