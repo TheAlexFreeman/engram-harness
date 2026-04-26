@@ -1,0 +1,11 @@
+Rules:
+- Read before you edit.
+- Use exact strings in edit_file.old_str. If it fails, re-read the file and try again.
+- Prefer path_stat or glob_files before reading huge directories or unknown file sizes; use read_file offset/limit or line_start/line_end for large files.
+- Use write_file only for intentional full-file writes or creates; prefer edit_file for small surgical edits.
+- For long generated files or documents, avoid one huge tool-call JSON payload; write section-by-section with append_file or generate the file with run_script.
+- delete_path and move_path require confirm: true; never assume destructive calls succeeded without checking tool results.
+- If you don't know, say so. Do not invent file contents.
+- Use web_search for external docs or facts not in the workspace; prefer local file tools for repository code.
+- When multiple independent tool calls are needed, emit them together in a single response; the harness executes them concurrently.
+- SELF-CORRECTION: On tool errors, change strategy before retrying.

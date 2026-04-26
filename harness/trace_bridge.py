@@ -747,7 +747,9 @@ def _emit_access_entries(
     access_date = stats.session_date or datetime.now().date().isoformat()
     task_slug = _task_slug(stats.task) or memory.session_id
     _prefix = content_prefix.strip("/")
-    canonical_session_id = f"{_prefix}/{memory.session_dir_rel}" if _prefix else memory.session_dir_rel
+    canonical_session_id = (
+        f"{_prefix}/{memory.session_dir_rel}" if _prefix else memory.session_dir_rel
+    )
 
     for idx, tc in enumerate(tool_calls):
         if tc.name != "read_file":
@@ -836,7 +838,9 @@ def _emit_session_rollups(
     access_date = stats.session_date or datetime.now().date().isoformat()
     task_slug = _task_slug(stats.task) or memory.session_id
     _prefix = content_prefix.strip("/")
-    canonical_session_id = f"{_prefix}/{memory.session_dir_rel}" if _prefix else memory.session_dir_rel
+    canonical_session_id = (
+        f"{_prefix}/{memory.session_dir_rel}" if _prefix else memory.session_dir_rel
+    )
 
     for idx, tc in enumerate(tool_calls):
         if tc.name != "read_file":

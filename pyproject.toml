@@ -57,6 +57,7 @@ packages = [
     "harness",
     "harness._engram_fs",
     "harness.modes",
+    "harness.prompt_templates",
     "harness.sinks",
     "harness.tests",
     "harness.tools",
@@ -69,6 +70,7 @@ harness = "harness"
 
 [tool.setuptools.package-data]
 harness = ["pricing.json", "py.typed"]
+"harness.prompt_templates" = ["*.md"]
 
 [tool.ruff]
 line-length = 100

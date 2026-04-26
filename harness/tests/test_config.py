@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,6 +11,8 @@ import pytest
 from harness.config import (
     SessionConfig,
     ToolProfile,
+    _has_active_plan_context,
+    _tool_prompt_flags,
     build_session,
     config_from_args,
     trace_to_engram_enabled,
@@ -62,6 +65,48 @@ def test_config_defaults(tmp_path):
     assert config.trace_to_engram is None
     assert config.grok_include == []
     assert config.grok_encrypted_reasoning is False
+
+
+def test_tool_prompt_flags_follow_registered_tools() -> None:
+    tools = {
+        "memory_recall": SimpleNamespace(mutates=False),
+        "memory_trace": SimpleNamespace(mutates=True),
+        "work_status": SimpleNamespace(mutates=False),
+        "work_note": SimpleNamespace(mutates=True),
+    }
+    assert _tool_prompt_flags(tools) == (True, True, True, True)
+
+
+def test_tool_prompt_flags_read_only_surface() -> None:
+    tools = {
+        "memory_recall": SimpleNamespace(mutates=False),
+        "work_status": SimpleNamespace(mutates=False),
+    }
+    assert _tool_prompt_flags(tools) == (True, True, False, False)
+
+
+def test_has_active_plan_context_detects_workspace_plan(tmp_path) -> None:
+    from harness.workspace import Workspace
+
+    workspace = Workspace(tmp_path)
+    workspace.project_create("p", goal="g")
+    workspace.plan_create("p", "active-plan", "do it", phases=[{"title": "phase"}])
+
+    tools = {"work_project_plan": SimpleNamespace(mutates=True)}
+    engram = SimpleNamespace(workspace_dir=workspace.dir)
+    assert _has_active_plan_context(tools, engram) is True
+
+
+def test_has_active_plan_context_ignores_missing_plan_tool(tmp_path) -> None:
+    from harness.workspace import Workspace
+
+    workspace = Workspace(tmp_path)
+    workspace.project_create("p", goal="g")
+    workspace.plan_create("p", "active-plan", "do it", phases=[{"title": "phase"}])
+
+    tools = {"work_status": SimpleNamespace(mutates=False)}
+    engram = SimpleNamespace(workspace_dir=workspace.dir)
+    assert _has_active_plan_context(tools, engram) is False
 
 
 # ---------------------------------------------------------------------------
