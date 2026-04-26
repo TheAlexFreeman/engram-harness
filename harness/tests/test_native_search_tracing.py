@@ -341,6 +341,25 @@ def test_extract_function_call_positions() -> None:
     assert positions == [1, 3]
 
 
+def test_grok_mode_only_advertises_allowed_native_search_tools() -> None:
+    from unittest.mock import MagicMock
+
+    from harness.modes.grok import GrokMode
+
+    web_tool = MagicMock()
+    web_tool.name = "web_search"
+    x_tool = MagicMock()
+    x_tool.name = "x_search"
+
+    mode = GrokMode(MagicMock(), "grok-3", {"web_search": web_tool})
+    tool_types = [schema["type"] for schema in mode._tool_schemas]
+    assert tool_types == ["web_search", "x_search"]
+
+    cloned = mode.for_tools({"x_search": x_tool})
+    cloned_tool_types = [schema["type"] for schema in cloned._tool_schemas]
+    assert cloned_tool_types == ["x_search"]
+
+
 def test_native_search_seq_interleaved_with_function_calls(tmp_path: Path) -> None:
     """Native search seq values reflect document order when mixed with function calls."""
     from dataclasses import dataclass, field
