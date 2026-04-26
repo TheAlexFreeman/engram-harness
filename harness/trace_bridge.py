@@ -19,7 +19,7 @@ import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -735,19 +735,25 @@ def _build_recall_candidate_rows(
     if not events:
         return []
 
-    # Build the set of all file paths the agent later read. Cheap to do once.
-    later_reads: set[str] = set()
+    content_prefix = getattr(memory, "content_prefix", "core")
+    read_calls: list[tuple[datetime, str]] = []
     for tc in tool_calls:
-        if tc.name == "read_file":
-            arg_path = tc.args.get("path") or tc.args.get("file_path")
-            if arg_path:
-                later_reads.add(str(arg_path).replace("\\", "/").lstrip("./"))
+        if tc.name != "read_file":
+            continue
+        read_time = _parse_trace_timestamp(tc.timestamp)
+        if read_time is None:
+            continue
+        arg_path = tc.args.get("path") or tc.args.get("file_path")
+        if arg_path:
+            read_calls.append((read_time, _recall_candidate_path_key(str(arg_path), content_prefix)))
 
     rows: list[dict[str, Any]] = []
     for ev in events:
+        recall_time = _parse_trace_timestamp(ev.timestamp)
         ts = ev.timestamp.isoformat() if hasattr(ev.timestamp, "isoformat") else str(ev.timestamp)
         for cand in ev.candidates:
             fp = cand.get("file_path", "")
+            fp_key = _recall_candidate_path_key(str(fp), content_prefix) if fp else ""
             row = {
                 "timestamp": ts,
                 "query": ev.query,
@@ -758,10 +764,42 @@ def _build_recall_candidate_rows(
                 "rank": cand.get("rank", 0),
                 "score": cand.get("score", 0.0),
                 "returned": bool(cand.get("returned", False)),
-                "used_in_session": fp in later_reads if fp else False,
+                "used_in_session": (
+                    any(read_time > recall_time and read_path == fp_key for read_time, read_path in read_calls)
+                    if recall_time is not None and fp_key
+                    else False
+                ),
             }
             rows.append(row)
     return rows
+
+
+def _parse_trace_timestamp(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        raw = str(value or "")
+        if not raw:
+            return None
+        if raw.endswith("Z"):
+            raw = f"{raw[:-1]}+00:00"
+        try:
+            dt = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _recall_candidate_path_key(file_path: str, content_prefix: str = "core") -> str:
+    norm = _norm(file_path).strip("/")
+    while norm.startswith("./"):
+        norm = norm[2:]
+    prefix = content_prefix.strip("/")
+    if prefix and norm.startswith(prefix + "/"):
+        norm = norm[len(prefix) + 1 :]
+    return norm
 
 
 def _access_paths(

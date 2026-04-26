@@ -132,6 +132,34 @@ def test_capture_caps_per_source(engram_repo: Path) -> None:
     assert len(bm25_rows) <= 10
 
 
+def test_capture_keeps_returned_files_beyond_candidate_cap(engram_repo: Path) -> None:
+    mem = EngramMemory(engram_repo, embed=False)
+
+    hits = [
+        {
+            "file_path": f"memory/knowledge/f{i:02d}.md",
+            "score": float(20 - i),
+        }
+        for i in range(12)
+    ]
+    returned_path = "memory/knowledge/f11.md"
+
+    mem._capture_recall_candidates(  # type: ignore[attr-defined]
+        query="x",
+        namespace=None,
+        k=12,
+        sem_hits=[],
+        bm25_hits=hits,
+        keyword_hits=[],
+        returned_paths={returned_path},
+    )
+
+    rows = [c for c in mem.recall_candidate_events[0].candidates if c["source"] == "bm25"]
+    assert len(rows) == 11
+    assert returned_path in {c["file_path"] for c in rows}
+    assert any(c["file_path"] == returned_path and c["returned"] for c in rows)
+
+
 def test_recall_candidate_events_property_is_a_copy(engram_repo: Path) -> None:
     knowledge = engram_repo / "core" / "memory" / "knowledge"
     (knowledge / "a.md").write_text("alpha alpha")
@@ -311,6 +339,42 @@ def test_build_recall_candidate_rows_reads_path_or_file_path(engram_repo: Path) 
     rows = _build_recall_candidate_rows(mem, tool_calls)
     assert rows
     assert rows[0]["used_in_session"] is True
+
+
+def test_build_recall_candidate_rows_ignores_reads_before_recall(engram_repo: Path) -> None:
+    from harness.trace_bridge import _build_recall_candidate_rows, _ToolCall
+
+    mem = EngramMemory(engram_repo, embed=False)
+    mem._recall_candidate_events.append(  # type: ignore[attr-defined]
+        _RecallCandidateEvent(
+            timestamp=datetime(2026, 4, 26, 12, 0, 0),
+            query="x",
+            namespace=None,
+            k=3,
+            candidates=[
+                {
+                    "file_path": "memory/knowledge/x.md",
+                    "source": "bm25",
+                    "rank": 1,
+                    "score": 1.0,
+                    "returned": True,
+                }
+            ],
+        )
+    )
+    tool_calls = [
+        _ToolCall(
+            turn=0,
+            seq=0,
+            name="read_file",
+            args={"path": "memory/knowledge/x.md"},
+            timestamp="2026-04-26T11:59:59",
+        )
+    ]
+
+    rows = _build_recall_candidate_rows(mem, tool_calls)
+    assert rows
+    assert rows[0]["used_in_session"] is False
 
 
 # ---------------------------------------------------------------------------

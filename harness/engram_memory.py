@@ -150,9 +150,8 @@ class _RecallCandidateEvent:
     candidates: list[dict[str, Any]]  # [{file_path, source, rank, score, returned}]
 
 
-# Cap per-backend candidates persisted per call. The semantic and BM25
-# backends typically return up to k*3 (=15 by default); cap at 10 so the
-# JSONL doesn't bloat on long sessions.
+# Cap non-returned per-backend candidates persisted per call. Returned paths are
+# always kept so the JSONL mirrors what was actually shown to the agent.
 _CANDIDATE_CAP_PER_SOURCE = 10
 
 
@@ -1140,7 +1139,8 @@ class EngramMemory:
 
         Each backend's ranked list is recorded separately so consumers can
         still see "BM25 ranked X first; semantic ranked Y first; fusion
-        picked Y." Per-backend lists are capped to keep the JSONL bounded.
+        picked Y." Per-backend lists keep all returned paths and cap the
+        remaining candidates to keep the JSONL bounded.
         """
         candidates: list[dict[str, Any]] = []
         for source, hits in (
@@ -1148,17 +1148,23 @@ class EngramMemory:
             ("bm25", bm25_hits),
             ("keyword", keyword_hits),
         ):
-            for rank, hit in enumerate(hits[:_CANDIDATE_CAP_PER_SOURCE], start=1):
+            unreturned_seen = 0
+            for rank, hit in enumerate(hits, start=1):
                 fp = hit.get("file_path")
                 if not fp:
                     continue
+                returned = fp in returned_paths
+                if not returned:
+                    if unreturned_seen >= _CANDIDATE_CAP_PER_SOURCE:
+                        continue
+                    unreturned_seen += 1
                 candidates.append(
                     {
                         "file_path": fp,
                         "source": source,
                         "rank": rank,
                         "score": float(hit.get("score", 0.0)),
-                        "returned": fp in returned_paths,
+                        "returned": returned,
                     }
                 )
         if not candidates:
