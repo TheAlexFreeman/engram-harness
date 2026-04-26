@@ -768,7 +768,7 @@ def _build_recall_candidate_rows(
                 "returned": bool(cand.get("returned", False)),
                 "used_in_session": (
                     any(
-                        read_time > recall_time and read_path == fp_key
+                        read_time >= recall_time and read_path == fp_key
                         for read_time, read_path in read_calls
                     )
                     if recall_time is not None and fp_key
