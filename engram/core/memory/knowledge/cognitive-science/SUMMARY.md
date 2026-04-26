@@ -61,3 +61,41 @@ See [memory/](memory/). Promoted 2026-03-20 from `_unverified/`. 11 files.
 - `false-memory-constructive-nature.md` — Bartlett schemas; Loftus misinformation effect; DRM paradigm; source monitoring failure; constructive not reproductive memory
 - `reconsolidation-discovery-mechanism.md` — Nader et al. (2000); reconsolidation window; prediction error as trigger; boundary conditions; therapeutic reconsolidation applications
 - `reconsolidation-agent-design-implications.md` — Living-document vs. archive model; git history as reconsolidation protection; access-as-reconsolidation-events; session boundaries as reconsolidation windows; context injection as reconsolidation exploit *(most applied file)*
+
+## Relevance Realization
+
+See [relevance-realization/](relevance-realization/). 13 files. Entry point: `relevance-realization/SUMMARY.md`.
+
+Covers Vervaeke's relevance realization framework, opponent processing, four kinds of knowing, insight (incubation, aha, neural correlates), gestalt/functional fixedness, frame problem, meaning crisis, wisdom.
+
+## Emotion
+
+See [emotion/](emotion/). Files include:
+- `alexithymia-interoception-body-affect.md` — interoceptive hierarchy, corpus callosum transfer hypothesis, predictive coding of affect
+- `somatic-marker-hypothesis-damasio.md` — somatic markers as essential to judgment; *Descartes' Error*
+
+## Hemispheric Specialization
+
+See [hemispheric-specialization/](hemispheric-specialization/). **7 files** — added 2026-04-27. Entry point: `hemispheric-specialization/SUMMARY.md`.
+
+A comprehensive cluster on Iain McGilchrist's theory of hemispheric specialization and its philosophical, neuroscientific, and cultural-historical extensions. Includes a bridges file connecting McGilchrist's framework to 10+ existing knowledge-base files.
+
+| File | Contents |
+|------|----------|
+| `mcgilchrist-biography-intellectual-context.md` | Who McGilchrist is; career arc from literary criticism to neuroimaging |
+| `master-and-emissary.md` | Core thesis of *MHE* (2009): modes of attention, evolutionary rationale, clinical evidence, cultural-historical arc |
+| `matter-with-things.md` | Core thesis of *TMWT* (2021): epistemology, process ontology, consciousness as foundational, value as intrinsic |
+| `hemispheric-neuroscience.md` | The lateralization neuroscience: attention, semantic coding, corpus callosum, clinical evidence, supported vs. contested claims |
+| `mcgilchrist-intellectual-network.md` | Key connections: Merleau-Ponty, Heidegger, Bergson, Whitehead, James, Friston, Vervaeke, Nietzsche |
+| `mcgilchrist-reception-critiques.md` | Academic reception; six major critiques; McGilchrist's responses; how to read him charitably |
+| `mcgilchrist-knowledge-base-bridges.md` | 10 explicit bridges to existing files; synthesis table across 10 traditions; recommended epistemic stance |
+
+## Biosemiotics and Ecological Cognition
+
+Root-level files (not in subfolder):
+- `affordances-gibson-ecological-psychology.md` — Gibson's direct perception, affordance theory
+- `umwelt-uexkull-biosemiotics.md` — Uexküll's species-specific meaningful world
+- `biosemiotics-peirce-sebeok-semiosis.md` — Peirce's semiosis, Sebeok's biosemiotics
+- `niche-construction-organism-environment-reciprocity.md` — Odling-Smee/Laland; organisms modify their selective environment
+- `species-specific-reality-consciousness.md` — Nagel; what-it-is-like; species-specific reality
+- `affordance-umwelt-enaction-synthesis.md` — Cross-framework synthesis

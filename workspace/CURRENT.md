@@ -2,6 +2,9 @@
 
 ### memetics-knowledge [active] (project: memetics-knowledge)
 
+### mcgilchrist-knowledge-files [active]
+Write 5-6 knowledge files to memory/knowledge/cognitive-science/hemispheric-specialization/
+
 ## Closed
 
 ### cogsci-knowledge-files — Wrote and promoted 6 cognitive-science knowledge files: affordances (Gibson), umwelt (Uexküll), biosemiotics (Peirce/Sebeok), niche construction (Odling-Smee/Laland), species-specific reality/consciousness (Nagel), and a cross-framework synthesis. All promoted to memory/knowledge/cognitive-science/. (2026-04-26)
