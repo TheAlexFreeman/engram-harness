@@ -226,6 +226,7 @@ def _build_memory(
     )
     from harness.tools.work_tools import (
         WorkJot,
+        WorkList,
         WorkNote,
         WorkProjectArchive,
         WorkProjectAsk,
@@ -330,6 +331,7 @@ def _build_memory(
         WorkJot(workspace),
         WorkNote(workspace),
         WorkRead(workspace),
+        WorkList(workspace),
         WorkSearch(workspace),
         WorkScratch(workspace),
         WorkPromote(workspace, engram),

@@ -53,6 +53,7 @@ def build_tools(
         WriteFile,
     )
     from harness.tools.git import Git, GitCommit, GitDiff, GitLog, GitStatus
+    from harness.tools.help import ToolHelp
     from harness.tools.python_eval import PythonEval
     from harness.tools.run_script import RunScript
     from harness.tools.search import WebSearch
@@ -73,6 +74,7 @@ def build_tools(
         AnalyzeTodos(scope),
         WebSearch(),
         XSearch(),
+        ToolHelp(),
     ]
     write_only: list[Tool] = [
         Mkdir(scope),

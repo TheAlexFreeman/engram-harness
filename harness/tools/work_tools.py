@@ -13,6 +13,7 @@ Currently implemented:
 - ``work_jot``               — append to the freeform Notes section
 - ``work_note``              — create/update persistent working documents
 - ``work_read``              — read any workspace file by relative path
+- ``work_list``              — list workspace files by relative directory
 - ``work_search``            — project-scoped keyword search
 - ``work_scratch``           — append to the session-scoped scratch file
 - ``work_promote``           — graduate a working note into durable memory
@@ -55,6 +56,7 @@ _MAX_STATUS_CHARS = 24_000
 _MAX_NOTE_CONTENT_CHARS = 32_000
 _MAX_SCRATCH_CONTENT_CHARS = 4_000
 _MAX_JOT_CONTENT_CHARS = 1_000
+_MAX_LIST_ENTRIES = 500
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +423,60 @@ class WorkRead:
 
 
 # ---------------------------------------------------------------------------
+# work: list
+# ---------------------------------------------------------------------------
+
+
+class WorkList:
+    """``work_list`` — list workspace files by relative directory."""
+
+    name = "work_list"
+    mutates = False
+    description = (
+        "List files and directories under the internal workspace root "
+        "(non-recursive). Use this for CURRENT.md, notes/, projects/, "
+        "scratch/, and archive/ paths. Returned paths are workspace-relative; "
+        "read files with work_read, not generic read_file."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Workspace-relative directory path. Defaults to '.'.",
+            },
+        },
+    }
+
+    def __init__(self, workspace: "Workspace"):
+        self._workspace = workspace
+
+    def run(self, args: dict) -> str:
+        rel = args.get("path") or "."
+        if not isinstance(rel, str):
+            raise ValueError("path must be a string")
+        path = self._workspace.resolve_in_workspace(rel)
+        if not path.is_dir():
+            return f"(no such workspace directory: {rel})\n"
+
+        entries = []
+        for item in sorted(path.iterdir()):
+            suffix = "/" if item.is_dir() else ""
+            entries.append(item.name + suffix)
+        if not entries:
+            return "(empty directory)"
+
+        if len(entries) > _MAX_LIST_ENTRIES:
+            head = entries[:_MAX_LIST_ENTRIES]
+            extra = len(entries) - _MAX_LIST_ENTRIES
+            return (
+                "\n".join(head)
+                + f"\n\n[harness: {extra} more entries omitted; refine path]"
+            )
+        return "\n".join(entries)
+
+
+# ---------------------------------------------------------------------------
 # work: search
 # ---------------------------------------------------------------------------
 
@@ -435,8 +491,8 @@ class WorkSearch:
         "compact manifest of matching files with snippets. Useful when you "
         "don't know which project contains the information you need. Set "
         "`project` to restrict to a single project. Scope covers "
-        "`projects/` only — for notes, use `work_status` or `work_read` to "
-        "list and inspect individual files."
+        "`projects/` only. Returned paths are workspace-relative; read a "
+        "result with `work_read`, not generic `read_file`."
     )
     input_schema = {
         "type": "object",
@@ -492,7 +548,11 @@ class WorkSearch:
         ]
         for i, hit in enumerate(hits, start=1):
             snippet = (hit["snippet"] or "")[: self._MANIFEST_SNIPPET_CHARS].replace("\n", " ")
-            lines.append(f"{i}. [{hit['path']}] (score={hit['score']:.2f})\n   {snippet}…")
+            lines.append(
+                f"{i}. [{hit['path']}] (score={hit['score']:.2f})\n"
+                f"   {snippet}…\n"
+                f"   Read with: work_read {{\"path\": \"{hit['path']}\"}}"
+            )
             lines.append("")
         return "\n".join(lines)
 
@@ -1417,6 +1477,7 @@ __all__ = [
     "WorkJot",
     "WorkNote",
     "WorkRead",
+    "WorkList",
     "WorkSearch",
     "WorkPromote",
     "WorkScratch",

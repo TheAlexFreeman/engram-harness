@@ -75,6 +75,15 @@ def test_read_only_keeps_read_tools(scope):
     assert "git_diff" in tools
     assert "git_log" in tools
     assert "web_search" in tools
+    assert "tool_help" in tools
+
+
+def test_tool_help_available_in_all_profiles(scope):
+    from harness.cli import build_tools
+
+    for profile in ToolProfile:
+        tools = build_tools(scope, profile=profile)
+        assert "tool_help" in tools
 
 
 def test_extra_tools_appended_to_all_profiles(scope):

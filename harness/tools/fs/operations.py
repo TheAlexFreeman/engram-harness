@@ -12,6 +12,39 @@ from .scope import (
     truncate_text,
 )
 
+_WORKSPACE_ROOT_HINTS = ("projects", "notes", "scratch", "archive")
+
+
+def _looks_like_internal_workspace_path(raw_path: str) -> bool:
+    normalized = raw_path.strip().replace("\\", "/").lstrip("./")
+    if normalized in {"CURRENT.md", "projects", "notes", "scratch", "archive"}:
+        return True
+    head = normalized.split("/", 1)[0]
+    return head in _WORKSPACE_ROOT_HINTS
+
+
+def _internal_workspace_hint(scope: WorkspaceScope, raw_path: str) -> str | None:
+    if not _looks_like_internal_workspace_path(raw_path):
+        return None
+    normalized = raw_path.strip().replace("\\", "/").lstrip("./")
+    workspace_candidate = (scope.root / "workspace" / normalized).resolve()
+    try:
+        workspace_candidate.relative_to((scope.root / "workspace").resolve())
+    except ValueError:
+        return None
+    if not workspace_candidate.exists():
+        return None
+    if workspace_candidate.is_dir():
+        return (
+            f"{raw_path!r} looks like an internal workspace directory. "
+            f"Use work_list {{\"path\": \"{normalized}\"}} to list it."
+        )
+    return (
+        f"{raw_path!r} looks like an internal workspace file. "
+        f"Use work_read {{\"path\": \"{normalized}\"}} to read it, "
+        f"or generic read_file with \"workspace/{normalized}\"."
+    )
+
 
 class ReadFile:
     name = "read_file"
@@ -73,6 +106,9 @@ class ReadFile:
     def run(self, args: dict) -> str:
         path = self.scope.resolve(args["path"])
         if not path.is_file():
+            hint = _internal_workspace_hint(self.scope, args["path"])
+            if hint is not None:
+                raise ValueError(hint)
             raise ValueError(f"not a file: {args['path']!r}")
         encoding = args.get("encoding") or "utf-8"
         errors = args.get("errors") or "strict"

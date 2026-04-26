@@ -104,6 +104,24 @@ def test_explicit_memory_alias_requires_mounted_memory_root(tmp_path: Path) -> N
         ReadFile(scope).run({"path": "memory:/knowledge/celery.md"})
 
 
+def test_read_file_hints_for_internal_workspace_file(tmp_path: Path) -> None:
+    workspace_note = tmp_path / "workspace" / "projects" / "alpha" / "notes" / "plan.md"
+    workspace_note.parent.mkdir(parents=True)
+    workspace_note.write_text("workspace plan\n", encoding="utf-8")
+    scope = WorkspaceScope(root=tmp_path)
+
+    with pytest.raises(ValueError, match="work_read"):
+        ReadFile(scope).run({"path": "projects/alpha/notes/plan.md"})
+
+
+def test_read_file_hints_for_internal_workspace_directory(tmp_path: Path) -> None:
+    (tmp_path / "workspace" / "projects" / "alpha").mkdir(parents=True)
+    scope = WorkspaceScope(root=tmp_path)
+
+    with pytest.raises(ValueError, match="work_list"):
+        ReadFile(scope).run({"path": "projects/alpha"})
+
+
 def test_build_session_mounts_engram_memory_root_on_scope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

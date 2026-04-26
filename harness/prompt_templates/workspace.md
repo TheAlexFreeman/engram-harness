@@ -14,6 +14,13 @@ Workspace operations use the `work` prefix. The prompt shows the prefix
 syntax (`work: status`, `work: project.create`) for readability; the
 native tool names use underscores (`work_status`, `work_project_create`).
 
+Tool routing:
+
+  repo/code files           — `read_file`, `list_files`, `grep_workspace`
+  active workspace context  — `work_status`, `work_list`, `work_search`, `work_read`
+  unknown durable memory    — `memory_context` or `memory_recall`
+  known durable memory path — `memory_review`
+
 ### work: status
 
 Read CURRENT.md; pass `project` to append that project's SUMMARY.md.
@@ -52,6 +59,14 @@ Read any workspace file by relative path.
     work: read({"path": "notes/auth-redesign.md"})
     work: read({"path": "projects/auth-redesign/SUMMARY.md"})
 
+### work: list
+
+List workspace directories by relative path. Use returned paths with
+`work: read`; they are relative to `workspace/`, not the repo root.
+
+    work: list({})
+    work: list({"path": "projects/auth-redesign/notes"})
+
 ### work: search
 
 Keyword search across projects; set `project` to restrict the scope.
@@ -60,7 +75,8 @@ Keyword search across projects; set `project` to restrict the scope.
     work: search({"query": "migration", "project": "auth-redesign"})
 
 Scope covers `projects/` only — for workspace-level notes, use
-`work: status` or `work: read` to list and inspect files directly.
+`work: status`, `work: list`, or `work: read` to list and inspect files
+directly.
 
 ### work: scratch
 
