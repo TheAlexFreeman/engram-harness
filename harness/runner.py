@@ -24,10 +24,9 @@ def _read_interactive_line() -> str | None:
 
 
 def _bridge_enabled(components: "SessionComponents") -> bool:
-    config = components.config
-    if config.trace_to_engram is not None:
-        return config.trace_to_engram
-    return components.engram_memory is not None
+    from harness.config import trace_to_engram_enabled
+
+    return trace_to_engram_enabled(components.config, components.engram_memory)
 
 
 def _run_subtask(

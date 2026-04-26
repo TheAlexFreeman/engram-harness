@@ -165,6 +165,7 @@ class EngramMemory:
         embed: bool | None = None,
         workspace_dir: Path | None = None,
         previous_session_provider: PreviousSessionProvider | None = None,
+        reserve_session_dir: bool = True,
     ):
         """Open an Engram repo for use as a MemoryBackend.
 
@@ -191,6 +192,11 @@ class EngramMemory:
                 callers wire in whatever session index they have
                 (``SessionStore`` is the production case) without
                 EngramMemory importing it directly.
+            reserve_session_dir: When true, reserve the activity directory
+                immediately by creating it atomically. This prevents
+                concurrent sessions from choosing the same ``act-NNN`` slot.
+                Read-only callers that will not write trace artifacts can set
+                this false to avoid filesystem mutations.
         """
         from harness._engram_fs import GitRepo
 
@@ -217,9 +223,15 @@ class EngramMemory:
         # files even when commits land at the git root.
         if Path(self.repo.content_root).resolve() != content_root:
             self.repo.content_root = content_root  # type: ignore[misc]
-        self.session_id = session_id or self._allocate_session_id()
-        self.task: str | None = None
         self.start_time = datetime.now()
+        self._session_date_parts = _today_parts()
+        if session_id is None:
+            self.session_id = self._allocate_session_id(reserve=reserve_session_dir)
+        else:
+            self.session_id = session_id
+            if reserve_session_dir:
+                (self.content_root / self._session_dir_rel()).mkdir(parents=True, exist_ok=True)
+        self.task: str | None = None
         # Set when end_session() is called; consumed by trace_bridge so the
         # agent's wrap-up text survives the deferred-artifact path.
         self.session_summary: str = ""
@@ -480,7 +492,7 @@ class EngramMemory:
         self.session_reply = summary or ""
         if defer_artifacts:
             return
-        rel_dir = self._session_dir_rel()
+        rel_dir = self.session_dir_rel
         summary_rel = f"{rel_dir}/summary.md"
         reply_rel = f"{rel_dir}/REPLY.md"
         summary_abs = self.content_root / summary_rel
@@ -538,8 +550,8 @@ class EngramMemory:
         from harness._engram_fs import write_with_frontmatter
 
         fm = {
-            "session": f"memory/activity/{self._session_path_fragment()}/{self.session_id}",
-            "date": datetime.now().date().isoformat(),
+            "session": self.session_dir_rel,
+            "date": self._session_date_iso(),
             "source": "agent-generated",
             "trust": "medium",
             "session_id": self.session_id,
@@ -674,9 +686,15 @@ class EngramMemory:
         except OSError:
             return None
 
-    def _allocate_session_id(self) -> str:
-        """Pick the next available `act-NNN` slot under today's activity dir."""
-        year, month, day = _today_parts()
+    def _allocate_session_id(self, *, reserve: bool = True) -> str:
+        """Pick the next available `act-NNN` slot under this session's activity dir.
+
+        When ``reserve`` is true, the chosen directory is created with
+        ``mkdir(exist_ok=False)`` so concurrent sessions cannot claim the same
+        id. When false, no filesystem mutation occurs and the id is only a
+        best-effort preview.
+        """
+        year, month, day = self._session_date_parts
         day_dir = self.content_root / "memory" / "activity" / year / month / day
         max_idx = 0
         if day_dir.is_dir():
@@ -684,11 +702,25 @@ class EngramMemory:
                 m = _SESSION_ID_PATTERN.match(entry.name)
                 if m:
                     max_idx = max(max_idx, int(m.group(1)))
-        return f"act-{max_idx + 1:03d}"
+        next_idx = max_idx + 1
+        if not reserve:
+            return f"act-{next_idx:03d}"
+        day_dir.mkdir(parents=True, exist_ok=True)
+        while True:
+            session_id = f"act-{next_idx:03d}"
+            try:
+                (day_dir / session_id).mkdir()
+                return session_id
+            except FileExistsError:
+                next_idx += 1
 
     def _session_path_fragment(self) -> str:
-        year, month, day = _today_parts()
+        year, month, day = self._session_date_parts
         return f"{year}/{month}/{day}"
+
+    def _session_date_iso(self) -> str:
+        year, month, day = self._session_date_parts
+        return f"{year}-{month}-{day}"
 
     def _session_dir_rel(self) -> str:
         return f"memory/activity/{self._session_path_fragment()}/{self.session_id}"

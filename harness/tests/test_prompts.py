@@ -34,6 +34,20 @@ def test_native_prompt_no_sections_when_all_flags_false() -> None:
     assert "You are a coding assistant" in prompt
 
 
+def test_native_prompt_read_only_sections_hide_mutating_affordances() -> None:
+    prompt = system_prompt_native(
+        with_memory_tools=True,
+        with_work_tools=True,
+        memory_writes=False,
+        work_writes=False,
+    )
+    assert "memory_remember" not in prompt
+    assert "memory_trace" not in prompt
+    assert "work_project_plan" not in prompt
+    assert "work_project_create" not in prompt
+    assert "This session is read-only" in prompt
+
+
 def test_system_prompt_native_rejects_legacy_with_plan_tools_kwarg() -> None:
     """Regression guard: the with_plan_tools kwarg was dropped, not silently
     accepted. Callers that pass it should see a TypeError rather than a

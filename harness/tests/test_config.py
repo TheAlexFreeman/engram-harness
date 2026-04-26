@@ -12,6 +12,7 @@ from harness.config import (
     ToolProfile,
     build_session,
     config_from_args,
+    trace_to_engram_enabled,
 )
 from harness.stream import NullStreamSink, StderrStreamPrinter
 from harness.trace import CompositeTracer, Tracer
@@ -246,6 +247,38 @@ def test_build_session_trace_path_file_memory(tmp_path):
         components = build_session(config, tools={})
 
     assert "traces" in str(components.trace_path)
+
+
+def test_build_session_read_only_engram_uses_local_trace_path(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    import harness.config as config_module
+    from harness.tests.test_engram_memory import _make_engram_repo
+
+    project_root = tmp_path / "fake-project-root"
+    project_root.mkdir()
+    monkeypatch.setattr(config_module, "_harness_project_root", lambda: project_root)
+
+    repo = _make_engram_repo(tmp_path / "engram")
+    config = SessionConfig(
+        workspace=tmp_path / "workspace-under-test",
+        memory_backend="engram",
+        memory_repo=repo,
+        tool_profile=ToolProfile.READ_ONLY,
+        trace_live=False,
+        stream=False,
+    )
+    with patch("harness.config._build_mode") as mock_mode:
+        mock_mode.return_value = MagicMock()
+        components = build_session(config, tools={})
+
+    names = set(components.tools)
+    assert {"memory_recall", "memory_review", "memory_context"} <= names
+    assert "memory_remember" not in names
+    assert "memory_trace" not in names
+    assert "traces" in str(components.trace_path)
+    assert not str(components.trace_path).startswith(str((repo / "core").resolve()))
+    assert trace_to_engram_enabled(config, components.engram_memory) is False
 
 
 # ---------------------------------------------------------------------------

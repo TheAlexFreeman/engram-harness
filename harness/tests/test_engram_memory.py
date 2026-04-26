@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
+import time_machine
 
 from harness.engram_memory import EngramMemory, detect_engram_repo
 
@@ -108,9 +109,13 @@ def test_bootstrap_identical_across_tasks(engram_repo: Path) -> None:
     mem_b = EngramMemory(engram_repo, embed=False)
     a = mem_a.start_session("optimize celery worker pool")
     b = mem_b.start_session("improve ssr caching")
-    # Strip the header's Task line before comparing.
-    body_a = "\n".join(line for line in a.splitlines() if not line.startswith("Task:"))
-    body_b = "\n".join(line for line in b.splitlines() if not line.startswith("Task:"))
+    # Strip per-session header lines before comparing.
+    body_a = "\n".join(
+        line for line in a.splitlines() if not line.startswith(("Session:", "Task:"))
+    )
+    body_b = "\n".join(
+        line for line in b.splitlines() if not line.startswith(("Session:", "Task:"))
+    )
     assert body_a == body_b
 
 
@@ -161,6 +166,31 @@ def test_engram_memory_bumps_session_id(engram_repo: Path) -> None:
     first.end_session("done")
     second = EngramMemory(engram_repo, embed=False)
     assert second.session_id == "act-002"
+
+
+def test_engram_memory_reserves_session_id_on_open(engram_repo: Path) -> None:
+    """Two live sessions should not pick the same activity directory."""
+    first = EngramMemory(engram_repo, embed=False)
+    second = EngramMemory(engram_repo, embed=False)
+    assert first.session_id == "act-001"
+    assert second.session_id == "act-002"
+    assert (engram_repo / "core" / first.session_dir_rel).is_dir()
+    assert (engram_repo / "core" / second.session_dir_rel).is_dir()
+
+
+def test_session_dir_rel_freezes_date_across_midnight(engram_repo: Path) -> None:
+    with time_machine.travel("2026-04-25 23:59:00", tick=False):
+        mem = EngramMemory(engram_repo, embed=False)
+        mem.start_session("cross midnight")
+        initial_dir = mem.session_dir_rel
+
+    with time_machine.travel("2026-04-26 00:01:00", tick=False):
+        assert mem.session_dir_rel == initial_dir
+        mem.end_session("done", skip_commit=True)
+
+    assert initial_dir == "memory/activity/2026/04/25/act-001"
+    assert (engram_repo / "core" / initial_dir / "summary.md").is_file()
+    assert not (engram_repo / "core" / "memory" / "activity" / "2026" / "04" / "26").exists()
 
 
 def test_end_session_defer_artifacts_skips_file_but_stores_summary(

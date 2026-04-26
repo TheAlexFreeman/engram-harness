@@ -104,6 +104,7 @@ class MemoryRecall:
     """
 
     name = "memory_recall"
+    mutates = False
     description = (
         "Search the long-term Engram memory store and return relevant excerpts. "
         "Use this for: prior session summaries, captured user preferences, project "
@@ -195,6 +196,7 @@ class MemoryRemember:
     """``memory_remember`` — buffer a durable record for the session log."""
 
     name = "memory_remember"
+    mutates = True
     description = (
         "Buffer a durable record that will be committed to the session's activity "
         "log at end-of-session. Good for capturing decisions, observations, or "
@@ -249,6 +251,7 @@ class MemoryReview:
     """``memory_review`` — direct read of a memory file by path."""
 
     name = "memory_review"
+    mutates = False
     description = (
         "Read a specific memory file by path when you already know what you want. "
         "No search overhead — direct file access. Path is relative to the memory "
@@ -305,6 +308,7 @@ class MemoryContext:
     """``memory_context`` — declarative, session-cached context loader."""
 
     name = "memory_context"
+    mutates = False
     description = (
         "Declarative context loading. State what context you need and the system "
         "returns the best-matching files, respecting token budget. Supported "
@@ -555,6 +559,7 @@ class MemoryTrace:
     """``memory_trace`` — agent-annotated structured event for the session."""
 
     name = "memory_trace"
+    mutates = True
     description = (
         "Self-annotate the current session's trace with a structured event. "
         "These annotations enrich the post-session reflection and give the "

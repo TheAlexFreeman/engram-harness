@@ -501,7 +501,7 @@ def _render_summary(
     sub_sessions: list[str] | None = None,
 ) -> str:
     fm = dict(_AGENT_FM)
-    fm["session"] = f"memory/activity/{memory._session_path_fragment()}/{memory.session_id}"
+    fm["session"] = memory.session_dir_rel
     fm["session_id"] = memory.session_id
     fm["created"] = stats.session_date or datetime.now().date().isoformat()
     fm["tool_calls"] = stats.tool_call_count
@@ -601,7 +601,7 @@ def _render_reflection(
     legacy template — same content as before this PR.
     """
     fm = dict(_AGENT_FM)
-    fm["origin_session"] = f"memory/activity/{memory._session_path_fragment()}/{memory.session_id}"
+    fm["origin_session"] = memory.session_dir_rel
     fm["created"] = stats.session_date or datetime.now().date().isoformat()
 
     llm_reflection = (getattr(memory, "session_reflection", "") or "").strip()
@@ -674,7 +674,7 @@ def _build_spans(
     events: list[dict[str, Any]],
     stats: _SessionStats,
 ) -> list[dict[str, Any]]:
-    session_id = f"memory/activity/{memory._session_path_fragment()}/{memory.session_id}"
+    session_id = memory.session_dir_rel
 
     # Count calls per turn so we can split the turn's cost evenly.
     calls_per_turn: dict[int, int] = defaultdict(int)
@@ -747,9 +747,7 @@ def _emit_access_entries(
     access_date = stats.session_date or datetime.now().date().isoformat()
     task_slug = _task_slug(stats.task) or memory.session_id
     _prefix = content_prefix.strip("/")
-    canonical_session_id = (
-        f"{_prefix}/{memory._session_dir_rel()}" if _prefix else memory._session_dir_rel()
-    )
+    canonical_session_id = f"{_prefix}/{memory.session_dir_rel}" if _prefix else memory.session_dir_rel
 
     for idx, tc in enumerate(tool_calls):
         if tc.name != "read_file":
@@ -838,9 +836,7 @@ def _emit_session_rollups(
     access_date = stats.session_date or datetime.now().date().isoformat()
     task_slug = _task_slug(stats.task) or memory.session_id
     _prefix = content_prefix.strip("/")
-    canonical_session_id = (
-        f"{_prefix}/{memory._session_dir_rel()}" if _prefix else memory._session_dir_rel()
-    )
+    canonical_session_id = f"{_prefix}/{memory.session_dir_rel}" if _prefix else memory.session_dir_rel
 
     for idx, tc in enumerate(tool_calls):
         if tc.name != "read_file":

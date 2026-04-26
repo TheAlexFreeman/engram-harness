@@ -429,6 +429,12 @@ def test_build_memory_filters_work_tools_under_read_only(
     assert "work_search" in names
     assert "work_project_list" in names
     assert "work_project_status" in names
+    # Mutating memory affordances are also withheld in read-only mode.
+    assert "memory_recall" in names
+    assert "memory_review" in names
+    assert "memory_context" in names
+    assert "memory_remember" not in names
+    assert "memory_trace" not in names
     # And the workspace layout wasn't eagerly created.
     assert not (project_root / "workspace").is_dir()
 

@@ -22,7 +22,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from harness.config import SessionComponents, SessionConfig, build_session
+from harness.config import (
+    SessionComponents,
+    SessionConfig,
+    build_session,
+    trace_to_engram_enabled,
+)
 from harness.loop import RunResult, run, run_until_idle
 from harness.server_models import (
     CreateSessionRequest,
@@ -447,9 +452,7 @@ def _engram_session_metadata(
 
 
 def _bridge_enabled(session: ManagedSession) -> bool:
-    config = session.config
-    default = session.components.engram_memory is not None
-    return config.trace_to_engram if config.trace_to_engram is not None else default
+    return trace_to_engram_enabled(session.config, session.components.engram_memory)
 
 
 def _maybe_run_trace_bridge(session: ManagedSession) -> None:

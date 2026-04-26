@@ -132,6 +132,21 @@ def _build_previous_session_provider(config: SessionConfig) -> Any | None:
     return provider
 
 
+def _is_read_only_profile(config: SessionConfig) -> bool:
+    return config.tool_profile == ToolProfile.READ_ONLY
+
+
+def trace_to_engram_enabled(config: SessionConfig, engram_memory: Any | None) -> bool:
+    """Return whether this session may write trace artifacts into Engram."""
+    if engram_memory is None:
+        return False
+    if _is_read_only_profile(config):
+        return False
+    if config.trace_to_engram is not None:
+        return bool(config.trace_to_engram)
+    return True
+
+
 def config_from_args(args: argparse.Namespace) -> SessionConfig:
     """Convert parsed CLI arguments to a SessionConfig."""
     reflect_arg = getattr(args, "reflect", None)
@@ -225,11 +240,18 @@ def _build_memory(
     # continuity block. EngramMemory doesn't import SessionStore — it
     # just calls the closure and reads documented attributes.
     previous_session_provider = _build_previous_session_provider(config)
+    read_only = _is_read_only_profile(config)
+    reserve_session_dir = (
+        False
+        if read_only
+        else (bool(config.trace_to_engram) if config.trace_to_engram is not None else True)
+    )
     try:
         engram = EngramMemory(
             Path(repo_path),
             workspace_dir=workspace_root,
             previous_session_provider=previous_session_provider,
+            reserve_session_dir=reserve_session_dir,
         )
     except Exception as exc:  # noqa: BLE001
         print(
@@ -252,7 +274,6 @@ def _build_memory(
     # tolerate a missing workspace and return an uninitialized state
     # message instead.
     workspace = Workspace(project_root, session_id=engram.session_id)
-    read_only = config.tool_profile == ToolProfile.READ_ONLY
     allow_test_postconditions = config.tool_profile != ToolProfile.NO_SHELL
     if not read_only:
         try:
@@ -265,14 +286,14 @@ def _build_memory(
 
     memory_tools = [
         MemoryRecall(engram),
-        MemoryRemember(engram),
         MemoryReview(engram),
         # MemoryContext takes an optional Workspace so the agent can pass
         # `project: <name>` and have the project's goal + open questions
         # folded into the re-ranking purpose automatically.
         MemoryContext(engram, workspace=workspace),
-        MemoryTrace(engram),
     ]
+    if not read_only:
+        memory_tools.extend([MemoryRemember(engram), MemoryTrace(engram)])
     work_tools = [
         WorkStatus(workspace),
         WorkThread(workspace, engram=engram),
@@ -350,6 +371,8 @@ def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any
             system=system_prompt_native(
                 with_memory_tools=engram_memory is not None,
                 with_work_tools=engram_memory is not None,
+                memory_writes=not _is_read_only_profile(config),
+                work_writes=not _is_read_only_profile(config),
             ),
         )
     raise AssertionError("unreachable")
@@ -359,7 +382,7 @@ def _derive_trace_path(config: SessionConfig, engram_memory: Any) -> Path:
     """Derive the trace file path from config and optional engram session."""
     is_grok = any(k in config.model.lower() for k in ["grok", "xai", "x.ai"])
     actions_suffix = "grok" if is_grok else config.mode
-    if engram_memory is not None:
+    if trace_to_engram_enabled(config, engram_memory):
         trace_path = (
             engram_memory.content_root
             / engram_memory.session_dir_rel

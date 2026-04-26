@@ -312,16 +312,109 @@ summary and reflection but are not independently queryable after the
 session ends."""
 
 
+_MEMORY_READ_ONLY_SECTION = """\
+## Memory
+
+You have read-only access to a durable, git-backed memory system that persists
+across sessions. Memory is organized into four namespaces:
+
+  knowledge  — verified reference material (concepts, domains, facts)
+  skills     — codified procedures, checklists, and operational playbooks
+  activity   — session logs, reflections, and trace spans
+  users      — user profiles, preferences, and relationship context
+
+Operational state (active threads, working notes, projects, scratch) lives in
+the workspace, not in memory.
+
+Available memory operations use `memory: <op>(...)` syntax for readability; the
+underlying native tool names are `memory_recall`, `memory_review`, and
+`memory_context`.
+
+### memory: recall
+
+Search memory by natural language query. Returns a compact manifest (one line
+per hit); use `result_index` to fetch a specific result in full.
+
+    memory: recall({"query": "...", "scope": "knowledge", "k": 5})
+    memory: recall({"query": "...", "result_index": 3})
+
+### memory: review
+
+Read a specific memory file by path when you already know what you want. Path is
+relative to the memory root; the `memory/` prefix is implicit.
+
+    memory: review({"path": "users/Alex/profile.md"})
+
+### memory: context
+
+Declarative context loading. State what context you need and the system returns
+the best-matching files, respecting token budget.
+
+    memory: context({"needs": ["user_preferences", "recent_sessions"]})
+    memory: context({"needs": ["domain:auth"], "purpose": "debugging", "budget": "M"})
+
+This session is read-only: do not attempt to remember, trace, promote, or modify
+memory."""
+
+
+_WORK_READ_ONLY_SECTION = """\
+## Workspace
+
+You have read-only access to the persistent workspace for orientation and
+project context. The workspace contains:
+
+  CURRENT.md  — active threads + freeform notes
+  notes/      — persistent working documents
+  projects/   — isolated work contexts with goals, questions, and summaries
+
+Available workspace operations use the `work` prefix; the underlying native tool
+names are `work_status`, `work_read`, `work_search`, `work_project_list`, and
+`work_project_status`.
+
+### work: status
+
+Read CURRENT.md's active threads and freeform notes. Pass `project` to also
+include that project's auto-generated SUMMARY.md.
+
+    work: status({})
+    work: status({"project": "auth-redesign"})
+
+### work: read
+
+Read any workspace file by relative path.
+
+    work: read({"path": "notes/auth-redesign.md"})
+
+### work: search
+
+Keyword search across projects in the workspace. Set `project` to restrict to a
+single project.
+
+    work: search({"query": "token refresh"})
+
+### Projects
+
+List projects or read a project's status summary.
+
+    work: project.list({})
+    work: project.status({"name": "auth-redesign"})
+
+This session is read-only: do not attempt to create, update, archive, advance
+plans, write scratch, or promote workspace content."""
+
+
 def system_prompt_native(
     *,
     with_memory_tools: bool = False,
     with_work_tools: bool = False,
+    memory_writes: bool = True,
+    work_writes: bool = True,
 ) -> str:
     extras: list[str] = []
     if with_memory_tools:
-        extras.append(_MEMORY_SECTION)
+        extras.append(_MEMORY_SECTION if memory_writes else _MEMORY_READ_ONLY_SECTION)
     if with_work_tools:
-        extras.append(_WORK_SECTION)
+        extras.append(_WORK_SECTION if work_writes else _WORK_READ_ONLY_SECTION)
     tail = ("\n\n" + "\n\n".join(extras)) if extras else ""
     return f"{_IDENTITY}\n\n{_RULES}\n\n{_OUTPUT_NATIVE}{tail}"
 

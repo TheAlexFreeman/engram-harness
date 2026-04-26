@@ -340,7 +340,8 @@ def _parse_args() -> argparse.Namespace:
         help=(
             "After the run, translate the trace into Engram artifacts (session "
             "summary, reflection, ACCESS entries, span jsonl) and commit them. "
-            "Defaults to enabled when --memory=engram, disabled otherwise."
+            "Defaults to enabled when --memory=engram, disabled otherwise. "
+            "Always disabled under --tool-profile=read_only."
         ),
     )
     parser.add_argument(
