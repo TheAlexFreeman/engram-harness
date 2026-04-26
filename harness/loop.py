@@ -545,38 +545,28 @@ def run(
     )
     result.usage = result.usage + reflection_usage
 
+    tracer.event("final_response", text=result.final_text or "")
     tracer.event("session_usage", **result.usage.as_trace_dict())
     # When the caller suppresses the end_session commit, the trace bridge
     # will run next and own the session artifacts. Defer to it so we don't
     # write summary.md only to have it overwritten a moment later.
     defer = skip_end_session_commit
+    end_reason: str | None = None
     if result.max_turns_reached:
-        memory.end_session(
-            summary="(max turns reached)",
-            skip_commit=skip_end_session_commit,
-            defer_artifacts=defer,
-        )
-        tracer.event("session_end", turns=result.turns_used, reason="max_turns")
+        end_reason = "max_turns"
     elif result.stopped_by_user:
-        memory.end_session(
-            summary=result.final_text[:2000],
-            skip_commit=skip_end_session_commit,
-            defer_artifacts=defer,
-        )
-        tracer.event("session_end", turns=result.turns_used, reason="stopped")
+        end_reason = "stopped"
     elif result.stopped_by_loop_detection:
-        memory.end_session(
-            summary=result.final_text[:2000],
-            skip_commit=skip_end_session_commit,
-            defer_artifacts=defer,
-        )
-        tracer.event("session_end", turns=result.turns_used, reason="loop_detected")
-    else:
-        memory.end_session(
-            summary=result.final_text[:2000],
-            skip_commit=skip_end_session_commit,
-            defer_artifacts=defer,
-        )
+        end_reason = "loop_detected"
+
+    memory.end_session(
+        summary=result.final_text,
+        skip_commit=skip_end_session_commit,
+        defer_artifacts=defer,
+    )
+    if end_reason is None:
         tracer.event("session_end", turns=result.turns_used)
+    else:
+        tracer.event("session_end", turns=result.turns_used, reason=end_reason)
 
     return result

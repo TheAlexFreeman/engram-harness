@@ -192,6 +192,7 @@ def test_run_trace_bridge_minimal_session(repo: Path, memory: EngramMemory, tmp_
     result = run_trace_bridge(trace, memory)
 
     assert result.summary_path.is_file()
+    assert result.reply_path.is_file()
     assert result.reflection_path.is_file()
     assert result.spans_path.is_file()
     assert result.access_entries == 1  # one read of a tracked file
@@ -201,6 +202,8 @@ def test_run_trace_bridge_minimal_session(repo: Path, memory: EngramMemory, tmp_
     assert "explore the celery setup" in summary
     assert "edit_file" in summary
     assert "Cost: $0.0123" in summary
+
+    assert result.reply_path.read_text(encoding="utf-8") == ""
 
     spans = [
         json.loads(line)
@@ -241,6 +244,37 @@ def test_summary_renders_deferred_agent_summary(
     summary = result.summary_path.read_text(encoding="utf-8")
     assert "## Summary" in summary
     assert "Implemented offline-capable token refresh" in summary
+    assert result.reply_path.read_text(encoding="utf-8") == (
+        "Implemented offline-capable token refresh; ready for review.\n"
+    )
+
+
+def test_trace_bridge_writes_reply_from_final_response_event(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    _write_trace(
+        trace,
+        [
+            {"ts": ts, "kind": "session_start", "task": "answer fully"},
+            {
+                "ts": ts,
+                "kind": "final_response",
+                "text": "Here is the full final reply.\n\nDone.",
+            },
+            {"ts": ts, "kind": "session_end", "turns": 1},
+        ],
+    )
+
+    result = run_trace_bridge(trace, memory, commit=False)
+
+    assert result.reply_path.name == "REPLY.md"
+    assert result.reply_path.read_text(encoding="utf-8") == (
+        "Here is the full final reply.\n\nDone.\n"
+    )
+    rel = result.reply_path.relative_to(memory.content_root).as_posix()
+    assert rel in result.artifacts
 
 
 def test_summary_omits_summary_section_when_no_deferred_text(
@@ -734,6 +768,12 @@ def test_run_trace_bridge_with_subsessions(
     assert "sub-002" in parent_summary
 
     # Per-subtask summary files should exist
+    assert (session_dir / "REPLY.md").is_file()
+    assert (session_dir / "REPLY.md").read_text(encoding="utf-8") == "done with subtask 2\n"
+    assert (session_dir / "sub-001" / "REPLY.md").is_file()
+    assert (session_dir / "sub-001" / "REPLY.md").read_text(encoding="utf-8") == (
+        "done with subtask 1\n"
+    )
     assert (session_dir / "sub-001" / "summary.md").is_file()
     assert (session_dir / "sub-002" / "summary.md").is_file()
     assert (session_dir / "sub-001" / "reflection.md").is_file()

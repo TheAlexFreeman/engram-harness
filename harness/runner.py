@@ -57,7 +57,7 @@ def _run_subtask(
     tracer.event(
         "sub_session_end",
         subtask_idx=subtask_idx,
-        final_text=(r.final_text or "")[:500],
+        final_text=r.final_text or "",
         turns=r.turns_used,
     )
     return r
@@ -155,11 +155,7 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
             stopped_by_user = True
 
         if session_started:
-            summary = (
-                (last_final or "")[:2000]
-                if last_final
-                else "(interactive exit before any assistant reply)"
-            )
+            summary = last_final or "(interactive exit before any assistant reply)"
             # Reflection turn at session-end (cost folded into total_usage
             # so the printed usage line stays honest). The flag matches
             # batch behaviour; the same skip_reflection conditions apply.
@@ -175,6 +171,7 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
                 ),
             )
             total_usage = total_usage + reflection_usage
+            tracer.event("final_response", text=summary)
             components.memory.end_session(
                 summary=summary,
                 skip_commit=bridge,

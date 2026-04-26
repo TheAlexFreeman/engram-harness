@@ -93,6 +93,7 @@ class TraceBridgeResult:
 
     session_dir: Path
     summary_path: Path
+    reply_path: Path
     reflection_path: Path
     spans_path: Path
     access_entries: int
@@ -137,6 +138,7 @@ def run_trace_bridge(
     tool_calls = _extract_tool_calls(events)
 
     summary_path = session_dir / "summary.md"
+    reply_path = session_dir / "REPLY.md"
     spans_path = session_dir / f"{memory.session_id}.traces.jsonl"
     reflection_path = session_dir / "reflection.md"
 
@@ -154,6 +156,12 @@ def run_trace_bridge(
             written.extend(sub_written)
             access_count += sub_access
             sub_ids.append(f"sub-{idx + 1:03d}")
+
+    reply_text = _extract_final_reply(events)
+    if reply_text is None:
+        reply_text = getattr(memory, "session_reply", "") or getattr(memory, "session_summary", "")
+    _write_reply(reply_path, reply_text or "")
+    written.append(_relpath(memory, reply_path))
 
     summary_text = _render_summary(memory, stats, tool_calls, sub_sessions=sub_ids)
     _write_artifact(summary_path, summary_text)
@@ -210,6 +218,7 @@ def run_trace_bridge(
     return TraceBridgeResult(
         session_dir=session_dir,
         summary_path=summary_path,
+        reply_path=reply_path,
         reflection_path=reflection_path,
         spans_path=spans_path,
         access_entries=access_count,
@@ -274,7 +283,10 @@ def _run_subsession_bridge(
     tool_calls = _extract_tool_calls(segment_events)
 
     summary_path = sub_dir / "summary.md"
+    reply_path = sub_dir / "REPLY.md"
     reflection_path = sub_dir / "reflection.md"
+
+    _write_reply(reply_path, _extract_subsession_reply(segment_events) or "")
 
     summary_text = _render_summary(memory, stats, tool_calls)
     _write_artifact(summary_path, summary_text)
@@ -286,6 +298,7 @@ def _run_subsession_bridge(
     _emit_session_rollups(memory, tool_calls, stats, content_prefix=content_prefix)
 
     written = [
+        _relpath(memory, reply_path),
         _relpath(memory, summary_path),
         _relpath(memory, reflection_path),
     ]
@@ -413,6 +426,25 @@ def _extract_tool_calls(events: list[dict[str, Any]]) -> list[_ToolCall]:
                 matched.content_preview = str(ev.get("content_preview", ""))
                 pending_calls.remove(matched)
     return calls
+
+
+def _extract_final_reply(events: list[dict[str, Any]]) -> str | None:
+    """Return the session's final assistant reply from trace events, if present."""
+    for ev in reversed(events):
+        kind = ev.get("kind")
+        if kind == "final_response":
+            return str(ev.get("text", ""))
+        if kind == "sub_session_end" and "final_text" in ev:
+            return str(ev.get("final_text", ""))
+    return None
+
+
+def _extract_subsession_reply(events: list[dict[str, Any]]) -> str | None:
+    """Return the final assistant reply for one interactive sub-session segment."""
+    for ev in reversed(events):
+        if ev.get("kind") == "sub_session_end" and "final_text" in ev:
+            return str(ev.get("final_text", ""))
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1074,6 +1106,13 @@ def _serialize_with_frontmatter(fm: dict[str, Any], body: str) -> str:
 
 def _write_artifact(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _write_reply(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if text and not text.endswith("\n"):
+        text += "\n"
     path.write_text(text, encoding="utf-8")
 
 

@@ -125,6 +125,9 @@ class ConsoleTracePrinter:
                 line = f"session end: turns={turns} reason={reason}"
             else:
                 line = f"session end: turns={turns}"
+        elif kind == "final_response":
+            text = str(data.get("text", ""))
+            line = f"final response: chars={len(text)}"
         elif kind == "native_search_call":
             search_kind = data.get("search_type", "native_search")
             query = data.get("query", "")

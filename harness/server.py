@@ -377,8 +377,9 @@ def _run_interactive_session(session: ManagedSession) -> None:
             )
             session.status = "idle"
 
-        summary = (session.final_text or "")[:2000] or "(interactive exit)"
+        summary = session.final_text or "(interactive exit)"
         bridge_enabled = _bridge_enabled(session)
+        tracer.event("final_response", text=summary)
         memory.end_session(
             summary=summary,
             skip_commit=bridge_enabled,

@@ -132,11 +132,14 @@ def test_engram_memory_record_and_end_session(engram_repo: Path) -> None:
     mem.end_session("Test summary text.")
 
     summary_path = engram_repo / "core" / mem.session_dir_rel / "summary.md"
+    reply_path = engram_repo / "core" / mem.session_dir_rel / "REPLY.md"
     assert summary_path.is_file(), f"summary not written: {summary_path}"
+    assert reply_path.is_file(), f"reply not written: {reply_path}"
     text = summary_path.read_text(encoding="utf-8")
     assert "Test summary text." in text
     assert "[error]" in text
     assert "[note]" in text
+    assert reply_path.read_text(encoding="utf-8") == "Test summary text.\n"
     # Frontmatter present
     assert text.startswith("---\n")
     assert "source: agent-generated" in text
@@ -173,8 +176,11 @@ def test_end_session_defer_artifacts_skips_file_but_stores_summary(
     mem.end_session("agent wrap-up text", defer_artifacts=True)
 
     summary_path = engram_repo / "core" / mem.session_dir_rel / "summary.md"
+    reply_path = engram_repo / "core" / mem.session_dir_rel / "REPLY.md"
     assert not summary_path.exists(), "deferred path should not write summary.md"
+    assert not reply_path.exists(), "deferred path should not write REPLY.md"
     assert mem.session_summary == "agent wrap-up text"
+    assert mem.session_reply == "agent wrap-up text"
 
 
 def test_end_session_defer_artifacts_does_not_commit(engram_repo: Path) -> None:
