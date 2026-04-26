@@ -9,6 +9,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from harness.pricing import load_pricing
 from harness.stream import NullStreamSink, StderrStreamPrinter
 from harness.trace import CompositeTracer, ConsoleTracePrinter, Tracer
 
@@ -498,6 +499,8 @@ def build_session(
     tracer = _build_tracer(config, trace_path, extra_sinks=extra_trace_sinks)
     stream_sink = _build_stream_sink(config, override=stream_sink_override)
 
+    _wire_subagent_spawn(tools, mode=mode, parent_tracer=tracer, pricing_loader=load_pricing)
+
     return SessionComponents(
         mode=mode,
         tools=tools,
@@ -508,3 +511,84 @@ def build_session(
         trace_path=trace_path,
         config=config,
     )
+
+
+def _wire_subagent_spawn(
+    tools: dict[str, Any],
+    *,
+    mode: Any,
+    parent_tracer: Any,
+    pricing_loader: Any,
+) -> None:
+    """Late-bind the spawn callback on any ``SpawnSubagent`` tool in ``tools``.
+
+    Sub-agents reuse the parent's Mode (saving on system-prompt rebuild)
+    but get a ``NullMemory`` and ``NullTraceSink`` to keep their internal
+    state isolated from the parent's session. The parent's tracer still
+    sees a single ``subagent_run`` summary event for each call.
+    """
+    spawn_tool = tools.get("spawn_subagent")
+    if spawn_tool is None or not hasattr(spawn_tool, "set_spawn_fn"):
+        return
+
+    from harness.loop import run_until_idle
+    from harness.tools.subagent import (
+        DEFAULT_ALLOWED_TOOLS,
+        NullMemory,
+        NullTraceSink,
+        SpawnSubagent,
+        SubagentResult,
+    )
+
+    parent_tools = tools
+
+    def spawn(*, task: str, allowed_tools: list[str], max_turns: int, depth: int) -> SubagentResult:
+        # Filter parent registry by allowed names. Skip 'spawn_subagent' here —
+        # nested spawning is handled below with its own depth bound.
+        sub_tools = {
+            n: t for n, t in parent_tools.items() if n in allowed_tools and n != "spawn_subagent"
+        }
+        # Allow nested spawns (within the depth budget) when the caller
+        # explicitly opted in via allowed_tools.
+        if "spawn_subagent" in allowed_tools and isinstance(spawn_tool, SpawnSubagent):
+            nested = SpawnSubagent(
+                spawn,
+                max_depth=spawn_tool.max_depth,
+                current_depth=depth,
+            )
+            sub_tools["spawn_subagent"] = nested
+
+        sub_messages = mode.initial_messages(task=task, prior="", tools=sub_tools)
+        result = run_until_idle(
+            sub_messages,
+            mode,
+            sub_tools,
+            NullMemory(),
+            NullTraceSink(),
+            max_turns=max_turns,
+            pricing=pricing_loader(),
+            max_parallel_tools=1,
+        )
+        # Best-effort visibility on the parent's trace.
+        try:
+            parent_tracer.event(
+                "subagent_run",
+                depth=depth,
+                turns=result.turns_used,
+                max_turns_reached=result.max_turns_reached,
+                input_tokens=int(getattr(result.usage, "input_tokens", 0) or 0),
+                output_tokens=int(getattr(result.usage, "output_tokens", 0) or 0),
+                cost_usd=float(getattr(result.usage, "total_cost_usd", 0.0) or 0.0),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        return SubagentResult(
+            final_text=result.final_text,
+            usage=result.usage,
+            turns_used=result.turns_used,
+            max_turns_reached=result.max_turns_reached,
+        )
+
+    _ = DEFAULT_ALLOWED_TOOLS  # imported for visibility; consumed by the tool itself
+    spawn_tool.set_spawn_fn(spawn)
