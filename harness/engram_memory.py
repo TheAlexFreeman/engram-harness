@@ -133,6 +133,30 @@ class _RecallEvent:
 
 
 @dataclass
+class _RecallCandidateEvent:
+    """The full ranked candidate set considered for a single ``recall()`` call.
+
+    Where ``_RecallEvent`` records only the entries the agent saw,
+    ``_RecallCandidateEvent`` captures *everything* that scored — what
+    each backend ranked at each position, and which made it through
+    fusion. The trace bridge writes these to ``recall_candidates.jsonl``
+    so later debugging can answer "why did the agent miss file X?"
+    """
+
+    timestamp: datetime
+    query: str
+    namespace: str | None
+    k: int
+    candidates: list[dict[str, Any]]  # [{file_path, source, rank, score, returned}]
+
+
+# Cap per-backend candidates persisted per call. The semantic and BM25
+# backends typically return up to k*3 (=15 by default); cap at 10 so the
+# JSONL doesn't bloat on long sessions.
+_CANDIDATE_CAP_PER_SOURCE = 10
+
+
+@dataclass
 class _TraceEvent:
     """One agent-annotated trace event. Feeds session summary + reflection."""
 
@@ -249,6 +273,7 @@ class EngramMemory:
         self._previous_session_provider: PreviousSessionProvider | None = previous_session_provider
         self._records: list[_BufferedRecord] = []
         self._recall_events: list[_RecallEvent] = []
+        self._recall_candidate_events: list[_RecallCandidateEvent] = []
         self._trace_events: list[_TraceEvent] = []
         # `memory: context` session cache, keyed on
         # (tuple(sorted(needs)), purpose, budget). Invalidates on record().
@@ -322,11 +347,38 @@ class EngramMemory:
         if not q:
             return []
         scopes = _recall_scopes(namespace)
-        hits = self._hybrid_recall(q, k=k, scopes=scopes)
-        if not hits:
+
+        # Run the backends ourselves (instead of delegating to ``_hybrid_recall``)
+        # so we can capture each backend's full ranked list for retrieval
+        # observability. The fusion logic mirrors ``_hybrid_recall``.
+        from harness._engram_fs.bm25_index import reciprocal_rank_fusion
+
+        sem_hits = self._semantic_recall(q, k=k * 3, scopes=scopes) if self._embed_enabled else []
+        bm25_hits = self._bm25_recall(q, k=k, scopes=scopes)
+        keyword_hits: list[dict[str, Any]] = []
+
+        if not sem_hits and not bm25_hits:
             # Last-resort: density-scored keyword scan over .md files. Used
             # when the BM25 index is empty (fresh repo) or fails entirely.
-            hits = self._keyword_recall(q, k=k, scopes=scopes)
+            keyword_hits = self._keyword_recall(q, k=k, scopes=scopes)
+            hits = list(keyword_hits)
+        elif not sem_hits:
+            hits = bm25_hits[:k]
+        elif not bm25_hits:
+            hits = sem_hits[:k]
+        else:
+            hits = reciprocal_rank_fusion([sem_hits, bm25_hits])[:k]
+
+        returned_paths = {h["file_path"] for h in hits}
+        self._capture_recall_candidates(
+            query=q,
+            namespace=namespace,
+            k=k,
+            sem_hits=sem_hits,
+            bm25_hits=bm25_hits,
+            keyword_hits=keyword_hits,
+            returned_paths=returned_paths,
+        )
 
         results: list[Memory] = []
         now = datetime.now()
@@ -659,6 +711,10 @@ class EngramMemory:
     @property
     def recall_events(self) -> list[_RecallEvent]:
         return list(self._recall_events)
+
+    @property
+    def recall_candidate_events(self) -> list[_RecallCandidateEvent]:
+        return list(self._recall_candidate_events)
 
     @property
     def buffered_records(self) -> list[_BufferedRecord]:
@@ -1068,6 +1124,54 @@ class EngramMemory:
             if len(out) >= k * 3:
                 break
         return out
+
+    def _capture_recall_candidates(
+        self,
+        *,
+        query: str,
+        namespace: str | None,
+        k: int,
+        sem_hits: list[dict[str, Any]],
+        bm25_hits: list[dict[str, Any]],
+        keyword_hits: list[dict[str, Any]],
+        returned_paths: set[str],
+    ) -> None:
+        """Buffer one candidate-set snapshot per recall call.
+
+        Each backend's ranked list is recorded separately so consumers can
+        still see "BM25 ranked X first; semantic ranked Y first; fusion
+        picked Y." Per-backend lists are capped to keep the JSONL bounded.
+        """
+        candidates: list[dict[str, Any]] = []
+        for source, hits in (
+            ("semantic", sem_hits),
+            ("bm25", bm25_hits),
+            ("keyword", keyword_hits),
+        ):
+            for rank, hit in enumerate(hits[:_CANDIDATE_CAP_PER_SOURCE], start=1):
+                fp = hit.get("file_path")
+                if not fp:
+                    continue
+                candidates.append(
+                    {
+                        "file_path": fp,
+                        "source": source,
+                        "rank": rank,
+                        "score": float(hit.get("score", 0.0)),
+                        "returned": fp in returned_paths,
+                    }
+                )
+        if not candidates:
+            return
+        self._recall_candidate_events.append(
+            _RecallCandidateEvent(
+                timestamp=datetime.now(),
+                query=query,
+                namespace=namespace,
+                k=k,
+                candidates=candidates,
+            )
+        )
 
     def _hybrid_recall(
         self, query: str, *, k: int, scopes: tuple[str, ...] = _SEARCH_SCOPES

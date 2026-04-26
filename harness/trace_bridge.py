@@ -99,6 +99,7 @@ class TraceBridgeResult:
     access_entries: int
     commit_sha: str | None
     artifacts: list[str]
+    recall_candidates_path: Path | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +142,7 @@ def run_trace_bridge(
     reply_path = session_dir / "REPLY.md"
     spans_path = session_dir / f"{memory.session_id}.traces.jsonl"
     reflection_path = session_dir / "reflection.md"
+    recall_candidates_path = session_dir / "recall_candidates.jsonl"
 
     written: list[str] = []
     access_count = 0
@@ -174,6 +176,13 @@ def run_trace_bridge(
     spans = _build_spans(memory, tool_calls, events, stats)
     _write_jsonl(spans_path, spans)
     written.append(_relpath(memory, spans_path))
+
+    candidate_rows = _build_recall_candidate_rows(memory, tool_calls)
+    recall_candidates_written: Path | None = None
+    if candidate_rows:
+        _write_jsonl(recall_candidates_path, candidate_rows)
+        written.append(_relpath(memory, recall_candidates_path))
+        recall_candidates_written = recall_candidates_path
 
     if not subsessions:
         access_count = _emit_access_entries(
@@ -224,6 +233,7 @@ def run_trace_bridge(
         access_entries=access_count,
         commit_sha=commit_sha,
         artifacts=written,
+        recall_candidates_path=recall_candidates_written,
     )
 
 
@@ -708,6 +718,50 @@ def _build_spans(
 # ---------------------------------------------------------------------------
 # ACCESS.jsonl emission
 # ---------------------------------------------------------------------------
+
+
+def _build_recall_candidate_rows(
+    memory: EngramMemory,
+    tool_calls: list[_ToolCall],
+) -> list[dict[str, Any]]:
+    """Translate buffered ``_RecallCandidateEvent``s into JSONL rows.
+
+    Each candidate row is enriched with ``used_in_session`` — True if any
+    later ``read_file`` tool call referenced the candidate's file path.
+    That gives us a cheap signal for "did the agent actually consume what
+    we surfaced?" without needing to parse text content.
+    """
+    events = list(getattr(memory, "recall_candidate_events", []) or [])
+    if not events:
+        return []
+
+    # Build the set of all file paths the agent later read. Cheap to do once.
+    later_reads: set[str] = set()
+    for tc in tool_calls:
+        if tc.name == "read_file":
+            arg_path = tc.args.get("path") or tc.args.get("file_path")
+            if arg_path:
+                later_reads.add(str(arg_path).replace("\\", "/").lstrip("./"))
+
+    rows: list[dict[str, Any]] = []
+    for ev in events:
+        ts = ev.timestamp.isoformat() if hasattr(ev.timestamp, "isoformat") else str(ev.timestamp)
+        for cand in ev.candidates:
+            fp = cand.get("file_path", "")
+            row = {
+                "timestamp": ts,
+                "query": ev.query,
+                "namespace": ev.namespace,
+                "k": ev.k,
+                "file_path": fp,
+                "source": cand.get("source", ""),
+                "rank": cand.get("rank", 0),
+                "score": cand.get("score", 0.0),
+                "returned": bool(cand.get("returned", False)),
+                "used_in_session": fp in later_reads if fp else False,
+            }
+            rows.append(row)
+    return rows
 
 
 def _access_paths(
