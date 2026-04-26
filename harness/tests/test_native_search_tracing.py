@@ -353,7 +353,7 @@ def test_grok_mode_only_advertises_allowed_native_search_tools() -> None:
 
     mode = GrokMode(MagicMock(), "grok-3", {"web_search": web_tool})
     tool_types = [schema["type"] for schema in mode._tool_schemas]
-    assert tool_types == ["web_search"]
+    assert tool_types == ["web_search", "x_search"]
 
     cloned = mode.for_tools({"x_search": x_tool})
     cloned_tool_types = [schema["type"] for schema in cloned._tool_schemas]
