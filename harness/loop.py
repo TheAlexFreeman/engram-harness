@@ -260,7 +260,9 @@ def run_until_idle(
                 continue
             final = mode.final_text(response)
             if final:
-                final = final.rstrip() + "\n\n[output stopped because max output tokens were reached]"
+                final = (
+                    final.rstrip() + "\n\n[output stopped because max output tokens were reached]"
+                )
             else:
                 final = "(output stopped because max output tokens were reached)"
             return RunResult(

@@ -9,10 +9,7 @@ _TEMPLATE_PACKAGE = "harness.prompt_templates"
 
 def _load(name: str) -> str:
     return (
-        resources.files(_TEMPLATE_PACKAGE)
-        .joinpath(name)
-        .read_text(encoding="utf-8")
-        .rstrip("\n")
+        resources.files(_TEMPLATE_PACKAGE).joinpath(name).read_text(encoding="utf-8").rstrip("\n")
     )
 
 
@@ -63,4 +60,6 @@ def system_prompt_native(
 
 def system_prompt_text(tools: dict[str, Tool]) -> str:
     tool_docs = "\n\n".join(_render_tool(t) for t in tools.values())
-    return f"{_IDENTITY}\n\n{_CRITICAL_RULES}\n\n## Tools\n\n{tool_docs}\n\n{_RULES}\n\n{_OUTPUT_TEXT}"
+    return (
+        f"{_IDENTITY}\n\n{_CRITICAL_RULES}\n\n## Tools\n\n{tool_docs}\n\n{_RULES}\n\n{_OUTPUT_TEXT}"
+    )

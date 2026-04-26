@@ -189,8 +189,7 @@ def _preview_with_artifact(
     tail_chars = _MAX_MODEL_OUTPUT_CHARS - head_chars
     omitted = len(text) - head_chars - tail_chars
     truncation_notice = (
-        f"\n\n[output truncated: {omitted} characters omitted; "
-        f"full {label}: {artifact_path}]\n\n"
+        f"\n\n[output truncated: {omitted} characters omitted; full {label}: {artifact_path}]\n\n"
     )
     preview = text[:head_chars] + truncation_notice + text[-tail_chars:]
     return preview, artifact_path
