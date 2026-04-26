@@ -1,0 +1,20 @@
+plan_id: knowledge-file-creation
+purpose: Produce 2-3 polished, cross-linked knowledge files from the working notes
+  and promote them to memory/knowledge/ with appropriate frontmatter. Update SUMMARY.md
+  files and cross-references in related existing files.
+phases:
+- title: Refine and write final knowledge files in workspace
+  postconditions:
+  - grep:LLM umwelt|affordance|interface|narrative semiotic:projects/llm-cognitive-frames/notes/
+  - The two main files are complete, detailed, and in polished markdown form with
+    frontmatter ready for promotion.
+- title: Promote files to memory/knowledge/ using work_promote or equivalent and verify
+  postconditions:
+  - Files exist in memory/knowledge/cognitive-science/ or philosophy/ with source:agent-generated
+    trust:medium
+  - SUMMARY.md in cognitive-science and philosophy updated with new entries and cross-references
+- title: Update cross-references in existing synthesis files and verify integration
+  postconditions:
+  - Existing files like affordance-umwelt-enaction-synthesis.md, narrative-cognition.md,
+    and philosophy-synthesis.md reference the new LLM files where appropriate
+  - No broken links or duplicate content

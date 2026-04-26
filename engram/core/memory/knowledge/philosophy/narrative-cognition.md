@@ -177,7 +177,11 @@ Alex's original hypothesis deserves direct treatment: that narrative is a good c
 
 Several convergent points support this:
 
-**Causal structure is narrative structure.** The world at the scale of events is organized by causal sequences with agents, instruments, enabling conditions, and outcomes. Narrative just is the cognitive format for tracking causal-agentive structure at that scale. Shannon-level information processing can compress physical regularities; narrative is specifically suited to *agentive-causal* regularities — the ones that matter for a creature that must navigate a social world.
+**Causal structure is narrative structure.** T
+
+## 8. Applications to LLMs and Agent Systems
+
+The principles above scale powerfully to LLM interaction (see dedicated file `philosophy/narrative-semiotic-frames-llms.md`). Because LLMs are trained predominantly on narratively structured human text, narrative framing is the highest-leverage method for organizing their semiotic frames. It supplies SOURCE-PATH-GOAL structure, force dynamics, character perspective for pseudo-umwelt stabilization, and participatory knowing. In systems like Engram, narrative continuity across sessions and projects turns isolated predictions into coherent, persistent intellectual partnership. This supports the broader claim that narrative is a load-bearing cognitive technology that extends beyond biological minds to human-AI cognitive ecosystems.he world at the scale of events is organized by causal sequences with agents, instruments, enabling conditions, and outcomes. Narrative just is the cognitive format for tracking causal-agentive structure at that scale. Shannon-level information processing can compress physical regularities; narrative is specifically suited to *agentive-causal* regularities — the ones that matter for a creature that must navigate a social world.
 
 **Compositionality.** Narrative has compositional structure: scenes embed within episodes, episodes within acts, acts within stories, stories within traditions. The same IMAGE SCHEMA (say, SOURCE-PATH-GOAL) recurs at every scale. This fractal compositionality mirrors the hierarchical causal structure of the world and makes narrative a particularly powerful cognitive compression format — you can apply the same schema at multiple levels of description simultaneously.
 

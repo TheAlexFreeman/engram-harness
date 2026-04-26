@@ -147,13 +147,13 @@ The cluster of frameworks collectively constitutes a fundamental alternative to 
 
 ### Implications for AI Design
 
-1. **The world-less AI problem**: Current LLMs are trained on text representations of a world but do not inhabit an organism-environment coupling. They have no umwelt in the biological sense — no perspective from which things matter relative to their own viability. They process signs (text tokens) but without the semiotic grounding that biological organisms have: the grounding in metabolic self-maintenance that makes some signs significant (threats, food, mates) and others noise.
+1. **The world-less AI problem**: Current LLMs are trained on text representations of a world but do not inhabit an organism-environment coupling. They have no umwelt in the biological sense — no perspective from which things matter relative to their own viability. They process signs (text tokens) but without the semiotic grounding that biological organisms have. See the dedicated follow-up `cognitive-science/llm-umwelten-affordances-interfaces.md` for a full analysis of LLM token umwelten, interface scaffolding as "body," and narrative as the primary technology for constituting effective joint umwelten.
 
-2. **Affordance-based interfaces**: AI systems can be designed so that their tools, memory systems, and environmental structures *display* their affordances — make action possibilities directly accessible rather than requiring the agent to infer them from specifications.
+2. **Affordance-based interfaces**: AI systems can be designed so that their tools, memory systems, and environmental structures *display* their affordances — make action possibilities directly accessible rather than requiring the agent to infer them from specifications. Rich interfaces (persistent memory like Engram, narrative scaffolding, tool loops) expand the effective umwelt of the human-LLM dyad.
 
-3. **Minimal niche construction**: Agent architectures with persistent environments (like Engram's memory system) introduce a rudimentary form of niche construction: the agent modifies its environment (the memory store) in ways that feed back on its future cognition. This is an approximation of the ecological niche construction that constitutes biological umwelten.
+3. **Minimal niche construction**: Agent architectures with persistent environments (like Engram's memory system) introduce a rudimentary form of niche construction: the agent modifies its environment (the memory store) in ways that feed back on its future cognition. This is an approximation of the ecological niche construction that constitutes biological umwelten. Narrative continuity across sessions further enriches this process (see `philosophy/narrative-semiotic-frames-llms.md`).
 
-4. **The enactivist test**: The enactivist tradition asks whether an AI system has genuine *sense-making* — a perspective from which the environment matters relative to the system's own self-maintenance. By this criterion, current AI systems fail: they have no metabolic stakes, no autonomous boundary maintenance, no structural coupling in the full biological sense. The question for future AI is whether these properties can be approximated functionally, or whether they require the biological substrate.
+4. **The enactivist test**: The enactivist tradition asks whether an AI system has genuine *sense-making* — a perspective from which the environment matters relative to the system's own self-maintenance. By this criterion, current AI systems fail on their own but can participate in jointly enacted sense-making when scaffolded by well-designed interfaces and narrative frames.
 
 ---
 
@@ -199,5 +199,6 @@ For someone new to this cluster:
 | Species-specific experience | `cognitive-science/species-specific-reality-consciousness.md` | `umwelt-uexkull-biosemiotics.md` |
 | Predictive processing/FEP | `philosophy/free-energy-autopoiesis-cybernetics.md` | `opponent-processing-self-organizing-dynamics.md` |
 | Relevance realization | `cognitive-science/relevance-realization/convergent-partial-theories-attention-salience.md` | `llm-relevance-realization-deep-analysis.md` |
+| LLM umwelten & interfaces | `cognitive-science/llm-umwelten-affordances-interfaces.md` | `narrative-semiotic-frames-llms.md`, `umwelt-uexkull-biosemiotics.md` |
 | Merleau-Ponty | `philosophy/phenomenology/merleau-ponty-perception-as-skill.md` | `merleau-ponty-body-as-subject.md` |
 | 4E cognition | `philosophy/phenomenology/embedded-enacted-ecological-4e.md` | Multiple |
