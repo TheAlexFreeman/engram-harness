@@ -23,9 +23,7 @@
 ## Files
 
 notes/gap-analysis.md
+notes/internet-meme-as-meta-format.md
+notes/meme-format-typology.md
 plans/memetics-research.run-state.json
 plans/memetics-research.yaml
-
-## Active plan
-
-**memetics-research** [active] — phase 1/4: Audit existing knowledge and resolve project questions · Build out the memetics knowledge cluster with files covering: (1) the internet meme as cultural meta-format, (2) academi
