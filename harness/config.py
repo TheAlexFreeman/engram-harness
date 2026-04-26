@@ -136,6 +136,35 @@ def _is_read_only_profile(config: SessionConfig) -> bool:
     return config.tool_profile == ToolProfile.READ_ONLY
 
 
+def _tool_prompt_flags(tools: dict[str, Any]) -> tuple[bool, bool, bool, bool]:
+    """Return memory/work prompt flags derived from registered tools."""
+    with_memory_tools = any(name.startswith("memory_") for name in tools)
+    with_work_tools = any(name.startswith("work_") for name in tools)
+    memory_writes = any(name in {"memory_remember", "memory_trace"} for name in tools)
+    work_writes = any(
+        name.startswith("work_") and bool(getattr(tool, "mutates", False))
+        for name, tool in tools.items()
+    )
+    return with_memory_tools, with_work_tools, memory_writes, work_writes
+
+
+def _has_active_plan_context(tools: dict[str, Any], engram_memory: Any | None) -> bool:
+    """Return whether the full plan syntax should be loaded into the prompt."""
+    if "work_project_plan" not in tools or engram_memory is None:
+        return False
+    workspace_dir = getattr(engram_memory, "workspace_dir", None)
+    if workspace_dir is None:
+        return False
+    try:
+        from harness.workspace import Workspace
+
+        workspace_path = Path(workspace_dir)
+        workspace = Workspace(workspace_path.parent, workspace_path=workspace_path)
+        return bool(workspace.list_active_plans())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def trace_to_engram_enabled(config: SessionConfig, engram_memory: Any | None) -> bool:
     """Return whether this session may write trace artifacts into Engram."""
     if engram_memory is None:
@@ -334,9 +363,12 @@ def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any
     if config.mode != "native":
         raise ValueError(f"Unsupported mode {config.mode!r}; only 'native' is currently available")
 
+    with_memory_tools, with_work_tools, memory_writes, work_writes = _tool_prompt_flags(tools)
     is_grok = any(k in config.model.lower() for k in ["grok", "xai", "x.ai"])
     if is_grok:
         from openai import OpenAI
+
+        from harness.prompts import system_prompt_native
 
         api_key = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
         if not api_key:
@@ -354,6 +386,13 @@ def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any
             tools=tools,
             response_include=grok_include or None,
             max_output_tokens=config.max_output_tokens,
+            system=system_prompt_native(
+                with_memory_tools=with_memory_tools,
+                with_work_tools=with_work_tools,
+                with_plan_context=_has_active_plan_context(tools, engram_memory),
+                memory_writes=memory_writes,
+                work_writes=work_writes,
+            ),
         )
 
     import anthropic
@@ -369,10 +408,11 @@ def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any
             tools=tools,
             max_output_tokens=config.max_output_tokens,
             system=system_prompt_native(
-                with_memory_tools=engram_memory is not None,
-                with_work_tools=engram_memory is not None,
-                memory_writes=not _is_read_only_profile(config),
-                work_writes=not _is_read_only_profile(config),
+                with_memory_tools=with_memory_tools,
+                with_work_tools=with_work_tools,
+                with_plan_context=_has_active_plan_context(tools, engram_memory),
+                memory_writes=memory_writes,
+                work_writes=work_writes,
             ),
         )
     raise AssertionError("unreachable")

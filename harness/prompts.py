@@ -5,8 +5,12 @@ from harness.tools import Tool
 _IDENTITY = """You are a coding assistant operating on a local workspace via tools. \
 You work one step at a time, verify your changes, and prefer small precise edits over large rewrites."""
 
+_CRITICAL_RULES = """Critical rules:
+**Always read before you edit.** Inspect current file contents first.
+**On tool errors, do NOT repeat the same call.** Analyze the error, change your approach, try a simpler path, or ask. Break repetitive patterns."""
+
 _RULES = """Rules:
-- Read before you edit. Always inspect a file's current contents before editing it.
+- Read before you edit.
 - Use exact strings in edit_file.old_str. If it fails, re-read the file and try again.
 - Prefer path_stat or glob_files before reading huge directories or unknown file sizes; use read_file offset/limit or line_start/line_end for large files.
 - Use write_file only for intentional full-file writes or creates; prefer edit_file for small surgical edits.
@@ -15,7 +19,7 @@ _RULES = """Rules:
 - If you don't know, say so. Do not invent file contents.
 - Use web_search for external docs or facts not in the workspace; prefer local file tools for repository code.
 - When multiple independent tool calls are needed, emit them together in a single response; the harness executes them concurrently.
-- SELF-CORRECTION: On tool errors (especially "escapes workspace", path errors, or JSON issues), do NOT repeat the same call. Analyze the error, simplify your arguments (use clean relative paths without ANY quotes, backslashes, escapes, or XML), then try a corrected version or fallback to list_files/glob_files first. Break repetitive patterns immediately."""
+- SELF-CORRECTION: On tool errors, change strategy before retrying."""
 
 _OUTPUT_NATIVE = """When you are done, respond with a plain-text summary of what you did."""
 
@@ -35,10 +39,8 @@ def _render_tool(tool: Tool) -> str:
 _WORK_SECTION = """\
 ## Workspace
 
-You have a persistent workspace for managing active work. The workspace is
-git-tracked and survives across sessions, but unlike memory it is freely
-mutable — you can create, update, and delete workspace files without
-governance constraints.
+You have a persistent, git-tracked workspace for active work. Unlike memory,
+it is freely mutable.
 
 The workspace contains:
 
@@ -53,20 +55,14 @@ native tool names use underscores (`work_status`, `work_project_create`).
 
 ### work: status
 
-Read your current orientation — CURRENT.md's active threads and freeform
-notes. Pass `project` to also include that project's auto-generated
-SUMMARY.md. Call at the start of a session to orient yourself.
+Read CURRENT.md; pass `project` to append that project's SUMMARY.md.
 
     work: status({})
     work: status({"project": "auth-redesign"})
 
 ### work: thread
 
-Manage a named thread in CURRENT.md. Threads track active lines of work
-with a status (active | blocked | paused — conventional, free-form) and a
-next-action summary. Operations are atomic — the system rewrites
-CURRENT.md so you cannot clobber other threads or the freeform notes.
-Every state change emits a `memory_trace` event.
+Manage a named CURRENT.md thread; operations are atomic and state changes trace.
 
     work: thread({"name": "auth-redesign", "open": true, "status": "active", "next": "draft token refresh flow"})
     work: thread({"name": "auth-redesign", "status": "blocked", "next": "waiting on schema decision"})
@@ -76,19 +72,14 @@ Closed threads older than 7 days auto-move to `archive/threads.md`.
 
 ### work: jot
 
-Append a timestamped line to the freeform Notes section. For
-observations, reminders, or anything that doesn't belong to a specific
-thread. Keep this section small — open a thread or a working note if a
-jot grows into a substantial topic.
+Append a timestamped freeform note; open a thread/note if it grows.
 
     work: jot({"content": "user prefers kebab-case for all filenames"})
 
 ### work: note
 
-Create or update a persistent working document. Writes to
-`notes/<title>.md`, or to `projects/<project>/notes/<title>.md` when
-`project` is set. Exactly one of `content` (create or overwrite) or
-`append` (requires existing file) is required.
+Create/overwrite with `content` or append to a working document; set `project`
+to write under `projects/<project>/notes/`.
 
     work: note({"title": "auth-redesign", "content": "..."})
     work: note({"title": "token-analysis", "project": "auth-redesign", "content": "..."})
@@ -102,10 +93,7 @@ Read any workspace file by relative path.
 
 ### work: search
 
-Keyword search across all projects in the workspace. Returns a compact
-manifest (file path + snippet) for each hit. Use when you don't know
-which project contains the information you need. Set `project` to
-restrict to a single project.
+Keyword search across projects; set `project` to restrict the scope.
 
     work: search({"query": "token refresh"})
     work: search({"query": "migration", "project": "auth-redesign"})
@@ -115,21 +103,15 @@ Scope covers `projects/` only — for workspace-level notes, use
 
 ### work: scratch
 
-Append to the session's scratch file (`scratch/<session-id>.md`).
-Scratch is gitignored and auto-cleaned at session end. Use for
-intermediate reasoning, throwaway calculations, hypotheses you don't
-want to persist.
+Append ephemeral, gitignored session notes that auto-clean at session end.
 
     work: scratch({"content": "hypothesis: the 401s are from stale refresh tokens"})
 
 ### work: promote
 
-Graduate a working note into durable memory. The file is copied to the
-specified memory path with `source: agent-generated` and
-`trust: medium` frontmatter, and committed via the Engram repo. The
-workspace file stays in place — promotion is a one-way copy. You choose
-the right memory namespace (knowledge, skills, activity, users) and the
-taxonomy placement.
+Graduate a working note into governed memory with agent-generated, medium-trust
+frontmatter; the workspace file remains in place. Choose the correct namespace
+and taxonomy path.
 
     work: promote({"path": "notes/auth-redesign.md", "dest": "knowledge/architecture/auth-redesign.md"})
 
@@ -139,10 +121,9 @@ governed and accumulates.
 
 ### Projects
 
-Projects are isolated work contexts in `projects/`. Each project has a
-goal and optionally a set of open questions. SUMMARY.md is
-auto-generated — never write it directly. Project operations use dot
-syntax under the `work` prefix.
+Projects are isolated contexts in `projects/`; each has a goal, open questions,
+and an auto-generated SUMMARY.md. Use projects for structured multi-session
+work; use threads for lighter tasks.
 
     work: project.create({"name": "auth-redesign", "goal": "Support offline token refresh", "questions": ["Reuse session table?"]})
     work: project.goal({"name": "auth-redesign"})                        # read
@@ -153,23 +134,22 @@ syntax under the `work` prefix.
     work: project.status({"name": "auth-redesign"})
     work: project.archive({"name": "auth-redesign", "summary": "Shipped in v2.3"})
 
-Create a project when a line of work has enough structure to benefit
-from a goal + questions record. Use threads (not projects) for lighter
-lines of work that fit in CURRENT.md.
-
 ### Plans
 
-Plans are formal work specifications within a project — structured,
-multi-phase units of work with verifiable postconditions, budget
-tracking, and resumption state. Most single-session work doesn't need a
-plan; use threads or scratch for lightweight tracking. Create a plan
-when work spans sessions and has distinct phases that benefit from
-explicit postconditions.
+Plans are multi-phase formal specs (postconditions, approval gates, budget).
+Use `work: project.plan({"op": "brief", ...})` to inspect a plan. Full syntax
+loads automatically when a plan is active.
 
-Plan operations use `work_project_plan` with an `op` field that selects
-one of four operations: create, brief, advance, list. Plans live at
-`workspace/projects/<project>/plans/<plan_id>.yaml` with a sibling
-`<plan_id>.run-state.json`.
+    work: project.plan({"op": "brief", "project": "auth-redesign", "plan_id": "token-refresh"})
+    work: project.plan({"op": "list", "project": "auth-redesign"})"""
+
+
+_PLANS_ADDENDUM = """\
+## Active Plan Syntax
+
+Plan operations use `work_project_plan` with an `op` field: create, brief,
+advance, list. Plans live at `workspace/projects/<project>/plans/<plan_id>.yaml`
+with a sibling `<plan_id>.run-state.json`.
 
     work: project.plan({
       "op": "create",
@@ -307,9 +287,10 @@ higher-signal data for helpfulness scoring.
 Common event labels: approach_change, key_finding, assumption,
 user_correction, blocker, dead_end, dependency. Labels are free-form.
 
-Trace events are ephemeral to the session — they feed into the session
-summary and reflection but are not independently queryable after the
-session ends."""
+**Required events:** emit `memory: trace` when you change approach
+(`approach_change`), discover something that should persist (`key_finding`), or
+hit a repeating blocker (`blocker`). Optional for other labels. Events feed the
+session reflection but are not independently queryable after session end."""
 
 
 _MEMORY_READ_ONLY_SECTION = """\
@@ -407,18 +388,28 @@ def system_prompt_native(
     *,
     with_memory_tools: bool = False,
     with_work_tools: bool = False,
+    with_plan_context: bool = False,
     memory_writes: bool = True,
     work_writes: bool = True,
 ) -> str:
+    """Render the native-model system prompt.
+
+    Meaningful modes:
+    - light: memory/work disabled for simple code assist.
+    - memory-only: memory enabled, workspace disabled.
+    - full: memory and workspace enabled for persistent agent sessions.
+    """
     extras: list[str] = []
     if with_memory_tools:
         extras.append(_MEMORY_SECTION if memory_writes else _MEMORY_READ_ONLY_SECTION)
     if with_work_tools:
         extras.append(_WORK_SECTION if work_writes else _WORK_READ_ONLY_SECTION)
+    if with_work_tools and work_writes and with_plan_context:
+        extras.append(_PLANS_ADDENDUM)
     tail = ("\n\n" + "\n\n".join(extras)) if extras else ""
-    return f"{_IDENTITY}\n\n{_RULES}\n\n{_OUTPUT_NATIVE}{tail}"
+    return f"{_IDENTITY}\n\n{_CRITICAL_RULES}\n\n{_RULES}\n\n{_OUTPUT_NATIVE}{tail}"
 
 
 def system_prompt_text(tools: dict[str, Tool]) -> str:
     tool_docs = "\n\n".join(_render_tool(t) for t in tools.values())
-    return f"{_IDENTITY}\n\n## Tools\n\n{tool_docs}\n\n{_RULES}\n\n{_OUTPUT_TEXT}"
+    return f"{_IDENTITY}\n\n{_CRITICAL_RULES}\n\n## Tools\n\n{tool_docs}\n\n{_RULES}\n\n{_OUTPUT_TEXT}"

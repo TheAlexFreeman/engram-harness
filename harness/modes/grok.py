@@ -148,6 +148,7 @@ class GrokMode:
         model: str,
         tools: dict[str, Tool],
         *,
+        system: str | None = None,
         response_include: list[str] | None = None,
         max_output_tokens: int = 4096,
     ):
@@ -155,7 +156,7 @@ class GrokMode:
         self.model = model
         self.tools = tools
         self.max_output_tokens = max_output_tokens
-        self._system = system_prompt_native()
+        self._system = system if system is not None else system_prompt_native()
         self._tool_schemas = _build_tool_schemas(tools)
         self._response_include: list[str] = list(response_include) if response_include else []
 

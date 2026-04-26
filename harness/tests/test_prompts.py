@@ -26,6 +26,47 @@ def test_native_prompt_still_mentions_work_project_plan() -> None:
     assert "work_project_plan" in prompt or "work: project.plan" in prompt
 
 
+def test_native_prompt_highlights_critical_rules() -> None:
+    prompt = system_prompt_native()
+    assert "Critical rules:" in prompt
+    assert "**Always read before you edit.**" in prompt
+    assert "**On tool errors, do NOT repeat the same call.**" in prompt
+
+
+def test_memory_trace_required_events_are_explicit() -> None:
+    prompt = system_prompt_native(with_memory_tools=True)
+    assert "**Required events:** emit `memory: trace`" in prompt
+    assert "`approach_change`" in prompt
+    assert "`key_finding`" in prompt
+    assert "`blocker`" in prompt
+
+
+def test_native_prompt_light_mode_token_budget() -> None:
+    prompt = system_prompt_native()
+    assert len(prompt) < 4_000
+
+
+def test_native_prompt_full_mode_token_budget() -> None:
+    prompt = system_prompt_native(with_memory_tools=True, with_work_tools=True)
+    assert len(prompt) <= 10_500
+
+
+def test_prompt_plans_addendum_excluded_by_default() -> None:
+    prompt = system_prompt_native(with_memory_tools=True, with_work_tools=True)
+    assert "## Active Plan Syntax" not in prompt
+    assert "grep:<pattern>::<path>" not in prompt
+
+
+def test_prompt_plans_addendum_included_when_active() -> None:
+    prompt = system_prompt_native(
+        with_memory_tools=True,
+        with_work_tools=True,
+        with_plan_context=True,
+    )
+    assert "## Active Plan Syntax" in prompt
+    assert "grep:<pattern>::<path>" in prompt
+
+
 def test_native_prompt_no_sections_when_all_flags_false() -> None:
     prompt = system_prompt_native()
     assert "## Memory" not in prompt
