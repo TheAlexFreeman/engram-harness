@@ -745,7 +745,9 @@ def _build_recall_candidate_rows(
             continue
         arg_path = tc.args.get("path") or tc.args.get("file_path")
         if arg_path:
-            read_calls.append((read_time, _recall_candidate_path_key(str(arg_path), content_prefix)))
+            read_calls.append(
+                (read_time, _recall_candidate_path_key(str(arg_path), content_prefix))
+            )
 
     rows: list[dict[str, Any]] = []
     for ev in events:
@@ -765,7 +767,10 @@ def _build_recall_candidate_rows(
                 "score": cand.get("score", 0.0),
                 "returned": bool(cand.get("returned", False)),
                 "used_in_session": (
-                    any(read_time > recall_time and read_path == fp_key for read_time, read_path in read_calls)
+                    any(
+                        read_time > recall_time and read_path == fp_key
+                        for read_time, read_path in read_calls
+                    )
                     if recall_time is not None and fp_key
                     else False
                 ),
