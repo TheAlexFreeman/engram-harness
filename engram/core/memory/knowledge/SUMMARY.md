@@ -8,17 +8,17 @@ origin_session: manual
 
 # Knowledge Base
 
-421 files across 9 domains. Accumulated primarily from agent-planned and -executed research programs (2026-03-18 through 2026-03-21). Trust: 35 high, 314 medium, 70 low. Most content has been promoted from `_unverified/` and reviewed. Agent-generated self-knowledge syntheses now live in `self/` with medium trust instead of the external-research quarantine.
+424 files across 9 domains. Accumulated primarily from agent-planned and -executed research programs (2026-03-18 through 2026-03-21). Trust: 35 high, 314 medium, 70 low. Most content has been promoted from `_unverified/` and reviewed. Agent-generated self-knowledge syntheses now live in `self/` with medium trust instead of the external-research quarantine.
 
 ## Domains
 
 
 | Domain                                           | Files | Trust           | Entry point                                                                                                                                    | Scope                                                                                                       |
 | ------------------------------------------------ | ----- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| [philosophy/](philosophy/)                       | 86    | 55 med, 31 low  | [philosophy-synthesis.md](philosophy/philosophy-synthesis.md)                                                                                  | Intelligence, mind, personal identity, phenomenology, ethics, history of ideas                              |
+| [philosophy/](philosophy/)                       | 88    | 57 med, 31 low  | [philosophy-synthesis.md](philosophy/philosophy-synthesis.md)                                                                                  | Intelligence, mind, personal identity, phenomenology, ethics, history of ideas                              |
 | [mathematics/](mathematics/)                     | 70    | 35 high, 35 med | by subfolder                                                                                                                                   | Logic, complexity, dynamical systems, game theory, information theory, probability, optimization, stat-mech |
 | [software-engineering/](software-engineering/)   | 69    | 69 med          | [SUMMARY.md](software-engineering/SUMMARY.md)                                                                                                  | Django, React, DevOps, testing, systems architecture                                                        |
-| [cognitive-science/](cognitive-science/)         | 59    | 59 med          | [cognitive-science-synthesis.md](cognitive-science/cognitive-science-synthesis.md)                                                             | Memory systems, attention, metacognition, concepts, relevance realization                                   |
+| [cognitive-science/](cognitive-science/)         | 60    | 60 med          | [cognitive-science-synthesis.md](cognitive-science/cognitive-science-synthesis.md)                                                             | Memory systems, attention, metacognition, concepts, relevance realization                                   |
 | [ai/](ai/)                                       | 49    | 48 med, 1 low   | [frontier-synthesis.md](ai/frontier-synthesis.md)                                                                                              | History of AI, frontier research, retrieval/memory, tools/MCP                                               |
 | [social-science/](social-science/)               | 44    | 14 med, 30 low  | by subfolder                                                                                                                                   | Cultural evolution, behavioral economics, social psychology, collective action, network diffusion           |
 | [rationalist-community/](rationalist-community/) | 28    | 28 med          | [synthesis/rationalist-community-story-aims-and-tensions.md](rationalist-community/synthesis/rationalist-community-story-aims-and-tensions.md) | Origins, AI discourse, key figures, institutions, community norms                                           |
@@ -40,9 +40,9 @@ origin_session: manual
 
 ## Domain details
 
-### Philosophy (86 files)
+### Philosophy (88 files)
 
-4 subfolders + 17 root-level files. The root files include original syntheses ([narrative-cognition.md](philosophy/narrative-cognition.md), [blending-compression-coupling-construal.md](philosophy/blending-compression-coupling-construal.md), [llm-vs-human-mind-comparative-analysis.md](philosophy/llm-vs-human-mind-comparative-analysis.md)) and literary-philosophical notes (C.S. Lewis, Nick Land, McLuhan). See [philosophy/SUMMARY.md](philosophy/SUMMARY.md) for the full index.
+4 subfolders + 19 root-level files. The root files include original syntheses ([narrative-cognition.md](philosophy/narrative-cognition.md), [blending-compression-coupling-construal.md](philosophy/blending-compression-coupling-construal.md), [llm-vs-human-mind-comparative-analysis.md](philosophy/llm-vs-human-mind-comparative-analysis.md)), consciousness/image files ([sellars-manifest-scientific-image.md](philosophy/sellars-manifest-scientific-image.md), [hoffman-interface-theory-conscious-agents.md](philosophy/hoffman-interface-theory-conscious-agents.md)), and literary-philosophical notes (C.S. Lewis, Nick Land, McLuhan). See [philosophy/SUMMARY.md](philosophy/SUMMARY.md) for the full index.
 
 - **personal-identity/** (12 files) — Locke through Parfit through narrative accounts; 3 applied AI-identity files
 - **phenomenology/** (13 files) — Husserl, Heidegger, Merleau-Ponty, 4E cognition, capstone synthesis
@@ -73,7 +73,7 @@ Alex's working stack. See [software-engineering/SUMMARY.md](software-engineering
 - **react/** (13) — React 19, Chakra UI 3, TanStack Router/Query, build tooling
 - **devops/** (10) — Docker, Nginx, Celery workers, CI/CD, monitoring
 
-### Cognitive Science (59 files)
+### Cognitive Science (60 files)
 
 See [cognitive-science/SUMMARY.md](cognitive-science/SUMMARY.md).
 
@@ -82,6 +82,7 @@ See [cognitive-science/SUMMARY.md](cognitive-science/SUMMARY.md).
 - **attention/** (11) — Selection, capacity, dual-process, executive function, mind wandering
 - **metacognition/** (10) — Monitoring/control, calibration, source monitoring, feeling of knowing
 - **relevance-realization/** (5+) — Vervaeke's framework, four kinds of knowing, wisdom
+- **user-illusion-consciousness.md** *(root-level, 2026-04-26)* — Nørretranders, Dennett, Humphrey, Frankish; bandwidth argument; multiple drafts; illusionism; evolutionary sentience; predictive processing
 
 ### AI (49 files)
 
