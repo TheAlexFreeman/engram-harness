@@ -333,6 +333,56 @@ def test_wire_subagent_filters_to_allowed_tools() -> None:
     assert "secret" not in seen_tools[0]
 
 
+def test_wire_subagent_rebuilds_mode_for_allowed_tools() -> None:
+    """Mode-level tool schemas should match the filtered sub-agent registry."""
+    from harness.config import _wire_subagent_spawn
+
+    parent_tools: dict[str, Tool] = {
+        "spawn_subagent": SpawnSubagent(),
+        "noop": SleepingTool("noop"),
+        "secret": SleepingTool("secret"),
+    }
+
+    class CloneTrackingMode(ScriptedMode):
+        def __init__(
+            self,
+            responses: list[_ScriptedResponse],
+            tools: dict[str, Tool],
+            clone_calls: list[set[str]],
+        ):
+            super().__init__(responses)
+            self.tools = tools
+            self._clone_calls = clone_calls
+
+        def for_tools(self, tools: dict[str, Tool]) -> "CloneTrackingMode":
+            self._clone_calls.append(set(tools.keys()))
+            return CloneTrackingMode(
+                [_ScriptedResponse(tool_calls=[], text="ok")],
+                tools,
+                self._clone_calls,
+            )
+
+        def complete(self, messages: list[dict], *, stream: Any = None) -> Any:  # noqa: ARG002
+            assert set(self.tools) == {"noop"}
+            return super().complete(messages, stream=stream)
+
+    clone_calls: list[set[str]] = []
+    parent_mode = CloneTrackingMode(
+        [_ScriptedResponse(tool_calls=[], text="parent should not run")],
+        parent_tools,
+        clone_calls,
+    )
+    _wire_subagent_spawn(
+        parent_tools,
+        mode=parent_mode,
+        parent_tracer=NullTracer(),
+        pricing_loader=lambda: None,
+    )
+
+    parent_tools["spawn_subagent"].run({"task": "go", "allowed_tools": ["noop"]})
+    assert clone_calls == [{"noop"}]
+
+
 def test_wire_subagent_skips_when_tool_absent() -> None:
     """No SpawnSubagent in the registry should be a quiet no-op."""
     from harness.config import _wire_subagent_spawn

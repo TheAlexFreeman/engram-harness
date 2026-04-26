@@ -54,10 +54,10 @@ def _build_tool_schemas(harness_tools: dict[str, Tool]) -> list[dict[str, Any]]:
     """xAI Responses API: built-in `web_search` / `x_search` plus flat `function` tools.
     Harness tools whose `name` collides with a native built-in are dropped so xAI
     doesn't reject the request for duplicate tool names."""
-    schemas: list[dict[str, Any]] = [
-        {"type": "web_search"},
-        {"type": "x_search"},
-    ]
+    schemas: list[dict[str, Any]] = []
+    for native_name in ("web_search", "x_search"):
+        if native_name in harness_tools:
+            schemas.append({"type": native_name})
     for t in harness_tools.values():
         if t.name in NATIVE_TOOL_NAMES:
             continue
@@ -170,6 +170,17 @@ class GrokMode:
             {"role": "system", "content": self._system},
             {"role": "user", "content": user},
         ]
+
+    def for_tools(self, tools: dict[str, Tool]) -> "GrokMode":
+        """Return an equivalent mode with tool schemas rebuilt from ``tools``."""
+        return GrokMode(
+            client=self.client,
+            model=self.model,
+            tools=tools,
+            system=self._system,
+            response_include=self._response_include,
+            max_output_tokens=self.max_output_tokens,
+        )
 
     def complete(self, messages: list[dict], *, stream: StreamSink | None = None) -> Response:
         """Call Grok via xAI Responses API (native search + function tools)."""

@@ -522,10 +522,12 @@ def _wire_subagent_spawn(
 ) -> None:
     """Late-bind the spawn callback on any ``SpawnSubagent`` tool in ``tools``.
 
-    Sub-agents reuse the parent's Mode (saving on system-prompt rebuild)
-    but get a ``NullMemory`` and ``NullTraceSink`` to keep their internal
-    state isolated from the parent's session. The parent's tracer still
-    sees a single ``subagent_run`` summary event for each call.
+    Sub-agents reuse the parent's provider client/config where possible, but
+    rebuild the Mode against their filtered tool registry so advertised tool
+    schemas match the allowlist. They also get a ``NullMemory`` and
+    ``NullTraceSink`` to keep their internal state isolated from the parent's
+    session. The parent's tracer still sees a single ``subagent_run`` summary
+    event for each call.
     """
     spawn_tool = tools.get("spawn_subagent")
     if spawn_tool is None or not hasattr(spawn_tool, "set_spawn_fn"):
@@ -558,10 +560,11 @@ def _wire_subagent_spawn(
             )
             sub_tools["spawn_subagent"] = nested
 
-        sub_messages = mode.initial_messages(task=task, prior="", tools=sub_tools)
+        sub_mode = mode.for_tools(sub_tools) if hasattr(mode, "for_tools") else mode
+        sub_messages = sub_mode.initial_messages(task=task, prior="", tools=sub_tools)
         result = run_until_idle(
             sub_messages,
-            mode,
+            sub_mode,
             sub_tools,
             NullMemory(),
             NullTraceSink(),
