@@ -383,6 +383,34 @@ def test_wire_subagent_rebuilds_mode_for_allowed_tools() -> None:
     assert clone_calls == [{"noop"}]
 
 
+def test_wire_subagent_passes_stream_sink_to_child_loop() -> None:
+    """Sub-agents must use streaming Anthropic calls for long-running requests."""
+    from harness.config import _wire_subagent_spawn
+
+    parent_tools: dict[str, Tool] = {
+        "spawn_subagent": SpawnSubagent(),
+        "noop": SleepingTool("noop"),
+    }
+    stream_sink = object()
+    seen_streams: list[Any] = []
+
+    class StreamCapturingMode(ScriptedMode):
+        def complete(self, messages: list[dict], *, stream: Any = None) -> Any:  # noqa: ARG002
+            seen_streams.append(stream)
+            return super().complete(messages, stream=stream)
+
+    _wire_subagent_spawn(
+        parent_tools,
+        mode=StreamCapturingMode([_ScriptedResponse(tool_calls=[], text="ok")]),
+        parent_tracer=NullTracer(),
+        pricing_loader=lambda: None,
+        stream_sink=stream_sink,
+    )
+
+    parent_tools["spawn_subagent"].run({"task": "go", "allowed_tools": ["noop"]})
+    assert seen_streams == [stream_sink]
+
+
 def test_wire_subagent_skips_when_tool_absent() -> None:
     """No SpawnSubagent in the registry should be a quiet no-op."""
     from harness.config import _wire_subagent_spawn

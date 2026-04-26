@@ -499,7 +499,13 @@ def build_session(
     tracer = _build_tracer(config, trace_path, extra_sinks=extra_trace_sinks)
     stream_sink = _build_stream_sink(config, override=stream_sink_override)
 
-    _wire_subagent_spawn(tools, mode=mode, parent_tracer=tracer, pricing_loader=load_pricing)
+    _wire_subagent_spawn(
+        tools,
+        mode=mode,
+        parent_tracer=tracer,
+        pricing_loader=load_pricing,
+        stream_sink=stream_sink,
+    )
 
     return SessionComponents(
         mode=mode,
@@ -519,6 +525,7 @@ def _wire_subagent_spawn(
     mode: Any,
     parent_tracer: Any,
     pricing_loader: Any,
+    stream_sink: Any | None = None,
 ) -> None:
     """Late-bind the spawn callback on any ``SpawnSubagent`` tool in ``tools``.
 
@@ -571,6 +578,7 @@ def _wire_subagent_spawn(
             max_turns=max_turns,
             pricing=pricing_loader(),
             max_parallel_tools=1,
+            stream_sink=stream_sink,
         )
         # Best-effort visibility on the parent's trace.
         try:
