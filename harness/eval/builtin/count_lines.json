@@ -1,0 +1,10 @@
+{
+  "id": "count_lines",
+  "task": "Count the total number of lines (including blank lines) across every .py file in the workspace and reply with the integer total. No extra prose.",
+  "tags": ["files", "medium"],
+  "max_turns": 8,
+  "expected": {
+    "tool_called_one_of": ["read_file", "grep_workspace", "glob_files", "list_files"],
+    "max_tool_call_count": 8
+  }
+}
