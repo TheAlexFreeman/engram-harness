@@ -15,6 +15,7 @@ from harness.tests.test_parallel_tools import (  # noqa: PLC2701
     _ScriptedResponse,
 )
 from harness.tools import Tool, ToolCall, ToolResult
+from harness.tools.fs import ReadFile, WorkspaceScope, WriteFile
 
 
 @dataclass
@@ -447,6 +448,155 @@ def test_exempt_batch_does_not_break_existing_streak():
     assert len(nudges) == 1
 
 
+# --- Pattern-aware file-read guard ---------------------------------------
+
+
+def test_tool_pattern_guard_catches_tiny_read_file_paging(tmp_path):
+    (tmp_path / "big.md").write_text("0123456789\n" * 200, encoding="utf-8")
+    scope = WorkspaceScope(root=tmp_path)
+    tools: dict[str, Tool] = {"read_file": ReadFile(scope)}
+    mode = CaptureScriptedMode(
+        [
+            _ScriptedResponse(
+                tool_calls=[
+                    ToolCall(
+                        name="read_file",
+                        args={"path": "big.md", "offset": i * 10, "limit": 30},
+                        id=f"c{i}",
+                    )
+                ]
+            )
+            for i in range(5)
+        ]
+        + [_ScriptedResponse(tool_calls=[], text="done")]
+    )
+    tracer = RecordingTracer()
+    memory = RecordingMemory()
+
+    result = run(
+        task="go",
+        mode=mode,
+        tools=tools,
+        memory=memory,
+        tracer=tracer,
+        max_parallel_tools=1,
+        repeat_guard_threshold=0,
+        tool_pattern_guard_threshold=5,
+    )
+
+    assert result.final_text == "done"
+    guard_events = [data for kind, data in tracer.events if kind == "tool_pattern_guard"]
+    assert len(guard_events) == 1
+    assert guard_events[0]["path"] == "big.md"
+    assert guard_events[0]["count"] == 5
+    assert mode.last_messages is not None
+    assert "File-read loop risk" in str(mode.last_messages)
+    assert any(kind == "error" and "tool_pattern_guard" in msg for kind, msg in memory.notes)
+
+
+def test_tool_pattern_guard_can_hard_stop_tiny_read_file_paging(tmp_path):
+    (tmp_path / "big.md").write_text("0123456789\n" * 200, encoding="utf-8")
+    scope = WorkspaceScope(root=tmp_path)
+    tools: dict[str, Tool] = {"read_file": ReadFile(scope)}
+    mode = ScriptedMode(
+        [
+            _ScriptedResponse(
+                tool_calls=[
+                    ToolCall(
+                        name="read_file",
+                        args={"path": "big.md", "offset": i * 10, "limit": 30},
+                        id=f"c{i}",
+                    )
+                ]
+            )
+            for i in range(4)
+        ]
+    )
+    tracer = RecordingTracer()
+
+    result = run(
+        task="go",
+        mode=mode,
+        tools=tools,
+        memory=RecordingMemory(),
+        tracer=tracer,
+        max_parallel_tools=1,
+        repeat_guard_threshold=0,
+        tool_pattern_guard_threshold=0,
+        tool_pattern_guard_terminate_at=4,
+    )
+
+    assert result.stopped_by_loop_detection is True
+    assert any(kind == "tool_pattern_loop_detected" for kind, _ in tracer.events)
+    assert any(
+        kind == "session_end" and data.get("reason") == "loop_detected"
+        for kind, data in tracer.events
+    )
+
+
+def test_tool_pattern_guard_resets_after_file_mutation(tmp_path):
+    (tmp_path / "big.md").write_text("0123456789\n" * 200, encoding="utf-8")
+    scope = WorkspaceScope(root=tmp_path)
+    tools: dict[str, Tool] = {
+        "read_file": ReadFile(scope),
+        "write_file": WriteFile(scope),
+    }
+    mode = ScriptedMode(
+        [
+            _ScriptedResponse(
+                tool_calls=[
+                    ToolCall(
+                        name="read_file",
+                        args={"path": "big.md", "offset": i * 10, "limit": 30},
+                        id=f"r{i}",
+                    )
+                ]
+            )
+            for i in range(2)
+        ]
+        + [
+            _ScriptedResponse(
+                tool_calls=[
+                    ToolCall(
+                        name="write_file",
+                        args={"path": "other.md", "content": "ok"},
+                        id="w0",
+                    )
+                ]
+            )
+        ]
+        + [
+            _ScriptedResponse(
+                tool_calls=[
+                    ToolCall(
+                        name="read_file",
+                        args={"path": "big.md", "offset": (i + 2) * 10, "limit": 30},
+                        id=f"r{i + 2}",
+                    )
+                ]
+            )
+            for i in range(2)
+        ]
+        + [_ScriptedResponse(tool_calls=[], text="done")]
+    )
+    tracer = RecordingTracer()
+
+    result = run(
+        task="go",
+        mode=mode,
+        tools=tools,
+        memory=RecordingMemory(),
+        tracer=tracer,
+        max_parallel_tools=1,
+        repeat_guard_threshold=0,
+        tool_pattern_guard_threshold=3,
+    )
+
+    assert result.final_text == "done"
+    assert not any(kind == "tool_pattern_guard" for kind, _ in tracer.events)
+    assert not any(kind == "tool_pattern_loop_detected" for kind, _ in tracer.events)
+
+
 # --- run_until_idle direct invocation -----------------------------------
 
 
@@ -472,5 +622,8 @@ def test_run_until_idle_accepts_new_kwargs():
         max_parallel_tools=1,
         repeat_guard_threshold=2,
         repeat_guard_terminate_at=3,
+        tool_pattern_guard_threshold=2,
+        tool_pattern_guard_terminate_at=3,
+        tool_pattern_guard_window=6,
     )
     assert result.stopped_by_loop_detection is True

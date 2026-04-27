@@ -270,6 +270,34 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--tool-pattern-guard-threshold",
+        type=int,
+        default=5,
+        metavar="N",
+        help=(
+            "After N repeated tiny read_file slices of the same path within the "
+            "recent tool window, inject a corrective file-reading nudge. Use 0 "
+            "to disable soft pattern nudges."
+        ),
+    )
+    parser.add_argument(
+        "--tool-pattern-guard-terminate-at",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Hard-stop the run when repeated tiny read_file slices of one path "
+            "reach N calls within the recent tool window. Defaults to disabled."
+        ),
+    )
+    parser.add_argument(
+        "--tool-pattern-guard-window",
+        type=int,
+        default=12,
+        metavar="N",
+        help="Number of recent tool calls considered by the pattern guard.",
+    )
+    parser.add_argument(
         "--error-recall-threshold",
         type=int,
         default=0,

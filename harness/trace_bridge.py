@@ -85,6 +85,7 @@ class _SessionStats:
     session_date: str = ""
     # turn number → total cost for that turn (from "usage" events)
     turn_costs: dict[int, float] = field(default_factory=dict)
+    pattern_diagnostics: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -356,6 +357,18 @@ def _aggregate_stats(events: list[dict[str, Any]]) -> _SessionStats:
             turn = int(ev.get("turn", -1))
             if turn >= 0:
                 s.turn_costs[turn] = float(ev.get("total_cost_usd", 0.0) or 0.0)
+        elif kind in {"tool_pattern_guard", "tool_pattern_loop_detected"}:
+            s.pattern_diagnostics.append(
+                {
+                    "kind": kind,
+                    "tool": str(ev.get("tool", "")),
+                    "path": str(ev.get("path", "")),
+                    "count": int(ev.get("count", 0) or 0),
+                    "window": int(ev.get("window", 0) or 0),
+                    "threshold": int(ev.get("threshold", 0) or 0),
+                    "terminate_at": ev.get("terminate_at"),
+                }
+            )
     return s
 
 
@@ -500,7 +513,7 @@ def _render_summary(
     *,
     sub_sessions: list[str] | None = None,
 ) -> str:
-    fm = dict(_AGENT_FM)
+    fm: dict[str, Any] = dict(_AGENT_FM)
     fm["session"] = memory.session_dir_rel
     fm["session_id"] = memory.session_id
     fm["created"] = stats.session_date or datetime.now().date().isoformat()
@@ -561,6 +574,27 @@ def _render_summary(
             body_lines.append(f"- {line}")
         body_lines.append("")
 
+    if stats.pattern_diagnostics:
+        body_lines.append("## Harness diagnostics")
+        body_lines.append("")
+        for diag in stats.pattern_diagnostics:
+            action = (
+                "hard-stopped"
+                if diag["kind"] == "tool_pattern_loop_detected"
+                else "nudged"
+            )
+            terminate = (
+                f", terminate_at={diag['terminate_at']}"
+                if diag.get("terminate_at") is not None
+                else ""
+            )
+            body_lines.append(
+                f"- Pattern guard {action} `{diag['tool']}` on `{diag['path']}` "
+                f"after {diag['count']} small reads in a {diag['window']}-call window "
+                f"(threshold={diag['threshold']}{terminate})."
+            )
+        body_lines.append("")
+
     # Mirror EngramMemory.end_session() so that error/note records the agent
     # buffered during the run survive when the bridge rewrites this same file.
     if memory.buffered_records:
@@ -600,7 +634,7 @@ def _render_reflection(
     mode doesn't support it, or the call failed), the body is the
     legacy template — same content as before this PR.
     """
-    fm = dict(_AGENT_FM)
+    fm: dict[str, Any] = dict(_AGENT_FM)
     fm["origin_session"] = memory.session_dir_rel
     fm["created"] = stats.session_date or datetime.now().date().isoformat()
 

@@ -17,6 +17,9 @@ class CreateSessionRequest(BaseModel):
     max_turns: int = Field(default=100, ge=1, le=1000)
     max_parallel_tools: int = Field(default=4, ge=1, le=32)
     repeat_guard_threshold: int = Field(default=3, ge=0, le=100)
+    tool_pattern_guard_threshold: int = Field(default=5, ge=0, le=100)
+    tool_pattern_guard_terminate_at: int | None = Field(default=None, ge=1, le=100)
+    tool_pattern_guard_window: int = Field(default=12, ge=1, le=100)
     error_recall_threshold: int = Field(default=0, ge=0, le=100)
     stream: bool = True
     trace_live: bool = False  # off by default in API mode (no stderr)

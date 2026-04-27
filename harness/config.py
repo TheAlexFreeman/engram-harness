@@ -53,6 +53,9 @@ class SessionConfig:
     # once the same (input + result) batch has run this many times in a row.
     repeat_guard_terminate_at: int | None = None
     repeat_guard_exempt_tools: list[str] = field(default_factory=list)
+    tool_pattern_guard_threshold: int = 5
+    tool_pattern_guard_terminate_at: int | None = None
+    tool_pattern_guard_window: int = 12
     error_recall_threshold: int = 0  # 0 = disabled; set to e.g. 3 to enable
 
     # Streaming / tracing
@@ -193,6 +196,11 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         repeat_guard_threshold=args.repeat_guard_threshold,
         repeat_guard_terminate_at=getattr(args, "repeat_guard_terminate_at", None),
         repeat_guard_exempt_tools=list(getattr(args, "repeat_guard_exempt", None) or []),
+        tool_pattern_guard_threshold=getattr(args, "tool_pattern_guard_threshold", 5),
+        tool_pattern_guard_terminate_at=getattr(
+            args, "tool_pattern_guard_terminate_at", None
+        ),
+        tool_pattern_guard_window=getattr(args, "tool_pattern_guard_window", 12),
         error_recall_threshold=getattr(args, "error_recall_threshold", 0),
         stream=args.stream,
         stream_max_block_chars=getattr(args, "stream_max_block_chars", 4000),

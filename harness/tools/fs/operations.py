@@ -13,6 +13,8 @@ from .scope import (
 )
 
 _WORKSPACE_ROOT_HINTS = ("projects", "notes", "scratch", "archive")
+_SMALL_SLICE_HINT_FILE_CHARS = 1024
+_SMALL_SLICE_HINT_RETURNED_CHARS = 256
 
 
 def _looks_like_internal_workspace_path(raw_path: str) -> bool:
@@ -118,6 +120,7 @@ class ReadFile:
         raw = path.read_text(encoding=encoding, errors=errors)
         line_start = args.get("line_start")
         line_end = args.get("line_end")
+        sliced = line_start is not None or line_end is not None or args.get("limit") is not None
 
         if line_start is not None or line_end is not None:
             ls = int(line_start) if line_start is not None else 1
@@ -148,7 +151,18 @@ class ReadFile:
 
         out, truncated = truncate_text(out, cap)
         if truncated and line_start is None and line_end is None:
-            out += f"\n(full decoded length {len(raw)} chars)"
+            out += f"\n(full decoded length {len(raw)} chars, {len(raw.splitlines())} lines)"
+        elif (
+            sliced
+            and len(raw) >= _SMALL_SLICE_HINT_FILE_CHARS
+            and len(out) <= _SMALL_SLICE_HINT_RETURNED_CHARS
+        ):
+            out += (
+                f"\n[harness read_file hint: returned {len(out)} chars from a "
+                f"{len(raw)}-char, {len(raw.splitlines())}-line file; consider "
+                "omitting offset/limit, using line_start/line_end, or reading a "
+                "larger range.]"
+            )
         return out
 
 
