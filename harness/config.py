@@ -197,9 +197,7 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         repeat_guard_terminate_at=getattr(args, "repeat_guard_terminate_at", None),
         repeat_guard_exempt_tools=list(getattr(args, "repeat_guard_exempt", None) or []),
         tool_pattern_guard_threshold=getattr(args, "tool_pattern_guard_threshold", 5),
-        tool_pattern_guard_terminate_at=getattr(
-            args, "tool_pattern_guard_terminate_at", None
-        ),
+        tool_pattern_guard_terminate_at=getattr(args, "tool_pattern_guard_terminate_at", None),
         tool_pattern_guard_window=getattr(args, "tool_pattern_guard_window", 12),
         error_recall_threshold=getattr(args, "error_recall_threshold", 0),
         stream=args.stream,

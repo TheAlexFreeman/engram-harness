@@ -39,12 +39,12 @@ def _internal_workspace_hint(scope: WorkspaceScope, raw_path: str) -> str | None
     if workspace_candidate.is_dir():
         return (
             f"{raw_path!r} looks like an internal workspace directory. "
-            f"Use work_list {{\"path\": \"{normalized}\"}} to list it."
+            f'Use work_list {{"path": "{normalized}"}} to list it.'
         )
     return (
         f"{raw_path!r} looks like an internal workspace file. "
-        f"Use work_read {{\"path\": \"{normalized}\"}} to read it, "
-        f"or generic read_file with \"workspace/{normalized}\"."
+        f'Use work_read {{"path": "{normalized}"}} to read it, '
+        f'or generic read_file with "workspace/{normalized}".'
     )
 
 
