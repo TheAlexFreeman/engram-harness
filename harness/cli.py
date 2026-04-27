@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from harness.cmd_drift import main as _drift_main
 from harness.cmd_eval import main as _eval_main
 from harness.cmd_recall_debug import main as _recall_debug_main
+from harness.cmd_replay import main as _replay_main
 from harness.cmd_serve import main as _serve_main
 from harness.cmd_status import (
     main as _status_main,
@@ -477,6 +478,10 @@ def main() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] == "recall-debug":
         _recall_debug_main()
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "replay":
+        _replay_main()
         return
 
     args = _parse_args()
