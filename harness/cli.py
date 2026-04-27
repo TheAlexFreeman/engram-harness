@@ -8,6 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from harness.cmd_drift import main as _drift_main
+from harness.cmd_replay import main as _replay_main
 from harness.cmd_serve import main as _serve_main
 from harness.cmd_status import (
     main as _status_main,
@@ -462,6 +463,10 @@ def main() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] == "drift":
         _drift_main()
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "replay":
+        _replay_main()
         return
 
     load_dotenv()
