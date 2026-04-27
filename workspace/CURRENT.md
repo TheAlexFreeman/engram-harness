@@ -7,6 +7,8 @@
 ### llm-cognition-synthesis [active] (project: llm-cognitive-frames)
 Identify gaps in LLM cognition coverage and propose new synthesizable knowledge files with practical implications for Engram-like systems
 
+### psychotechnologies-software [active] (project: psychotechnologies-software)
+
 ## Closed
 
 ### deacon-ideas — project archived: Completed research and synthesis. Produced four detailed working notes in notes/ (research overview, teleodynamics & absentials, symbolic species & Peircean reference, FEP/active inference bridges, and integrative Engram implications). All five original open questions resolved with high-quality syntheses. Files are ready for review and promotion to memory/knowledge/cognitive-science/deacon/ (or philosophy/mind/). This significantly enriches the existing biosemiotics, dynamical systems, active inference, McGilchrist, and LLM cognition files with Deacon's emergentist, semiotic, and constraint-based framework. Strong alignment with user's core questions on intelligence, extended mind, and value persistence. (2026-04-26)

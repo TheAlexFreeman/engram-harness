@@ -258,10 +258,6 @@ class EngramMemory:
         # Set when end_session() is called; consumed by trace_bridge so the
         # agent's wrap-up text survives the deferred-artifact path.
         self.session_summary: str = ""
-        # Full final assistant response for REPLY.md. Usually identical to
-        # session_summary, but kept separate so callers can later choose to
-        # summarize without losing the verbatim reply artifact.
-        self.session_reply: str = ""
         # Set when the loop runs an LLM reflection turn at session end;
         # consumed by trace_bridge so reflection.md becomes a real
         # model-authored reflection instead of the mechanical template.
@@ -540,12 +536,10 @@ class EngramMemory:
         legacy callers want the file written without committing).
         """
         self.session_summary = summary or ""
-        self.session_reply = summary or ""
         if defer_artifacts:
             return
         rel_dir = self.session_dir_rel
         summary_rel = f"{rel_dir}/summary.md"
-        reply_rel = f"{rel_dir}/REPLY.md"
         summary_abs = self.content_root / summary_rel
         summary_abs.parent.mkdir(parents=True, exist_ok=True)
 
@@ -609,19 +603,14 @@ class EngramMemory:
             "tool": "harness",
         }
         write_with_frontmatter(summary_abs, fm, body)
-        reply_abs = self.content_root / reply_rel
-        reply_text = self.session_reply
-        if reply_text and not reply_text.endswith("\n"):
-            reply_text += "\n"
-        reply_abs.write_text(reply_text, encoding="utf-8")
 
         if not skip_commit:
             try:
-                self.repo.add(summary_rel, reply_rel)
-                if self.repo.has_staged_changes(summary_rel, reply_rel):
+                self.repo.add(summary_rel)
+                if self.repo.has_staged_changes(summary_rel):
                     self.repo.commit(
                         f"[chat] harness session {self.session_id}",
-                        paths=[summary_rel, reply_rel],
+                        paths=[summary_rel],
                     )
             except Exception as exc:  # noqa: BLE001
                 _log.warning("Failed to commit session summary: %s", exc)
