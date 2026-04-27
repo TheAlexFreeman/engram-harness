@@ -100,6 +100,7 @@ class TraceBridgeResult:
     commit_sha: str | None
     artifacts: list[str]
     recall_candidates_path: Path | None = None
+    link_paths: list[Path] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +185,13 @@ def run_trace_bridge(
         written.append(_relpath(memory, recall_candidates_path))
         recall_candidates_written = recall_candidates_path
 
+    link_paths = _emit_co_retrieval_links(memory, stats)
+    for path in link_paths:
+        try:
+            written.append(_relpath(memory, path))
+        except ValueError:
+            continue
+
     if not subsessions:
         access_count = _emit_access_entries(
             memory, tool_calls, stats, content_prefix=content_prefix
@@ -234,6 +242,7 @@ def run_trace_bridge(
         commit_sha=commit_sha,
         artifacts=written,
         recall_candidates_path=recall_candidates_written,
+        link_paths=list(link_paths),
     )
 
 
@@ -718,6 +727,34 @@ def _build_spans(
 # ---------------------------------------------------------------------------
 # ACCESS.jsonl emission
 # ---------------------------------------------------------------------------
+
+
+def _emit_co_retrieval_links(
+    memory: EngramMemory,
+    stats: _SessionStats,
+) -> list[Path]:
+    """Derive co-retrieval edges from this session's recall candidates and
+    append them to per-namespace ``LINKS.jsonl`` sidecars.
+
+    Returns the list of files written (one per namespace touched). Empty
+    when the session has no recall candidates or no pair scored
+    ``returned=True`` in the same call.
+    """
+    events = list(getattr(memory, "recall_candidate_events", []) or [])
+    if not events:
+        return []
+
+    from harness._engram_fs.link_graph import (
+        append_edges,
+        derive_co_retrieval_edges,
+    )
+
+    session_id = getattr(memory, "session_id", "")
+    ts = stats.session_date or datetime.now().date().isoformat()
+    edges = derive_co_retrieval_edges(events, session_id=str(session_id), ts=ts)
+    if not edges:
+        return []
+    return append_edges(memory.content_root, edges)
 
 
 def _build_recall_candidate_rows(
