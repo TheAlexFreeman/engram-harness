@@ -15,6 +15,7 @@ from harness.engram_memory import EngramMemory
 from harness.tests.test_engram_memory import _make_engram_repo
 from harness.tools.work_tools import (
     WorkJot,
+    WorkList,
     WorkNote,
     WorkProjectArchive,
     WorkProjectAsk,
@@ -192,6 +193,42 @@ def test_read_rejects_traversal(ws: Workspace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# work_list
+# ---------------------------------------------------------------------------
+
+
+def test_list_returns_workspace_directory_entries(ws: Workspace) -> None:
+    ws.write_note("alpha", content="payload-content")
+
+    out = WorkList(ws).run({"path": "."})
+
+    assert "CURRENT.md" in out
+    assert "notes/" in out
+    assert "projects/" in out
+
+
+def test_list_marks_directories_and_files(ws: Workspace) -> None:
+    ws.project_create("alpha", goal="explore")
+    ws.write_note("project-note", content="payload", project="alpha")
+
+    project_out = WorkList(ws).run({"path": "projects"})
+    notes_out = WorkList(ws).run({"path": "projects/alpha/notes"})
+
+    assert "alpha/" in project_out
+    assert "project-note.md" in notes_out
+
+
+def test_list_missing_returns_friendly_message(ws: Workspace) -> None:
+    out = WorkList(ws).run({"path": "projects/ghost"})
+    assert "no such workspace directory" in out
+
+
+def test_list_rejects_traversal(ws: Workspace) -> None:
+    with pytest.raises(ValueError):
+        WorkList(ws).run({"path": "../../escape"})
+
+
+# ---------------------------------------------------------------------------
 # work_scratch
 # ---------------------------------------------------------------------------
 
@@ -332,6 +369,7 @@ def test_work_tools_declare_mutates_flag() -> None:
     expected_read_only = {
         "work_status",
         "work_read",
+        "work_list",
         "work_search",
         "work_project_list",
         "work_project_status",
@@ -355,6 +393,7 @@ def test_work_tools_declare_mutates_flag() -> None:
         WorkJot,
         WorkNote,
         WorkRead,
+        WorkList,
         WorkSearch,
         WorkScratch,
         WorkPromote,
@@ -426,6 +465,7 @@ def test_build_memory_filters_work_tools_under_read_only(
     # Read-only ones stay.
     assert "work_status" in names
     assert "work_read" in names
+    assert "work_list" in names
     assert "work_search" in names
     assert "work_project_list" in names
     assert "work_project_status" in names
@@ -466,6 +506,7 @@ def test_build_memory_registers_all_work_tools_under_full(
         "work_jot",
         "work_note",
         "work_read",
+        "work_list",
         "work_search",
         "work_scratch",
         "work_promote",
@@ -529,6 +570,7 @@ def test_search_returns_manifest_with_matches(ws: Workspace) -> None:
     out = WorkSearch(ws).run({"query": "token refresh", "k": 5})
     assert "workspace search" in out
     assert "projects/alpha/notes/auth-notes.md" in out
+    assert 'Read with: work_read {"path": "projects/alpha/notes/auth-notes.md"}' in out
     # beta project doesn't match this query.
     assert "projects/beta/" not in out
 

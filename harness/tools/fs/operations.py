@@ -8,14 +8,52 @@ from .scope import (
     MAX_LIST_ENTRIES,
     MAX_READ_CHARS,
     WorkspaceScope,
+    path_is_within_boundary,
     truncate_text,
 )
+
+_WORKSPACE_ROOT_HINTS = ("projects", "notes", "scratch", "archive")
+_SMALL_SLICE_HINT_FILE_CHARS = 1024
+_SMALL_SLICE_HINT_RETURNED_CHARS = 256
+
+
+def _looks_like_internal_workspace_path(raw_path: str) -> bool:
+    normalized = raw_path.strip().replace("\\", "/").lstrip("./")
+    if normalized in {"CURRENT.md", "projects", "notes", "scratch", "archive"}:
+        return True
+    head = normalized.split("/", 1)[0]
+    return head in _WORKSPACE_ROOT_HINTS
+
+
+def _internal_workspace_hint(scope: WorkspaceScope, raw_path: str) -> str | None:
+    if not _looks_like_internal_workspace_path(raw_path):
+        return None
+    normalized = raw_path.strip().replace("\\", "/").lstrip("./")
+    workspace_candidate = (scope.root / "workspace" / normalized).resolve()
+    try:
+        workspace_candidate.relative_to((scope.root / "workspace").resolve())
+    except ValueError:
+        return None
+    if not workspace_candidate.exists():
+        return None
+    if workspace_candidate.is_dir():
+        return (
+            f"{raw_path!r} looks like an internal workspace directory. "
+            f"Use work_list {{\"path\": \"{normalized}\"}} to list it."
+        )
+    return (
+        f"{raw_path!r} looks like an internal workspace file. "
+        f"Use work_read {{\"path\": \"{normalized}\"}} to read it, "
+        f"or generic read_file with \"workspace/{normalized}\"."
+    )
 
 
 class ReadFile:
     name = "read_file"
     description = (
         "Read a text file at a path relative to the workspace (UTF-8 by default). "
+        "When Engram memory is mounted, also accepts memory aliases like "
+        "'memory:/knowledge/foo.md' or bare roots like 'knowledge/foo.md'. "
         "Supports optional character slicing (offset/limit), optional 1-based inclusive "
         "line range (line_start/line_end), and max_chars on the returned slice. "
         "Output is capped at a large internal limit with a truncation suffix. "
@@ -24,7 +62,13 @@ class ReadFile:
     input_schema = {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Relative path within workspace."},
+            "path": {
+                "type": "string",
+                "description": (
+                    "Relative path within workspace, or mounted memory alias like "
+                    "'memory:/knowledge/foo.md' / 'knowledge/foo.md'."
+                ),
+            },
             "encoding": {
                 "type": "string",
                 "description": "Text encoding. Default utf-8.",
@@ -64,6 +108,9 @@ class ReadFile:
     def run(self, args: dict) -> str:
         path = self.scope.resolve(args["path"])
         if not path.is_file():
+            hint = _internal_workspace_hint(self.scope, args["path"])
+            if hint is not None:
+                raise ValueError(hint)
             raise ValueError(f"not a file: {args['path']!r}")
         encoding = args.get("encoding") or "utf-8"
         errors = args.get("errors") or "strict"
@@ -73,6 +120,7 @@ class ReadFile:
         raw = path.read_text(encoding=encoding, errors=errors)
         line_start = args.get("line_start")
         line_end = args.get("line_end")
+        sliced = line_start is not None or line_end is not None or args.get("limit") is not None
 
         if line_start is not None or line_end is not None:
             ls = int(line_start) if line_start is not None else 1
@@ -103,7 +151,20 @@ class ReadFile:
 
         out, truncated = truncate_text(out, cap)
         if truncated and line_start is None and line_end is None:
-            out += f"\n(full decoded length {len(raw)} chars)"
+            line_count = len(raw.splitlines())
+            out += f"\n(full decoded length {len(raw)} chars, {line_count} lines)"
+        elif (
+            sliced
+            and len(raw) >= _SMALL_SLICE_HINT_FILE_CHARS
+            and len(out) <= _SMALL_SLICE_HINT_RETURNED_CHARS
+        ):
+            line_count = len(raw.splitlines())
+            out += (
+                f"\n[harness read_file hint: returned {len(out)} chars from a "
+                f"{len(raw)}-char, {line_count}-line file; consider "
+                "omitting offset/limit, using line_start/line_end, or reading a "
+                "larger range.]"
+            )
         return out
 
 
@@ -111,13 +172,21 @@ class ListFiles:
     name = "list_files"
     description = (
         "List files and directories at a path relative to the workspace (non-recursive). "
+        "When Engram memory is mounted, accepts memory aliases like 'memory:/knowledge' "
+        "or bare roots like 'knowledge'. "
         "Directories are suffixed with a trailing slash. Defaults to workspace root. "
         "Large directories are truncated with a notice."
     )
     input_schema = {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Relative path. Defaults to '.'."}
+            "path": {
+                "type": "string",
+                "description": (
+                    "Relative path. Defaults to '.'. Mounted memory aliases are accepted "
+                    "when available."
+                ),
+            }
         },
     }
 
@@ -146,13 +215,20 @@ class ListFiles:
 class PathStat:
     name = "path_stat"
     description = (
-        "Return metadata for a path under the workspace: size, type flags, mtime (UTC ISO), "
-        "and permission bits (octal, platform-specific). Relative paths only."
+        "Return metadata for a path under the workspace or mounted memory root: size, "
+        "type flags, mtime (UTC ISO), and permission bits (octal, platform-specific). "
+        "Relative paths only."
     )
     input_schema = {
         "type": "object",
         "properties": {
-            "path": {"type": "string", "description": "Relative path within workspace."}
+            "path": {
+                "type": "string",
+                "description": (
+                    "Relative path within workspace, or mounted memory alias like "
+                    "'memory:/knowledge/foo.md' / 'knowledge/foo.md'."
+                ),
+            }
         },
         "required": ["path"],
     }
@@ -183,19 +259,26 @@ class GlobFiles:
     name = "glob_files"
     description = (
         "List files matching a glob pattern under a workspace-relative directory. "
+        "When Engram memory is mounted, root may be a memory alias and patterns that "
+        "start with a bare memory root (e.g. knowledge/**/*.md) can find memory files. "
         "Use ** for recursive patterns (e.g. **/*.py). Results are sorted; "
-        "symlink targets outside the workspace are skipped. Capped by max_results."
+        "symlink targets outside the active boundary are skipped. Capped by max_results."
     )
     input_schema = {
         "type": "object",
         "properties": {
             "pattern": {
                 "type": "string",
-                "description": "Glob relative to root, e.g. '*.md' or 'src/**/*.py'.",
+                "description": (
+                    "Glob relative to root, e.g. '*.md', 'src/**/*.py', or "
+                    "'knowledge/**/*.md' when memory is mounted."
+                ),
             },
             "root": {
                 "type": "string",
-                "description": "Directory under workspace to start from. Default '.'.",
+                "description": (
+                    "Directory under workspace or mounted memory to start from. Default '.'."
+                ),
             },
             "max_results": {
                 "type": "integer",
@@ -210,28 +293,23 @@ class GlobFiles:
 
     def run(self, args: dict) -> str:
         pattern = args["pattern"]
-        root = self.scope.resolve(args.get("root", "."))
+        root_arg = args.get("root", ".")
+        entry = self.scope.resolve_entry(root_arg)
+        root = entry.path
         if not root.is_dir():
             raise ValueError("root must be a directory")
         max_results = int(args.get("max_results") or MAX_GLOB_RESULTS)
         max_results = min(max(max_results, 1), MAX_GLOB_RESULTS)
 
-        root_r = self.scope._root_resolved()
-        hits: list[str] = []
-        for p in sorted(root.glob(pattern)):
-            try:
-                pr = p.resolve()
-            except OSError:
-                continue
-            if root_r not in pr.parents and pr != root_r:
-                continue
-            try:
-                rel = pr.relative_to(root_r).as_posix()
-            except ValueError:
-                continue
-            hits.append(rel)
-            if len(hits) >= max_results:
-                break
+        hits = self._collect_hits(root, pattern, entry.boundary, max_results)
+        if (
+            not hits
+            and root_arg == "."
+            and self.scope.memory_root is not None
+            and self.scope._is_bare_memory_path(pattern)
+        ):
+            memory_root = self.scope.memory_root.resolve()
+            hits = self._collect_hits(memory_root, pattern, memory_root, max_results)
 
         if not hits:
             return "(no matches)"
@@ -239,6 +317,26 @@ class GlobFiles:
         if len(hits) >= max_results:
             msg += f"\n\n[harness: capped at max_results={max_results}]"
         return msg
+
+    def _collect_hits(
+        self,
+        root,
+        pattern: str,
+        boundary,
+        max_results: int,
+    ) -> list[str]:
+        hits: list[str] = []
+        for p in sorted(root.glob(pattern)):
+            try:
+                pr = p.resolve()
+            except OSError:
+                continue
+            if not path_is_within_boundary(pr, boundary):
+                continue
+            hits.append(self.scope.describe_path(pr))
+            if len(hits) >= max_results:
+                break
+        return hits
 
 
 class Mkdir:

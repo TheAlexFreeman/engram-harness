@@ -259,6 +259,9 @@ def test_run_interactive_session_persists_stopped_status(tmp_path):
         repeat_guard_threshold=3,
         repeat_guard_terminate_at=None,
         repeat_guard_exempt_tools=[],
+        tool_pattern_guard_threshold=5,
+        tool_pattern_guard_terminate_at=None,
+        tool_pattern_guard_window=12,
         error_recall_threshold=0,
         trace_to_engram=None,
     )

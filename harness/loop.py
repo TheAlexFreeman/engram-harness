@@ -6,6 +6,7 @@ import threading
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Any, cast
 
 from harness.memory import MemoryBackend
 from harness.modes.base import Mode
@@ -40,6 +41,35 @@ _OUTPUT_LIMIT_CONTINUE_MESSAGE = (
     "need to write a long file, use smaller chunks or a file-producing tool."
 )
 _MAX_OUTPUT_LIMIT_CONTINUATIONS = 1
+
+_DEFAULT_TOOL_PATTERN_GUARD_MESSAGE = (
+    "[harness] File-read loop risk: you have repeatedly read tiny slices of "
+    "the same file. Stop paging in small chunks. Read the whole file if it is "
+    "small enough, use a meaningful line range, increase limit substantially, "
+    "or proceed from the context already gathered."
+)
+_SMALL_READ_LIMIT_CHARS = 256
+_SMALL_READ_MAX_LINES = 5
+_MUTATING_FILE_TOOLS = {
+    "append_file",
+    "copy_path",
+    "delete_path",
+    "edit_file",
+    "mkdir",
+    "move_path",
+    "write_file",
+}
+
+
+def _positive_limit(value: int | None) -> bool:
+    return value is not None and value > 0
+
+
+def _signature_preview(signature: object, max_chars: int = 500) -> str:
+    preview = str(signature)
+    if len(preview) <= max_chars:
+        return preview
+    return preview[: max_chars - 3] + "..."
 
 
 def _hash_result(content: str) -> str:
@@ -80,6 +110,138 @@ def _tool_batch_signature(
 
 
 @dataclass
+class _ReadFilePatternEvent:
+    path: str
+    turn: int
+    offset: int | None
+    limit: int | None
+    line_start: int | None
+    line_end: int | None
+    small_slice: bool
+
+
+@dataclass
+class _ToolPatternDiagnostic:
+    path: str
+    count: int
+    window: int
+    threshold: int
+    terminate_at: int | None
+    message: str = _DEFAULT_TOOL_PATTERN_GUARD_MESSAGE
+
+
+class _ToolPatternGuardState:
+    """Detect non-identical tool patterns that still indicate low progress."""
+
+    def __init__(self, *, threshold: int, terminate_at: int | None, window: int) -> None:
+        self.threshold = threshold
+        self.terminate_at = terminate_at
+        self.window = max(window, 1)
+        self._recent: list[_ReadFilePatternEvent | None] = []
+        self._nudged_paths: set[str] = set()
+
+    @property
+    def active(self) -> bool:
+        return self.threshold > 0 or _positive_limit(self.terminate_at)
+
+    def observe(
+        self,
+        tool_calls: list[ToolCall],
+        results: list[ToolResult],
+        *,
+        turn: int,
+    ) -> tuple[str, _ToolPatternDiagnostic] | None:
+        if not self.active:
+            return None
+        if any(call.name in _MUTATING_FILE_TOOLS for call in tool_calls):
+            self._recent.clear()
+            self._nudged_paths.clear()
+            return None
+
+        for call, result in zip(tool_calls, results, strict=False):
+            event = self._read_file_event(call, result, turn=turn)
+            self._recent.append(event)
+            if len(self._recent) > self.window:
+                self._recent = self._recent[-self.window :]
+
+        paths = {
+            event.path
+            for event in self._recent
+            if isinstance(event, _ReadFilePatternEvent) and event.small_slice
+        }
+        for path in sorted(paths):
+            count = sum(
+                1
+                for event in self._recent
+                if isinstance(event, _ReadFilePatternEvent)
+                and event.path == path
+                and event.small_slice
+            )
+            diagnostic = _ToolPatternDiagnostic(
+                path=path,
+                count=count,
+                window=self.window,
+                threshold=self.threshold,
+                terminate_at=self.terminate_at,
+            )
+            terminate_at = self.terminate_at
+            if terminate_at is not None and terminate_at > 0 and count >= terminate_at:
+                return "terminate", diagnostic
+            if self.threshold > 0 and count >= self.threshold and path not in self._nudged_paths:
+                self._nudged_paths.add(path)
+                return "nudge", diagnostic
+        return None
+
+    @staticmethod
+    def _read_file_event(
+        call: ToolCall,
+        result: ToolResult,
+        *,
+        turn: int,
+    ) -> _ReadFilePatternEvent | None:
+        if call.name != "read_file" or result.is_error:
+            return None
+        raw_path = call.args.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return None
+        offset = _optional_int(call.args.get("offset"))
+        limit = _optional_int(call.args.get("limit"))
+        line_start = _optional_int(call.args.get("line_start"))
+        line_end = _optional_int(call.args.get("line_end"))
+        small_slice = False
+        if limit is not None:
+            small_slice = limit <= _SMALL_READ_LIMIT_CHARS
+        elif line_start is not None or line_end is not None:
+            start = line_start if line_start is not None else 1
+            end = line_end if line_end is not None else start
+            small_slice = (end - start + 1) <= _SMALL_READ_MAX_LINES
+        if not small_slice:
+            return None
+        return _ReadFilePatternEvent(
+            path=_normalize_tool_path(raw_path),
+            turn=turn,
+            offset=offset,
+            limit=limit,
+            line_start=line_start,
+            line_end=line_end,
+            small_slice=small_slice,
+        )
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(cast(Any, value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_tool_path(path: str) -> str:
+    return path.strip().replace("\\", "/").lstrip("./")
+
+
+@dataclass
 class RunResult:
     final_text: str
     usage: Usage
@@ -105,6 +267,9 @@ def run_until_idle(
     repeat_guard_message: str | None = None,
     repeat_guard_terminate_at: int | None = None,
     repeat_guard_exempt_tools: Iterable[str] | None = None,
+    tool_pattern_guard_threshold: int = 5,
+    tool_pattern_guard_terminate_at: int | None = None,
+    tool_pattern_guard_window: int = 12,
     error_recall_threshold: int = 0,
     stop_event: threading.Event | None = None,
 ) -> RunResult:
@@ -130,6 +295,11 @@ def run_until_idle(
     # Per-tool consecutive-error counts; reset to 0 on a successful call.
     tool_error_streaks: dict[str, int] = {}
     output_limit_continuations = 0
+    pattern_guard = _ToolPatternGuardState(
+        threshold=tool_pattern_guard_threshold,
+        terminate_at=tool_pattern_guard_terminate_at,
+        window=tool_pattern_guard_window,
+    )
 
     for turn in range(max_turns):
         if stop_event is not None and stop_event.is_set():
@@ -331,9 +501,57 @@ def run_until_idle(
                     tool_error_streaks[tool_name] = 0
                     break  # one nudge per turn is enough
 
+        pattern_action = pattern_guard.observe(tool_calls, results, turn=turn)
+        if pattern_action is not None:
+            action, diagnostic = pattern_action
+            if action == "terminate":
+                tracer.event(
+                    "tool_pattern_loop_detected",
+                    turn=turn,
+                    tool="read_file",
+                    path=diagnostic.path,
+                    count=diagnostic.count,
+                    window=diagnostic.window,
+                    threshold=diagnostic.threshold,
+                    terminate_at=diagnostic.terminate_at,
+                )
+                memory.record(
+                    "tool_pattern_loop_detected: repeated tiny read_file slices "
+                    f"of {diagnostic.path!r} {diagnostic.count}x "
+                    f"(terminate_at={diagnostic.terminate_at}) — terminating",
+                    kind="error",
+                )
+                return RunResult(
+                    final_text=(
+                        "(loop detected: repeated tiny read_file slices of "
+                        f"{diagnostic.path!r}, count={diagnostic.count})"
+                    ),
+                    usage=total,
+                    turns_used=turn + 1,
+                    max_turns_reached=False,
+                    stopped_by_loop_detection=True,
+                )
+            tracer.event(
+                "tool_pattern_guard",
+                turn=turn,
+                tool="read_file",
+                path=diagnostic.path,
+                count=diagnostic.count,
+                window=diagnostic.window,
+                threshold=diagnostic.threshold,
+                terminate_at=diagnostic.terminate_at,
+            )
+            memory.record(
+                "tool_pattern_guard: repeated tiny read_file slices of "
+                f"{diagnostic.path!r} {diagnostic.count}x "
+                f"(threshold={diagnostic.threshold})",
+                kind="error",
+            )
+            messages.append({"role": "user", "content": diagnostic.message})
+
         repeat_guard_active = tool_calls and (
             repeat_guard_threshold > 0
-            or (repeat_guard_terminate_at is not None and repeat_guard_terminate_at > 0)
+            or _positive_limit(repeat_guard_terminate_at)
         )
         if repeat_guard_active:
             batch_sig = _tool_batch_signature(tool_calls, results, exempt_tools=exempt_tools)
@@ -359,9 +577,7 @@ def run_until_idle(
                 and repeat_guard_terminate_at > 0
                 and repeat_streak >= repeat_guard_terminate_at
             ):
-                sig_preview = str(batch_sig)
-                if len(sig_preview) > 500:
-                    sig_preview = sig_preview[:497] + "..."
+                sig_preview = _signature_preview(batch_sig)
                 tracer.event(
                     "loop_detected",
                     turn=turn,
@@ -391,9 +607,7 @@ def run_until_idle(
                 and repeat_streak >= repeat_guard_threshold
                 and not nudge_fired_for_streak
             ):
-                sig_preview = str(batch_sig)
-                if len(sig_preview) > 500:
-                    sig_preview = sig_preview[:497] + "..."
+                sig_preview = _signature_preview(batch_sig)
                 tracer.event(
                     "repetition_guard",
                     turn=turn,
@@ -503,6 +717,9 @@ def run(
     repeat_guard_message: str | None = None,
     repeat_guard_terminate_at: int | None = None,
     repeat_guard_exempt_tools: Iterable[str] | None = None,
+    tool_pattern_guard_threshold: int = 5,
+    tool_pattern_guard_terminate_at: int | None = None,
+    tool_pattern_guard_window: int = 12,
     error_recall_threshold: int = 0,
     skip_end_session_commit: bool = False,
     stop_event: threading.Event | None = None,
@@ -528,6 +745,9 @@ def run(
         repeat_guard_message=repeat_guard_message,
         repeat_guard_terminate_at=repeat_guard_terminate_at,
         repeat_guard_exempt_tools=repeat_guard_exempt_tools,
+        tool_pattern_guard_threshold=tool_pattern_guard_threshold,
+        tool_pattern_guard_terminate_at=tool_pattern_guard_terminate_at,
+        tool_pattern_guard_window=tool_pattern_guard_window,
         error_recall_threshold=error_recall_threshold,
         stop_event=stop_event,
     )

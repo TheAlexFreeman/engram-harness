@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Iterable
 from typing import Any, cast
 
 from openai import OpenAI
@@ -18,7 +19,8 @@ from harness.tool_args_canon import (
 from harness.tools import Tool, ToolCall, ToolResult
 from harness.usage import Usage
 
-NATIVE_TOOL_NAMES: frozenset[str] = frozenset({"web_search", "x_search"})
+NATIVE_TOOL_ORDER: tuple[str, ...] = ("web_search", "x_search")
+NATIVE_TOOL_NAMES: frozenset[str] = frozenset(NATIVE_TOOL_ORDER)
 
 # `response.output` may include items that xAI does not accept on the next request's
 # `input` when managing context manually. Plaintext `reasoning` (no encrypted blob)
@@ -50,14 +52,18 @@ def _grok_native_search_kind_and_phase(etype: str) -> tuple[str, str] | None:
     return None
 
 
-def _build_tool_schemas(harness_tools: dict[str, Tool]) -> list[dict[str, Any]]:
+def _build_tool_schemas(
+    harness_tools: dict[str, Tool],
+    *,
+    native_tool_names: Iterable[str] = NATIVE_TOOL_ORDER,
+) -> list[dict[str, Any]]:
     """xAI Responses API: built-in `web_search` / `x_search` plus flat `function` tools.
     Harness tools whose `name` collides with a native built-in are dropped so xAI
     doesn't reject the request for duplicate tool names."""
-    schemas: list[dict[str, Any]] = [
-        {"type": "web_search"},
-        {"type": "x_search"},
-    ]
+    schemas: list[dict[str, Any]] = []
+    for native_name in native_tool_names:
+        if native_name in NATIVE_TOOL_NAMES:
+            schemas.append({"type": native_name})
     for t in harness_tools.values():
         if t.name in NATIVE_TOOL_NAMES:
             continue
@@ -151,13 +157,15 @@ class GrokMode:
         system: str | None = None,
         response_include: list[str] | None = None,
         max_output_tokens: int = 4096,
+        native_tool_names: Iterable[str] = NATIVE_TOOL_ORDER,
     ):
         self.client = client
         self.model = model
         self.tools = tools
         self.max_output_tokens = max_output_tokens
         self._system = system if system is not None else system_prompt_native()
-        self._tool_schemas = _build_tool_schemas(tools)
+        self._native_tool_names = tuple(native_tool_names)
+        self._tool_schemas = _build_tool_schemas(tools, native_tool_names=self._native_tool_names)
         self._response_include: list[str] = list(response_include) if response_include else []
 
     def initial_messages(self, task: str, prior: str, tools: dict[str, Tool]) -> list[dict]:
@@ -170,6 +178,18 @@ class GrokMode:
             {"role": "system", "content": self._system},
             {"role": "user", "content": user},
         ]
+
+    def for_tools(self, tools: dict[str, Tool]) -> "GrokMode":
+        """Return an equivalent mode with tool schemas rebuilt from ``tools``."""
+        return GrokMode(
+            client=self.client,
+            model=self.model,
+            tools=tools,
+            system=self._system,
+            response_include=self._response_include,
+            max_output_tokens=self.max_output_tokens,
+            native_tool_names=(name for name in self._native_tool_names if name in tools),
+        )
 
     def complete(self, messages: list[dict], *, stream: StreamSink | None = None) -> Response:
         """Call Grok via xAI Responses API (native search + function tools)."""

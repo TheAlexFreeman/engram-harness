@@ -9,6 +9,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from harness.pricing import load_pricing
 from harness.stream import NullStreamSink, StderrStreamPrinter
 from harness.trace import CompositeTracer, ConsoleTracePrinter, Tracer
 
@@ -52,6 +53,9 @@ class SessionConfig:
     # once the same (input + result) batch has run this many times in a row.
     repeat_guard_terminate_at: int | None = None
     repeat_guard_exempt_tools: list[str] = field(default_factory=list)
+    tool_pattern_guard_threshold: int = 5
+    tool_pattern_guard_terminate_at: int | None = None
+    tool_pattern_guard_window: int = 12
     error_recall_threshold: int = 0  # 0 = disabled; set to e.g. 3 to enable
 
     # Streaming / tracing
@@ -192,6 +196,11 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         repeat_guard_threshold=args.repeat_guard_threshold,
         repeat_guard_terminate_at=getattr(args, "repeat_guard_terminate_at", None),
         repeat_guard_exempt_tools=list(getattr(args, "repeat_guard_exempt", None) or []),
+        tool_pattern_guard_threshold=getattr(args, "tool_pattern_guard_threshold", 5),
+        tool_pattern_guard_terminate_at=getattr(
+            args, "tool_pattern_guard_terminate_at", None
+        ),
+        tool_pattern_guard_window=getattr(args, "tool_pattern_guard_window", 12),
         error_recall_threshold=getattr(args, "error_recall_threshold", 0),
         stream=args.stream,
         stream_max_block_chars=getattr(args, "stream_max_block_chars", 4000),
@@ -225,6 +234,7 @@ def _build_memory(
     )
     from harness.tools.work_tools import (
         WorkJot,
+        WorkList,
         WorkNote,
         WorkProjectArchive,
         WorkProjectAsk,
@@ -329,6 +339,7 @@ def _build_memory(
         WorkJot(workspace),
         WorkNote(workspace),
         WorkRead(workspace),
+        WorkList(workspace),
         WorkSearch(workspace),
         WorkScratch(workspace),
         WorkPromote(workspace, engram),
@@ -467,6 +478,7 @@ def build_session(
     *,
     extra_trace_sinks: list[Any] | None = None,
     stream_sink_override: Any | None = None,
+    scope: Any | None = None,
 ) -> SessionComponents:
     """Construct all session objects from config.
 
@@ -483,11 +495,18 @@ def build_session(
         Used by the API server to inject SSE sinks.
     stream_sink_override
         Replace the default stream sink. Used by the API server.
+    scope
+        Optional WorkspaceScope used by the filesystem tools. When Engram
+        memory is active, its mounted memory root is set before the mode sees
+        tool descriptions.
     """
     memory, engram_memory, extra_tools = _build_memory(config)
 
     if tools is None:
         tools = {}
+
+    if scope is not None and engram_memory is not None:
+        scope.memory_root = engram_memory.content_root / "memory"
 
     # Merge any extra tools from memory backend (e.g. recall, plan tools)
     if extra_tools:
@@ -497,6 +516,14 @@ def build_session(
     trace_path = _derive_trace_path(config, engram_memory)
     tracer = _build_tracer(config, trace_path, extra_sinks=extra_trace_sinks)
     stream_sink = _build_stream_sink(config, override=stream_sink_override)
+
+    _wire_subagent_spawn(
+        tools,
+        mode=mode,
+        parent_tracer=tracer,
+        pricing_loader=load_pricing,
+        stream_sink=stream_sink,
+    )
 
     return SessionComponents(
         mode=mode,
@@ -508,3 +535,89 @@ def build_session(
         trace_path=trace_path,
         config=config,
     )
+
+
+def _wire_subagent_spawn(
+    tools: dict[str, Any],
+    *,
+    mode: Any,
+    parent_tracer: Any,
+    pricing_loader: Any,
+    stream_sink: Any | None = None,
+) -> None:
+    """Late-bind the spawn callback on any ``SpawnSubagent`` tool in ``tools``.
+
+    Sub-agents reuse the parent's provider client/config where possible, but
+    rebuild the Mode against their filtered tool registry so advertised tool
+    schemas match the allowlist. They also get a ``NullMemory`` and
+    ``NullTraceSink`` to keep their internal state isolated from the parent's
+    session. The parent's tracer still sees a single ``subagent_run`` summary
+    event for each call.
+    """
+    spawn_tool = tools.get("spawn_subagent")
+    if spawn_tool is None or not hasattr(spawn_tool, "set_spawn_fn"):
+        return
+
+    from harness.loop import run_until_idle
+    from harness.tools.subagent import (
+        DEFAULT_ALLOWED_TOOLS,
+        NullMemory,
+        NullTraceSink,
+        SpawnSubagent,
+        SubagentResult,
+    )
+
+    parent_tools = tools
+
+    def spawn(*, task: str, allowed_tools: list[str], max_turns: int, depth: int) -> SubagentResult:
+        # Filter parent registry by allowed names. Skip 'spawn_subagent' here —
+        # nested spawning is handled below with its own depth bound.
+        sub_tools = {
+            n: t for n, t in parent_tools.items() if n in allowed_tools and n != "spawn_subagent"
+        }
+        # Allow nested spawns (within the depth budget) when the caller
+        # explicitly opted in via allowed_tools.
+        if "spawn_subagent" in allowed_tools and isinstance(spawn_tool, SpawnSubagent):
+            nested = SpawnSubagent(
+                spawn,
+                max_depth=spawn_tool.max_depth,
+                current_depth=depth,
+            )
+            sub_tools["spawn_subagent"] = nested
+
+        sub_mode = mode.for_tools(sub_tools) if hasattr(mode, "for_tools") else mode
+        sub_messages = sub_mode.initial_messages(task=task, prior="", tools=sub_tools)
+        result = run_until_idle(
+            sub_messages,
+            sub_mode,
+            sub_tools,
+            NullMemory(),
+            NullTraceSink(),
+            max_turns=max_turns,
+            pricing=pricing_loader(),
+            max_parallel_tools=1,
+            stream_sink=stream_sink,
+        )
+        # Best-effort visibility on the parent's trace.
+        try:
+            parent_tracer.event(
+                "subagent_run",
+                depth=depth,
+                turns=result.turns_used,
+                max_turns_reached=result.max_turns_reached,
+                input_tokens=int(getattr(result.usage, "input_tokens", 0) or 0),
+                output_tokens=int(getattr(result.usage, "output_tokens", 0) or 0),
+                cost_usd=float(getattr(result.usage, "total_cost_usd", 0.0) or 0.0),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        return SubagentResult(
+            final_text=result.final_text,
+            usage=result.usage,
+            turns_used=result.turns_used,
+            max_turns_reached=result.max_turns_reached,
+        )
+
+    _ = DEFAULT_ALLOWED_TOOLS  # imported for visibility; consumed by the tool itself
+    spawn_tool.set_spawn_fn(spawn)

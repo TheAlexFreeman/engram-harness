@@ -66,6 +66,14 @@ def test_read_file_full_and_lines(tmp_path: Path) -> None:
     assert r.run({"path": "a.txt", "offset": 6, "limit": 5}) == "line2"
 
 
+def test_read_file_tiny_slice_of_large_file_adds_hint(tmp_path: Path) -> None:
+    p = tmp_path / "large.md"
+    p.write_text("0123456789\n" * 200, encoding="utf-8")
+    out = ReadFile(_scope(tmp_path)).run({"path": "large.md", "offset": 10, "limit": 30})
+    assert "harness read_file hint" in out
+    assert "consider omitting offset/limit" in out
+
+
 def test_read_file_max_chars(tmp_path: Path) -> None:
     p = tmp_path / "b.txt"
     p.write_text("abcdefghij", encoding="utf-8")

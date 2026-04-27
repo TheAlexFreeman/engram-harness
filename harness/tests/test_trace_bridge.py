@@ -148,7 +148,7 @@ def test_derive_read_helpfulness_unused() -> None:
 def test_run_trace_bridge_minimal_session(repo: Path, memory: EngramMemory, tmp_path: Path) -> None:
     trace = tmp_path / "trace.jsonl"
     ts = _now_iso()
-    events = [
+    events: list[dict] = [
         {"ts": ts, "kind": "session_start", "task": "explore the celery setup"},
         {"ts": ts, "kind": "model_response", "turn": 0},
         {
@@ -180,6 +180,17 @@ def test_run_trace_bridge_minimal_session(repo: Path, memory: EngramMemory, tmp_
         },
         {
             "ts": ts,
+            "kind": "tool_pattern_guard",
+            "turn": 1,
+            "tool": "read_file",
+            "path": "memory/knowledge/celery.md",
+            "count": 5,
+            "window": 12,
+            "threshold": 5,
+            "terminate_at": None,
+        },
+        {
+            "ts": ts,
             "kind": "session_usage",
             "input_tokens": 1234,
             "output_tokens": 567,
@@ -202,6 +213,8 @@ def test_run_trace_bridge_minimal_session(repo: Path, memory: EngramMemory, tmp_
     assert "explore the celery setup" in summary
     assert "edit_file" in summary
     assert "Cost: $0.0123" in summary
+    assert "Harness diagnostics" in summary
+    assert "Pattern guard nudged `read_file`" in summary
 
     assert result.reply_path.read_text(encoding="utf-8") == ""
 

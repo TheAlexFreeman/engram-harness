@@ -40,6 +40,16 @@ class NativeMode:
         )
         return [{"role": "user", "content": user}]
 
+    def for_tools(self, tools: dict[str, Tool]) -> "NativeMode":
+        """Return an equivalent mode with tool schemas rebuilt from ``tools``."""
+        return NativeMode(
+            client=self.client,
+            model=self.model,
+            tools=tools,
+            system=self._system,
+            max_output_tokens=self.max_output_tokens,
+        )
+
     def complete(self, messages: list[dict], *, stream: StreamSink | None = None):
         if stream is None:
             return self.client.messages.create(

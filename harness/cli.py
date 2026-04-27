@@ -54,9 +54,11 @@ def build_tools(
         WriteFile,
     )
     from harness.tools.git import Git, GitCommit, GitDiff, GitLog, GitStatus
+    from harness.tools.help import ToolHelp
     from harness.tools.python_eval import PythonEval
     from harness.tools.run_script import RunScript
     from harness.tools.search import WebSearch
+    from harness.tools.subagent import SpawnSubagent
     from harness.tools.todos import AnalyzeTodos, ReadTodos, UpdateTodo, WriteTodos
     from harness.tools.x_search import XSearch
 
@@ -73,6 +75,7 @@ def build_tools(
         AnalyzeTodos(scope),
         WebSearch(),
         XSearch(),
+        ToolHelp(),
     ]
     write_only: list[Tool] = [
         Mkdir(scope),
@@ -89,12 +92,18 @@ def build_tools(
     ]
     shell: list[Tool] = [Bash(scope), PythonEval(scope), RunScript(scope)]
 
+    # Sub-agent spawning is available wherever cost-bearing tools are: in
+    # NO_SHELL and FULL profiles, but not READ_ONLY (which is meant to be
+    # the minimal-cost / no-side-effects mode). The spawn callback is
+    # wired by build_session once Mode + memory exist.
+    subagent: list[Tool] = [SpawnSubagent()]
+
     if profile == ToolProfile.READ_ONLY:
         base = read_only
     elif profile == ToolProfile.NO_SHELL:
-        base = read_only + write_only
+        base = read_only + write_only + subagent
     else:
-        base = read_only + write_only + shell
+        base = read_only + write_only + shell + subagent
 
     if extra:
         base.extend(extra)
@@ -260,6 +269,34 @@ def _parse_args() -> argparse.Namespace:
             "are legitimately invoked many times in a row, e.g. polling or "
             "heartbeat tools."
         ),
+    )
+    parser.add_argument(
+        "--tool-pattern-guard-threshold",
+        type=int,
+        default=5,
+        metavar="N",
+        help=(
+            "After N repeated tiny read_file slices of the same path within the "
+            "recent tool window, inject a corrective file-reading nudge. Use 0 "
+            "to disable soft pattern nudges."
+        ),
+    )
+    parser.add_argument(
+        "--tool-pattern-guard-terminate-at",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Hard-stop the run when repeated tiny read_file slices of one path "
+            "reach N calls within the recent tool window. Defaults to disabled."
+        ),
+    )
+    parser.add_argument(
+        "--tool-pattern-guard-window",
+        type=int,
+        default=12,
+        metavar="N",
+        help="Number of recent tool calls considered by the pattern guard.",
     )
     parser.add_argument(
         "--error-recall-threshold",
@@ -460,7 +497,12 @@ def main() -> None:
 
     scope = WorkspaceScope(root=config.workspace)
     base_tools = build_tools(scope, profile=config.tool_profile)
-    components = build_session(config, tools=base_tools, extra_trace_sinks=extra_sinks)
+    components = build_session(
+        config,
+        tools=base_tools,
+        extra_trace_sinks=extra_sinks,
+        scope=scope,
+    )
 
     if store is not None:
         _insert_cli_session_row(store, session_id, args, config, components)

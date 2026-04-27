@@ -16,6 +16,11 @@ Promoted 2026-03-20. Philosophy and science of self-organizing intelligence, see
 
 **For the broader thesis:** [synthesis-intelligence-as-dynamical-regime.md](synthesis-intelligence-as-dynamical-regime.md) — unified thesis on intelligence as edge-of-chaos dynamical regime; convergence across traditions; open questions.
 
+## Philosophy of mind: consciousness and the manifest image *(new 2026-04-26)*
+
+- `sellars-manifest-scientific-image.md` — Manifest vs. scientific image; placement problem; grain problem; space of reasons; synoptic vision; responses from Churchland, McDowell, Brandom, Dennett
+- `hoffman-interface-theory-conscious-agents.md` — FBT Theorem; interface theory of perception; conscious agents formalism (Markov kernels, six-tuple definition); agent combination; spacetime as emergence; vs. IIT, Kant, panpsychism; critiques (Bagwell, Pautz)
+
 ## Dynamical systems and intelligence
 
 - `self-organized-criticality.md` — SOC, edge of chaos (Langton), Kauffman NK model, neural criticality

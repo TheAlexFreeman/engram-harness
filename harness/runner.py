@@ -51,6 +51,9 @@ def _run_subtask(
         repeat_guard_threshold=config.repeat_guard_threshold,
         repeat_guard_terminate_at=config.repeat_guard_terminate_at,
         repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
+        tool_pattern_guard_threshold=config.tool_pattern_guard_threshold,
+        tool_pattern_guard_terminate_at=config.tool_pattern_guard_terminate_at,
+        tool_pattern_guard_window=config.tool_pattern_guard_window,
         error_recall_threshold=config.error_recall_threshold,
     )
     tracer.event(
@@ -199,6 +202,9 @@ def run_batch(args: "argparse.Namespace", components: "SessionComponents"):
             repeat_guard_threshold=config.repeat_guard_threshold,
             repeat_guard_terminate_at=config.repeat_guard_terminate_at,
             repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
+            tool_pattern_guard_threshold=config.tool_pattern_guard_threshold,
+            tool_pattern_guard_terminate_at=config.tool_pattern_guard_terminate_at,
+            tool_pattern_guard_window=config.tool_pattern_guard_window,
             error_recall_threshold=config.error_recall_threshold,
             skip_end_session_commit=bridge,
             reflect=getattr(config, "reflect", True),

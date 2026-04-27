@@ -32,6 +32,9 @@ def _minimal_namespace(**kwargs) -> argparse.Namespace:
         max_parallel_tools=4,
         max_output_tokens=4096,
         repeat_guard_threshold=3,
+        tool_pattern_guard_threshold=5,
+        tool_pattern_guard_terminate_at=None,
+        tool_pattern_guard_window=12,
         stream=True,
         stream_max_block_chars=4000,
         trace_live=True,
@@ -59,6 +62,9 @@ def test_config_defaults(tmp_path):
     assert config.max_parallel_tools == 4
     assert config.max_output_tokens == 4096
     assert config.repeat_guard_threshold == 3
+    assert config.tool_pattern_guard_threshold == 5
+    assert config.tool_pattern_guard_terminate_at is None
+    assert config.tool_pattern_guard_window == 12
     assert config.stream is True
     assert config.stream_max_block_chars == 4000
     assert config.trace_live is True
@@ -132,6 +138,9 @@ def test_config_from_args_custom(tmp_path):
         memory_repo=str(tmp_path),
         max_turns=50,
         max_output_tokens=8192,
+        tool_pattern_guard_threshold=6,
+        tool_pattern_guard_terminate_at=9,
+        tool_pattern_guard_window=15,
         stream_max_block_chars=1234,
         grok_include=["web_search_call.sources"],
     )
@@ -141,6 +150,9 @@ def test_config_from_args_custom(tmp_path):
     assert config.memory_repo == tmp_path
     assert config.max_turns == 50
     assert config.max_output_tokens == 8192
+    assert config.tool_pattern_guard_threshold == 6
+    assert config.tool_pattern_guard_terminate_at == 9
+    assert config.tool_pattern_guard_window == 15
     assert config.stream_max_block_chars == 1234
     assert config.grok_include == ["web_search_call.sources"]
 
