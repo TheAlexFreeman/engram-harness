@@ -151,15 +151,17 @@ class ReadFile:
 
         out, truncated = truncate_text(out, cap)
         if truncated and line_start is None and line_end is None:
-            out += f"\n(full decoded length {len(raw)} chars, {len(raw.splitlines())} lines)"
+            line_count = len(raw.splitlines())
+            out += f"\n(full decoded length {len(raw)} chars, {line_count} lines)"
         elif (
             sliced
             and len(raw) >= _SMALL_SLICE_HINT_FILE_CHARS
             and len(out) <= _SMALL_SLICE_HINT_RETURNED_CHARS
         ):
+            line_count = len(raw.splitlines())
             out += (
                 f"\n[harness read_file hint: returned {len(out)} chars from a "
-                f"{len(raw)}-char, {len(raw.splitlines())}-line file; consider "
+                f"{len(raw)}-char, {line_count}-line file; consider "
                 "omitting offset/limit, using line_start/line_end, or reading a "
                 "larger range.]"
             )

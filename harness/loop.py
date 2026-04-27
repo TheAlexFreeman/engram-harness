@@ -6,6 +6,7 @@ import threading
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Any, cast
 
 from harness.memory import MemoryBackend
 from harness.modes.base import Mode
@@ -58,6 +59,17 @@ _MUTATING_FILE_TOOLS = {
     "move_path",
     "write_file",
 }
+
+
+def _positive_limit(value: int | None) -> bool:
+    return value is not None and value > 0
+
+
+def _signature_preview(signature: object, max_chars: int = 500) -> str:
+    preview = str(signature)
+    if len(preview) <= max_chars:
+        return preview
+    return preview[: max_chars - 3] + "..."
 
 
 def _hash_result(content: str) -> str:
@@ -130,9 +142,7 @@ class _ToolPatternGuardState:
 
     @property
     def active(self) -> bool:
-        return self.threshold > 0 or (
-            self.terminate_at is not None and self.terminate_at > 0
-        )
+        return self.threshold > 0 or _positive_limit(self.terminate_at)
 
     def observe(
         self,
@@ -174,7 +184,8 @@ class _ToolPatternGuardState:
                 threshold=self.threshold,
                 terminate_at=self.terminate_at,
             )
-            if self.terminate_at is not None and self.terminate_at > 0 and count >= self.terminate_at:
+            terminate_at = self.terminate_at
+            if terminate_at is not None and terminate_at > 0 and count >= terminate_at:
                 return "terminate", diagnostic
             if self.threshold > 0 and count >= self.threshold and path not in self._nudged_paths:
                 self._nudged_paths.add(path)
@@ -221,7 +232,7 @@ def _optional_int(value: object) -> int | None:
     if value is None:
         return None
     try:
-        return int(value)
+        return int(cast(Any, value))
     except (TypeError, ValueError):
         return None
 
@@ -540,7 +551,7 @@ def run_until_idle(
 
         repeat_guard_active = tool_calls and (
             repeat_guard_threshold > 0
-            or (repeat_guard_terminate_at is not None and repeat_guard_terminate_at > 0)
+            or _positive_limit(repeat_guard_terminate_at)
         )
         if repeat_guard_active:
             batch_sig = _tool_batch_signature(tool_calls, results, exempt_tools=exempt_tools)
@@ -566,9 +577,7 @@ def run_until_idle(
                 and repeat_guard_terminate_at > 0
                 and repeat_streak >= repeat_guard_terminate_at
             ):
-                sig_preview = str(batch_sig)
-                if len(sig_preview) > 500:
-                    sig_preview = sig_preview[:497] + "..."
+                sig_preview = _signature_preview(batch_sig)
                 tracer.event(
                     "loop_detected",
                     turn=turn,
@@ -598,9 +607,7 @@ def run_until_idle(
                 and repeat_streak >= repeat_guard_threshold
                 and not nudge_fired_for_streak
             ):
-                sig_preview = str(batch_sig)
-                if len(sig_preview) > 500:
-                    sig_preview = sig_preview[:497] + "..."
+                sig_preview = _signature_preview(batch_sig)
                 tracer.event(
                     "repetition_guard",
                     turn=turn,
