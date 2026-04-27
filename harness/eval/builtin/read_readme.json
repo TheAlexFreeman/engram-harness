@@ -1,0 +1,11 @@
+{
+  "id": "read_readme",
+  "task": "Read the file README.md in the workspace and report its first heading verbatim. Reply with ONLY the heading text (no extra prose).",
+  "tags": ["files", "easy"],
+  "max_turns": 5,
+  "expected": {
+    "tool_called": "read_file",
+    "contains": "Welcome",
+    "max_tool_call_count": 4
+  }
+}

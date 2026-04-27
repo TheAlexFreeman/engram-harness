@@ -1,0 +1,11 @@
+{
+  "id": "find_python_files",
+  "task": "List the names of all Python (.py) files in the workspace. Reply with ONLY the filenames, one per line.",
+  "tags": ["files", "easy"],
+  "max_turns": 5,
+  "expected": {
+    "tool_called_one_of": ["glob_files", "list_files", "grep_workspace"],
+    "contains": "main.py",
+    "max_tool_call_count": 4
+  }
+}
