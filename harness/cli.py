@@ -39,78 +39,10 @@ def build_tools(
     profile: ToolProfile = ToolProfile.FULL,
     extra: list | None = None,
 ) -> dict[str, object]:
-    """Build the tool registry for a session."""
-    from harness.tools import Tool
-    from harness.tools.bash import Bash
-    from harness.tools.fs import (
-        AppendFile,
-        CopyPath,
-        DeletePath,
-        EditFile,
-        GlobFiles,
-        GrepWorkspace,
-        ListFiles,
-        Mkdir,
-        MovePath,
-        PathStat,
-        ReadFile,
-        WriteFile,
-    )
-    from harness.tools.git import Git, GitCommit, GitDiff, GitLog, GitStatus
-    from harness.tools.help import ToolHelp
-    from harness.tools.python_eval import PythonEval
-    from harness.tools.run_script import RunScript
-    from harness.tools.search import WebSearch
-    from harness.tools.subagent import SpawnSubagent
-    from harness.tools.todos import AnalyzeTodos, ReadTodos, UpdateTodo, WriteTodos
-    from harness.tools.x_search import XSearch
+    """Compatibility wrapper for callers that still import from cli."""
+    from harness.tool_registry import build_tools as _build_tools
 
-    read_only: list[Tool] = [
-        ReadFile(scope),
-        ListFiles(scope),
-        PathStat(scope),
-        GlobFiles(scope),
-        GrepWorkspace(scope),
-        GitStatus(scope),
-        GitDiff(scope),
-        GitLog(scope),
-        ReadTodos(scope),
-        AnalyzeTodos(scope),
-        WebSearch(),
-        XSearch(),
-        ToolHelp(),
-    ]
-    write_only: list[Tool] = [
-        Mkdir(scope),
-        EditFile(scope),
-        WriteFile(scope),
-        AppendFile(scope),
-        DeletePath(scope),
-        MovePath(scope),
-        CopyPath(scope),
-        GitCommit(scope),
-        Git(scope),
-        WriteTodos(scope),
-        UpdateTodo(scope),
-    ]
-    shell: list[Tool] = [Bash(scope), PythonEval(scope), RunScript(scope)]
-
-    # Sub-agent spawning is available wherever cost-bearing tools are: in
-    # NO_SHELL and FULL profiles, but not READ_ONLY (which is meant to be
-    # the minimal-cost / no-side-effects mode). The spawn callback is
-    # wired by build_session once Mode + memory exist.
-    subagent: list[Tool] = [SpawnSubagent()]
-
-    if profile == ToolProfile.READ_ONLY:
-        base = read_only
-    elif profile == ToolProfile.NO_SHELL:
-        base = read_only + write_only + subagent
-    else:
-        base = read_only + write_only + shell + subagent
-
-    if extra:
-        base.extend(extra)
-    return {t.name: t for t in base}
+    return _build_tools(scope, profile=profile, extra=extra)
 
 
 def _find_git_root(start: Path) -> Path | None:
@@ -317,6 +249,18 @@ def _parse_args() -> argparse.Namespace:
         default=4,
         help="Maximum tool calls from a single turn to execute concurrently. "
         "1 disables parallelism (sequential execution).",
+    )
+    parser.add_argument(
+        "--max-cost-usd",
+        type=float,
+        default=None,
+        help="Optional session budget in USD. The run stops after a model turn exceeds it.",
+    )
+    parser.add_argument(
+        "--max-tool-calls",
+        type=int,
+        default=None,
+        help="Optional session budget for total local tool calls.",
     )
     parser.add_argument(
         "--trace-live",
@@ -529,10 +473,11 @@ def main() -> None:
     max_turns_reached = False
     status = "completed"
     usage = None
+    bridge_status = None
     try:
         if args.interactive:
             usage = run_interactive(args, components)
-            run_trace_bridge_if_enabled(components)
+            bridge_status = run_trace_bridge_if_enabled(components)
             print_usage(usage, components)
         else:
             batch_result = run_batch(args, components)
@@ -540,7 +485,7 @@ def main() -> None:
             final_text = batch_result.final_text
             turns_used = batch_result.turns_used
             max_turns_reached = batch_result.max_turns_reached
-            run_trace_bridge_if_enabled(components)
+            bridge_status = run_trace_bridge_if_enabled(components)
             print("\n" + "=" * 60)
             print(batch_result.final_text)
             print("=" * 60)
@@ -561,12 +506,17 @@ def main() -> None:
                 final_text=final_text,
                 max_turns_reached=max_turns_reached,
                 engram_memory=components.engram_memory,
+                bridge_status=_bridge_status_value(bridge_status, "status"),
+                bridge_error=_bridge_status_value(bridge_status, "error"),
             )
             store.close()
         elif store is not None:
             # Run failed before usage was assigned — close the store so the
             # SQLite file isn't left locked, but skip the update.
             store.close()
+        close_memory = getattr(components.engram_memory, "close", None)
+        if close_memory is not None:
+            close_memory()
 
 
 def _insert_cli_session_row(store, session_id, args, config, components):
@@ -592,3 +542,8 @@ def _insert_cli_session_row(store, session_id, args, config, components):
         )
     except Exception:  # noqa: BLE001
         pass
+
+
+def _bridge_status_value(bridge_status, attr: str) -> str | None:
+    value = getattr(bridge_status, attr, None)
+    return value if isinstance(value, str) else None

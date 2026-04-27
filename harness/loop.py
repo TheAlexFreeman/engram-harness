@@ -12,7 +12,7 @@ from harness.memory import MemoryBackend
 from harness.modes.base import Mode
 from harness.pricing import PricingTable, compute_cost, load_pricing
 from harness.stream import StreamSink
-from harness.tools import Tool, ToolCall, ToolResult, execute
+from harness.tools import Tool, ToolCall, ToolResult, execute, tool_mutates
 from harness.trace import TraceSink
 from harness.usage import Usage
 
@@ -250,6 +250,69 @@ class RunResult:
     stopped_by_user: bool = False
     stopped_by_loop_detection: bool = False
     output_limit_reached: bool = False
+    stopped_by_budget: bool = False
+    budget_reason: str | None = None
+    # Harness tool calls executed in this ``run_until_idle`` invocation (for session budgets)
+    tool_calls_used: int = 0
+
+
+def session_remaining_cost_usd(cap: float | None, consumed_session_usd: float) -> float | None:
+    """Return remaining cost budget for a session, or None if uncapped.
+
+    When the cap is active (non-negative), the returned value is the maximum
+    allowed **new** spend in the next ``run_until_idle`` call so that
+    *session* spend stays at or below ``cap`` when the caller tracks
+    ``consumed_session_usd`` from prior invocations' ``RunResult.usage``.
+    """
+    if cap is None or cap < 0:
+        return None
+    return max(0.0, cap - consumed_session_usd)
+
+
+def session_remaining_tool_calls(cap: int | None, consumed_session_calls: int) -> int | None:
+    """Return remaining tool-call budget, or None if uncapped."""
+    if cap is None or cap < 0:
+        return None
+    return max(0, cap - consumed_session_calls)
+
+
+def _execute_tool_batch(
+    tool_calls: list[ToolCall],
+    tools: dict[str, Tool],
+    *,
+    max_parallel_tools: int,
+    tracer: TraceSink,
+) -> list[ToolResult]:
+    """Execute a model-emitted tool batch with deterministic mutation semantics."""
+    has_mutation = any(tool_mutates(tools.get(call.name)) for call in tool_calls)
+    if has_mutation:
+        tracer.event(
+            "tool_dispatch",
+            count=len(tool_calls),
+            max_parallel=1,
+            strategy="sequential_mutating",
+        )
+        return [execute(c, tools) for c in tool_calls]
+    if max_parallel_tools <= 1 or len(tool_calls) == 1:
+        strategy = "sequential_read_only" if len(tool_calls) > 1 else "single"
+        tracer.event(
+            "tool_dispatch",
+            count=len(tool_calls),
+            max_parallel=1,
+            strategy=strategy,
+        )
+        return [execute(c, tools) for c in tool_calls]
+
+    workers = min(max_parallel_tools, len(tool_calls))
+    tracer.event(
+        "tool_dispatch",
+        count=len(tool_calls),
+        max_parallel=workers,
+        strategy="parallel_read_only",
+    )
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(execute, c, tools) for c in tool_calls]
+        return [f.result() for f in futures]
 
 
 def run_until_idle(
@@ -272,6 +335,8 @@ def run_until_idle(
     tool_pattern_guard_window: int = 12,
     error_recall_threshold: int = 0,
     stop_event: threading.Event | None = None,
+    max_cost_usd: float | None = None,
+    max_tool_calls: int | None = None,
 ) -> RunResult:
     """Run model/tool turns until the assistant responds without tool calls or
     ``max_turns`` is hit.
@@ -295,6 +360,7 @@ def run_until_idle(
     # Per-tool consecutive-error counts; reset to 0 on a successful call.
     tool_error_streaks: dict[str, int] = {}
     output_limit_continuations = 0
+    total_tool_calls = 0
     pattern_guard = _ToolPatternGuardState(
         threshold=tool_pattern_guard_threshold,
         terminate_at=tool_pattern_guard_terminate_at,
@@ -309,6 +375,7 @@ def run_until_idle(
                 turns_used=turn,
                 max_turns_reached=False,
                 stopped_by_user=True,
+                tool_calls_used=total_tool_calls,
             )
         response = mode.complete(messages, stream=stream_sink)
         tracer.event("model_response", turn=turn)
@@ -316,6 +383,25 @@ def run_until_idle(
         turn_usage = compute_cost(mode.extract_usage(response), pricing)
         total = total + turn_usage
         tracer.event("usage", turn=turn, **turn_usage.as_trace_dict())
+        if max_cost_usd is not None and max_cost_usd >= 0 and total.total_cost_usd > max_cost_usd:
+            tracer.event(
+                "budget_exceeded",
+                turn=turn,
+                budget="max_cost_usd",
+                limit=max_cost_usd,
+                actual=total.total_cost_usd,
+            )
+            return RunResult(
+                final_text=(
+                    f"(budget exceeded: cost ${total.total_cost_usd:.4f} "
+                    f"> limit ${max_cost_usd:.4f})"
+                ),
+                usage=total,
+                turns_used=turn + 1,
+                stopped_by_budget=True,
+                budget_reason="max_cost_usd",
+                tool_calls_used=total_tool_calls,
+            )
 
         messages.append(mode.as_assistant_message(response))
         stop_reason_fn = getattr(mode, "response_stop_reason", None)
@@ -364,6 +450,7 @@ def run_until_idle(
                     usage=total,
                     turns_used=turn + 1,
                     max_turns_reached=False,
+                    tool_calls_used=total_tool_calls,
                 )
 
             for j, call in enumerate(tool_calls):
@@ -385,6 +472,7 @@ def run_until_idle(
                     usage=total,
                     turns_used=turn + 1,
                     max_turns_reached=False,
+                    tool_calls_used=total_tool_calls,
                 )
 
             for call in tool_calls:
@@ -417,6 +505,7 @@ def run_until_idle(
                     turns_used=turn + 1,
                     max_turns_reached=False,
                     output_limit_reached=True,
+                    tool_calls_used=total_tool_calls,
                 )
             if output_limit_continuations < _MAX_OUTPUT_LIMIT_CONTINUATIONS:
                 output_limit_continuations += 1
@@ -441,20 +530,36 @@ def run_until_idle(
                 turns_used=turn + 1,
                 max_turns_reached=False,
                 output_limit_reached=True,
+                tool_calls_used=total_tool_calls,
             )
 
-        if max_parallel_tools <= 1 or len(tool_calls) == 1:
-            results = [execute(c, tools) for c in tool_calls]
-        else:
-            workers = min(max_parallel_tools, len(tool_calls))
-            tracer.event(
-                "tool_dispatch",
-                count=len(tool_calls),
-                max_parallel=workers,
-            )
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = [pool.submit(execute, c, tools) for c in tool_calls]
-                results = [f.result() for f in futures]
+        if max_tool_calls is not None and max_tool_calls >= 0:
+            next_total = total_tool_calls + len(tool_calls)
+            if next_total > max_tool_calls:
+                tracer.event(
+                    "budget_exceeded",
+                    turn=turn,
+                    budget="max_tool_calls",
+                    limit=max_tool_calls,
+                    actual=next_total,
+                )
+                return RunResult(
+                    final_text=(
+                        f"(budget exceeded: tool calls {next_total} > limit {max_tool_calls})"
+                    ),
+                    usage=total,
+                    turns_used=turn + 1,
+                    stopped_by_budget=True,
+                    budget_reason="max_tool_calls",
+                    tool_calls_used=total_tool_calls,
+                )
+        total_tool_calls += len(tool_calls)
+        results = _execute_tool_batch(
+            tool_calls,
+            tools,
+            max_parallel_tools=max_parallel_tools,
+            tracer=tracer,
+        )
 
         for i, result in enumerate(results):
             tracer.event(
@@ -530,6 +635,7 @@ def run_until_idle(
                     turns_used=turn + 1,
                     max_turns_reached=False,
                     stopped_by_loop_detection=True,
+                    tool_calls_used=total_tool_calls,
                 )
             tracer.event(
                 "tool_pattern_guard",
@@ -598,6 +704,7 @@ def run_until_idle(
                     turns_used=turn + 1,
                     max_turns_reached=False,
                     stopped_by_loop_detection=True,
+                    tool_calls_used=total_tool_calls,
                 )
 
             if (
@@ -634,6 +741,7 @@ def run_until_idle(
         usage=total,
         turns_used=max_turns,
         max_turns_reached=True,
+        tool_calls_used=total_tool_calls,
     )
 
 
@@ -723,6 +831,8 @@ def run(
     skip_end_session_commit: bool = False,
     stop_event: threading.Event | None = None,
     reflect: bool = True,
+    max_cost_usd: float | None = None,
+    max_tool_calls: int | None = None,
 ) -> RunResult:
     if pricing is None:
         pricing = load_pricing()
@@ -749,13 +859,19 @@ def run(
         tool_pattern_guard_window=tool_pattern_guard_window,
         error_recall_threshold=error_recall_threshold,
         stop_event=stop_event,
+        max_cost_usd=max_cost_usd,
+        max_tool_calls=max_tool_calls,
     )
 
     # Reflection turn (cost folded into result.usage so the session total
     # stays honest). Skipped when disabled, when the run was cut short by
     # the user, or when the model exhausted its output budget — none of
     # those leave a coherent state to reflect on.
-    skip_reflection = result.stopped_by_user or getattr(result, "output_limit_reached", False)
+    skip_reflection = (
+        result.stopped_by_user
+        or getattr(result, "output_limit_reached", False)
+        or getattr(result, "stopped_by_budget", False)
+    )
     reflection_usage = maybe_run_reflection(
         mode,
         messages,
@@ -779,6 +895,8 @@ def run(
         end_reason = "stopped"
     elif result.stopped_by_loop_detection:
         end_reason = "loop_detected"
+    elif result.stopped_by_budget:
+        end_reason = result.budget_reason or "budget_exceeded"
 
     memory.end_session(
         summary=result.final_text,

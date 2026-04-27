@@ -6,6 +6,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from harness.tools import CAP_SHELL
+
 from ._prelude import build_prelude
 from ._python_runner import (
     _DEFAULT_TIMEOUT,
@@ -18,6 +20,9 @@ from .fs import WorkspaceScope
 
 class RunScript:
     name = "run_script"
+    mutates = True
+    capabilities = frozenset({CAP_SHELL})
+    untrusted_output = True
     description = (
         "Run a Python script with full file lifecycle management. "
         "Provide code inline (saved as a traceable artifact under "

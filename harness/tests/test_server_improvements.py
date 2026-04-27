@@ -51,6 +51,50 @@ def test_health_endpoint_returns_ok(tmp_path):
     assert "active_sessions" in body
 
 
+def test_auth_middleware_protects_non_health(monkeypatch):
+    srv = _import_server()
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(srv, "_API_TOKEN", "secret")
+    client = TestClient(srv.app)
+
+    assert client.get("/health").status_code == 200
+    assert client.get("/sessions/stats").status_code == 401
+    assert (
+        client.get("/sessions/stats", headers={"Authorization": "Bearer secret"}).status_code == 200
+    )
+
+
+def test_full_tool_profile_rejected_without_opt_in(tmp_path, monkeypatch):
+    srv = _import_server()
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(srv, "_API_TOKEN", "")
+    monkeypatch.setattr(srv, "_ALLOW_FULL_TOOLS", False)
+    client = TestClient(srv.app)
+    resp = client.post(
+        "/sessions",
+        json={
+            "task": "test",
+            "workspace": str(tmp_path),
+            "memory": "file",
+            "tool_profile": "full",
+        },
+    )
+    assert resp.status_code == 403
+
+
+def test_non_loopback_serve_requires_workspace_root_and_auth(monkeypatch):
+    srv = _import_server()
+
+    monkeypatch.setattr(srv, "_WORKSPACE_ROOT", None)
+    monkeypatch.setattr(srv, "_API_TOKEN", "")
+    monkeypatch.setattr(srv, "_ALLOW_UNAUTH_LOCAL", False)
+
+    with pytest.raises(RuntimeError, match="HARNESS_WORKSPACE_ROOT"):
+        srv._require_server_auth_for_host("0.0.0.0")
+
+
 def test_health_active_count_reflects_sessions(tmp_path):
     srv = _import_server()
 
@@ -274,7 +318,12 @@ def test_run_interactive_session_persists_stopped_status(tmp_path):
         interactive=True,
     )
     session.stop_event.set()
-    result = SimpleNamespace(usage=Usage.zero(), final_text="stopped early")
+    result = SimpleNamespace(
+        usage=Usage.zero(),
+        final_text="stopped early",
+        stopped_by_budget=False,
+        tool_calls_used=0,
+    )
 
     with (
         patch("harness.server.run_until_idle", return_value=result),
@@ -298,6 +347,33 @@ def test_engram_session_metadata_returns_none_when_no_engram():
     components = SimpleNamespace(engram_memory=None)
     session = SimpleNamespace(components=components)
     assert srv._engram_session_metadata(session) == (None, None, None)
+
+
+def test_trace_bridge_failure_updates_session_and_emits_event(tmp_path):
+    srv = _import_server()
+
+    queue: asyncio.Queue = asyncio.Queue()
+    session = srv.ManagedSession(
+        id="ses_bridge_fail",
+        config=SessionConfig(workspace=tmp_path, memory_backend="engram"),
+        components=SimpleNamespace(
+            engram_memory=SimpleNamespace(),
+            trace_path=tmp_path / "trace.jsonl",
+        ),
+        queue=queue,
+        task="bridge fail",
+    )
+
+    with (
+        patch("harness.server.trace_to_engram_enabled", return_value=True),
+        patch("harness.trace_bridge.run_trace_bridge", side_effect=RuntimeError("boom")),
+    ):
+        srv._maybe_run_trace_bridge(session)
+
+    assert session.bridge_status == "error"
+    assert "RuntimeError: boom" == session.bridge_error
+    event = queue.get_nowait()
+    assert event.event == "persistence_error"
 
 
 def test_engram_session_metadata_links_active_plan(tmp_path):

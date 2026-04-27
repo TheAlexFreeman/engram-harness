@@ -3,6 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+CAP_READ_REPO = "read_repo"
+CAP_WRITE_REPO = "write_repo"
+CAP_SHELL = "shell"
+CAP_NETWORK = "network"
+CAP_GIT_READ = "git_read"
+CAP_GIT_MUTATE = "git_mutate"
+CAP_MEMORY_READ = "memory_read"
+CAP_MEMORY_WRITE = "memory_write"
+CAP_WORK_READ = "work_read"
+CAP_WORK_WRITE = "work_write"
+CAP_SUBAGENT = "subagent"
+
 
 @dataclass
 class ToolCall:
@@ -29,6 +41,9 @@ class Tool(Protocol):
     name: str
     description: str
     input_schema: dict
+    mutates: bool
+    capabilities: frozenset[str]
+    untrusted_output: bool
 
     def run(self, args: dict) -> str: ...
 
@@ -51,6 +66,11 @@ _UNTRUSTED_SUFFIX = "\n</untrusted_tool_output>"
 
 def _is_untrusted(tool: Tool | None) -> bool:
     return bool(getattr(tool, "untrusted_output", False))
+
+
+def tool_mutates(tool: Tool | None) -> bool:
+    """Return whether a tool may mutate local state."""
+    return bool(getattr(tool, "mutates", False))
 
 
 def _escape_untrusted_body(content: str) -> str:

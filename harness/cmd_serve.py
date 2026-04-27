@@ -22,6 +22,12 @@ def main() -> None:
         default=None,
         help="Directory to scan for JSONL trace files to backfill into the database.",
     )
+    parser.epilog = (
+        "Security: set HARNESS_API_TOKEN to require Authorization: Bearer <token> "
+        "on all non-health endpoints. Binding to a non-loopback host also requires "
+        "HARNESS_WORKSPACE_ROOT. API sessions default to --tool-profile no_shell; "
+        "set HARNESS_SERVER_ALLOW_FULL_TOOLS=1 to permit full shell-capable sessions."
+    )
     args = parser.parse_args(sys.argv[2:])
 
     db_env = os.getenv("HARNESS_DB_PATH")

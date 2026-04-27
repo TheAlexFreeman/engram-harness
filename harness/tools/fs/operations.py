@@ -3,6 +3,8 @@ from __future__ import annotations
 import shutil
 from datetime import datetime, timezone
 
+from harness.tools import CAP_READ_REPO, CAP_WRITE_REPO
+
 from .scope import (
     MAX_GLOB_RESULTS,
     MAX_LIST_ENTRIES,
@@ -50,6 +52,9 @@ def _internal_workspace_hint(scope: WorkspaceScope, raw_path: str) -> str | None
 
 class ReadFile:
     name = "read_file"
+    mutates = False
+    capabilities = frozenset({CAP_READ_REPO})
+    untrusted_output = True
     description = (
         "Read a text file at a path relative to the workspace (UTF-8 by default). "
         "When Engram memory is mounted, also accepts memory aliases like "
@@ -170,6 +175,8 @@ class ReadFile:
 
 class ListFiles:
     name = "list_files"
+    mutates = False
+    capabilities = frozenset({CAP_READ_REPO})
     description = (
         "List files and directories at a path relative to the workspace (non-recursive). "
         "When Engram memory is mounted, accepts memory aliases like 'memory:/knowledge' "
@@ -214,6 +221,8 @@ class ListFiles:
 
 class PathStat:
     name = "path_stat"
+    mutates = False
+    capabilities = frozenset({CAP_READ_REPO})
     description = (
         "Return metadata for a path under the workspace or mounted memory root: size, "
         "type flags, mtime (UTC ISO), and permission bits (octal, platform-specific). "
@@ -257,6 +266,8 @@ class PathStat:
 
 class GlobFiles:
     name = "glob_files"
+    mutates = False
+    capabilities = frozenset({CAP_READ_REPO})
     description = (
         "List files matching a glob pattern under a workspace-relative directory. "
         "When Engram memory is mounted, root may be a memory alias and patterns that "
@@ -341,6 +352,8 @@ class GlobFiles:
 
 class Mkdir:
     name = "mkdir"
+    mutates = True
+    capabilities = frozenset({CAP_WRITE_REPO})
     description = (
         "Create a directory at a path relative to the workspace. "
         "Creates parent directories as needed. Succeeds if the directory already exists."
@@ -364,6 +377,8 @@ class Mkdir:
 
 class EditFile:
     name = "edit_file"
+    mutates = True
+    capabilities = frozenset({CAP_READ_REPO, CAP_WRITE_REPO})
     description = (
         "Edit a text file by replacing `old_str` with `new_str` (UTF-8). "
         "If the file does not exist AND `old_str` is empty, the file is created with `new_str`. "
@@ -413,6 +428,8 @@ class EditFile:
 
 class WriteFile:
     name = "write_file"
+    mutates = True
+    capabilities = frozenset({CAP_WRITE_REPO})
     description = (
         "Write full file contents (UTF-8). Use for intentional whole-file replace or new files; "
         "prefer edit_file for small surgical edits. Set create_only to forbid overwriting an "
@@ -455,6 +472,8 @@ class WriteFile:
 
 class AppendFile:
     name = "append_file"
+    mutates = True
+    capabilities = frozenset({CAP_WRITE_REPO})
     description = (
         "Append UTF-8 text to a file. Use for long generated documents that "
         "should be written in chunks instead of one huge write_file call. "
@@ -490,6 +509,8 @@ class AppendFile:
 
 class DeletePath:
     name = "delete_path"
+    mutates = True
+    capabilities = frozenset({CAP_WRITE_REPO})
     description = (
         "Delete a file or directory under the workspace. confirm must be true. "
         "For non-empty directories set recursive true (uses rm -rf semantics)."
@@ -532,6 +553,8 @@ class DeletePath:
 
 class MovePath:
     name = "move_path"
+    mutates = True
+    capabilities = frozenset({CAP_WRITE_REPO})
     description = (
         "Move or rename a path within the workspace. confirm must be true. "
         "Parent directories of the destination are created as needed."
@@ -566,6 +589,8 @@ class MovePath:
 
 class CopyPath:
     name = "copy_path"
+    mutates = True
+    capabilities = frozenset({CAP_READ_REPO, CAP_WRITE_REPO})
     description = (
         "Copy a file or directory under the workspace. For directories, set recursive true "
         "(merges into existing destination directories when supported)."

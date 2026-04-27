@@ -103,6 +103,21 @@ def test_complete_session_persists_engram_and_plan_link(store):
     assert fetched.active_plan_id == "token-refresh"
 
 
+def test_complete_session_persists_bridge_status(store):
+    rec = _make_record()
+    store.insert_session(rec)
+    store.complete_session(
+        "ses_001",
+        status="completed",
+        ended_at="2026-04-21T00:05:00.000",
+        bridge_status="error",
+        bridge_error="RuntimeError: boom",
+    )
+    fetched = store.get_session("ses_001")
+    assert fetched.bridge_status == "error"
+    assert fetched.bridge_error == "RuntimeError: boom"
+
+
 def test_init_schema_adds_columns_to_existing_db(tmp_path):
     """ALTER TABLE migration brings older DBs forward.
 
@@ -152,6 +167,8 @@ def test_init_schema_adds_columns_to_existing_db(tmp_path):
     # Open via SessionStore — _ensure_additive_columns should add the new ones.
     store = SessionStore(db_path)
     cols = {row["name"] for row in store._conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    assert "bridge_status" in cols
+    assert "bridge_error" in cols
     assert "active_plan_project" in cols
     assert "active_plan_id" in cols
     # Writes through the high-level API land.

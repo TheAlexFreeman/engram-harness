@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from harness.tools import CAP_SHELL
+
 from .fs import WorkspaceScope
 
 _DEFAULT_TIMEOUT = 120
@@ -64,6 +66,9 @@ def _resolve_bash_executable() -> str:
 
 class Bash:
     name = "bash"
+    mutates = True
+    capabilities = frozenset({CAP_SHELL})
+    untrusted_output = True
     description = (
         "Run a shell command with bash (`bash -lc`). "
         "On Windows, Git for Windows bash is preferred over PATH so a broken WSL `bash` shim is not used; "

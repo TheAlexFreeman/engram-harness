@@ -429,6 +429,7 @@ def test_build_previous_session_provider_returns_callable(tmp_path, monkeypatch)
     config = SessionConfig(workspace=tmp_path)
     provider = _build_previous_session_provider(config)
     assert callable(provider)
+    assert callable(getattr(provider, "close", None))
     rec = provider()
     assert rec is not None
     assert rec.session_id == "ses_prev"
@@ -477,3 +478,23 @@ def test_build_previous_session_provider_swallows_db_errors(tmp_path, monkeypatc
     # SessionStore raises on open of a non-DB file; the helper must
     # absorb it so config building doesn't blow up.
     assert _build_previous_session_provider(config) is None
+
+
+def test_tool_registry_preserves_profile_membership(tmp_path):
+    from harness.tool_registry import build_tools
+    from harness.tools import CAP_SHELL, CAP_WRITE_REPO
+    from harness.tools.fs import WorkspaceScope
+
+    scope = WorkspaceScope(tmp_path)
+    read_only = build_tools(scope, profile=ToolProfile.READ_ONLY)
+    no_shell = build_tools(scope, profile=ToolProfile.NO_SHELL)
+    full = build_tools(scope, profile=ToolProfile.FULL)
+
+    assert "bash" not in read_only
+    assert "write_file" not in read_only
+    assert "spawn_subagent" not in read_only
+    assert "write_file" in no_shell
+    assert "bash" not in no_shell
+    assert "bash" in full
+    assert CAP_WRITE_REPO in full["write_file"].capabilities
+    assert CAP_SHELL in full["bash"].capabilities

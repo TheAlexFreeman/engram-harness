@@ -47,6 +47,8 @@ class SessionConfig:
     max_turns: int = 100
     max_parallel_tools: int = 4
     max_output_tokens: int = 4096
+    max_cost_usd: float | None = None
+    max_tool_calls: int | None = None
     repeat_guard_threshold: int = 3
     # Hard-stop streak length; None disables loop termination (only the soft
     # nudge fires). When set, the run aborts with stopped_by_loop_detection
@@ -133,6 +135,7 @@ def _build_previous_session_provider(config: SessionConfig) -> Any | None:
         except Exception:  # noqa: BLE001
             return None
 
+    provider.close = store.close  # type: ignore[attr-defined]
     return provider
 
 
@@ -193,6 +196,8 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         max_turns=args.max_turns,
         max_parallel_tools=args.max_parallel_tools,
         max_output_tokens=getattr(args, "max_output_tokens", 4096),
+        max_cost_usd=getattr(args, "max_cost_usd", None),
+        max_tool_calls=getattr(args, "max_tool_calls", None),
         repeat_guard_threshold=args.repeat_guard_threshold,
         repeat_guard_terminate_at=getattr(args, "repeat_guard_terminate_at", None),
         repeat_guard_exempt_tools=list(getattr(args, "repeat_guard_exempt", None) or []),
@@ -521,6 +526,8 @@ def build_session(
         parent_tracer=tracer,
         pricing_loader=load_pricing,
         stream_sink=stream_sink,
+        max_cost_usd=config.max_cost_usd,
+        max_tool_calls=config.max_tool_calls,
     )
 
     return SessionComponents(
@@ -542,6 +549,8 @@ def _wire_subagent_spawn(
     parent_tracer: Any,
     pricing_loader: Any,
     stream_sink: Any | None = None,
+    max_cost_usd: float | None = None,
+    max_tool_calls: int | None = None,
 ) -> None:
     """Late-bind the spawn callback on any ``SpawnSubagent`` tool in ``tools``.
 
@@ -595,6 +604,8 @@ def _wire_subagent_spawn(
             pricing=pricing_loader(),
             max_parallel_tools=1,
             stream_sink=stream_sink,
+            max_cost_usd=max_cost_usd,
+            max_tool_calls=max_tool_calls,
         )
         # Best-effort visibility on the parent's trace.
         try:

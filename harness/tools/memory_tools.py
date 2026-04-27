@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from harness.tools import CAP_MEMORY_READ, CAP_MEMORY_WRITE
+
 if TYPE_CHECKING:
     from harness.engram_memory import EngramMemory
 
@@ -105,6 +107,8 @@ class MemoryRecall:
 
     name = "memory_recall"
     mutates = False
+    capabilities = frozenset({CAP_MEMORY_READ})
+    untrusted_output = True
     description = (
         "Search the long-term Engram memory store and return relevant excerpts. "
         "Use this for: prior session summaries, captured user preferences, project "
@@ -197,6 +201,7 @@ class MemoryRemember:
 
     name = "memory_remember"
     mutates = True
+    capabilities = frozenset({CAP_MEMORY_WRITE})
     description = (
         "Buffer a durable record that will be committed to the session's activity "
         "log at end-of-session. Good for capturing decisions, observations, or "
@@ -252,6 +257,8 @@ class MemoryReview:
 
     name = "memory_review"
     mutates = False
+    capabilities = frozenset({CAP_MEMORY_READ})
+    untrusted_output = True
     description = (
         "Read a specific memory file by path when you already know what you want. "
         "No search overhead — direct file access. Path is relative to the memory "
@@ -309,6 +316,8 @@ class MemoryContext:
 
     name = "memory_context"
     mutates = False
+    capabilities = frozenset({CAP_MEMORY_READ})
+    untrusted_output = True
     description = (
         "Declarative context loading. State what context you need and the system "
         "returns the best-matching files, respecting token budget. Supported "
@@ -560,6 +569,7 @@ class MemoryTrace:
 
     name = "memory_trace"
     mutates = True
+    capabilities = frozenset({CAP_MEMORY_WRITE})
     description = (
         "Self-annotate the current session's trace with a structured event. "
         "These annotations enrich the post-session reflection and give the "

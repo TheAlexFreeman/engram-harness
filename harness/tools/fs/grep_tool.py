@@ -8,6 +8,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from harness.tools import CAP_READ_REPO
+
 from .scope import (
     MAX_GREP_BYTES_PER_FILE,
     MAX_GREP_FILES_SCANNED,
@@ -18,6 +20,9 @@ from .scope import (
 
 class GrepWorkspace:
     name = "grep_workspace"
+    mutates = False
+    capabilities = frozenset({CAP_READ_REPO})
+    untrusted_output = True
     description = (
         "Search file contents under the workspace with a regular expression (multiline). "
         "Uses ripgrep (rg) when available for speed and .gitignore awareness; otherwise "

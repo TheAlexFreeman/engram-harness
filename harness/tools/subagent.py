@@ -34,6 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from harness.tools import CAP_SUBAGENT
 from harness.usage import Usage
 
 # Tools enabled by default for sub-agents. Read-only by design — the
@@ -113,6 +114,8 @@ class NullTraceSink:
 
 class SpawnSubagent:
     name = "spawn_subagent"
+    mutates = False
+    capabilities = frozenset({CAP_SUBAGENT})
     description = (
         "Spawn an isolated sub-agent to handle a focused sub-task in a fresh conversation. "
         "The sub-agent runs with a restricted (read-only by default) tool set and returns "

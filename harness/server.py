@@ -11,6 +11,7 @@ Run: uvicorn harness.server:app --host 127.0.0.1 --port 8420
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
 import queue as stdlib_queue
 import threading
@@ -28,7 +29,13 @@ from harness.config import (
     build_session,
     trace_to_engram_enabled,
 )
-from harness.loop import RunResult, run, run_until_idle
+from harness.loop import (
+    RunResult,
+    run,
+    run_until_idle,
+    session_remaining_cost_usd,
+    session_remaining_tool_calls,
+)
 from harness.server_models import (
     CreateSessionRequest,
     CreateSessionResponse,
@@ -58,8 +65,9 @@ load_dotenv()
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, Request
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
     from sse_starlette.sse import EventSourceResponse
 except ImportError as _e:
     raise ImportError(
@@ -114,6 +122,8 @@ class ManagedSession:
     final_text: str | None = None
     loop: asyncio.AbstractEventLoop | None = None
     sse_drop_count: int = 0
+    bridge_status: str = "skipped"
+    bridge_error: str | None = None
 
 
 # Session eviction: remove terminal sessions older than this from memory.
@@ -127,6 +137,11 @@ _CORS_ORIGINS: list[str] = [
     ).split(",")
     if o.strip()
 ]
+
+_API_TOKEN = os.environ.get("HARNESS_API_TOKEN", "").strip()
+_ALLOW_UNAUTH_LOCAL = os.environ.get("HARNESS_ALLOW_UNAUTH_LOCAL") == "1"
+_ALLOW_FULL_TOOLS = os.environ.get("HARNESS_SERVER_ALLOW_FULL_TOOLS") == "1"
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 # Workspace validation: optional root boundary from env.
 _WORKSPACE_ROOT: Path | None = (
@@ -210,6 +225,34 @@ _store: SessionStore | None = None
 _store_lock = threading.Lock()
 
 
+def _is_loopback_host(host: str) -> bool:
+    return host.strip().lower() in _LOOPBACK_HOSTS
+
+
+def _require_server_auth_for_host(host: str) -> None:
+    if _is_loopback_host(host):
+        return
+    if _WORKSPACE_ROOT is None:
+        raise RuntimeError(
+            "HARNESS_WORKSPACE_ROOT must be set when serving on a non-loopback host."
+        )
+    if not _API_TOKEN and not _ALLOW_UNAUTH_LOCAL:
+        raise RuntimeError(
+            "HARNESS_API_TOKEN must be set when serving on a non-loopback host "
+            "(or set HARNESS_ALLOW_UNAUTH_LOCAL=1 for an explicit local-only override)."
+        )
+
+
+def _request_is_authorized(request: Request) -> bool:
+    if not _API_TOKEN:
+        return True
+    header = request.headers.get("authorization", "")
+    scheme, _, value = header.partition(" ")
+    if scheme.lower() != "bearer" or not value:
+        return False
+    return hmac.compare_digest(value, _API_TOKEN)
+
+
 def _get_store() -> SessionStore | None:
     return _store
 
@@ -263,6 +306,8 @@ def _run_session(session: ManagedSession) -> None:
             error_recall_threshold=session.config.error_recall_threshold,
             stop_event=session.stop_event,
             skip_end_session_commit=_bridge_enabled(session),
+            max_cost_usd=getattr(session.config, "max_cost_usd", None),
+            max_tool_calls=getattr(session.config, "max_tool_calls", None),
         )
         session.result = result
         session.final_text = result.final_text
@@ -293,6 +338,9 @@ def _run_session(session: ManagedSession) -> None:
         _maybe_run_trace_bridge(session)
         session.components.tracer.close()
         _store_complete_session(session)
+        close_memory = getattr(session.components.engram_memory, "close", None)
+        if close_memory is not None:
+            close_memory()
 
 
 def _run_interactive_session(session: ManagedSession) -> None:
@@ -309,24 +357,49 @@ def _run_interactive_session(session: ManagedSession) -> None:
         session.messages = mode.initial_messages(task=session.task, prior=prior, tools=tools)
         tracer.event("session_start", task=session.task)
 
-        result = run_until_idle(
-            session.messages,
-            mode,
-            tools,
-            memory,
-            tracer,
-            max_turns=config.max_turns,
-            max_parallel_tools=config.max_parallel_tools,
-            stream_sink=stream_sink,
-            repeat_guard_threshold=config.repeat_guard_threshold,
-            repeat_guard_terminate_at=config.repeat_guard_terminate_at,
-            repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
-            tool_pattern_guard_threshold=config.tool_pattern_guard_threshold,
-            tool_pattern_guard_terminate_at=config.tool_pattern_guard_terminate_at,
-            tool_pattern_guard_window=config.tool_pattern_guard_window,
-            error_recall_threshold=config.error_recall_threshold,
-            stop_event=session.stop_event,
-        )
+        cap_cost = getattr(config, "max_cost_usd", None)
+        cap_tools = getattr(config, "max_tool_calls", None)
+        session_cost_usd = 0.0
+        session_tool_calls = 0
+
+        def _interactive_idle_result() -> RunResult:
+            rem_c = session_remaining_cost_usd(cap_cost, session_cost_usd)
+            rem_t = session_remaining_tool_calls(cap_tools, session_tool_calls)
+            if rem_c is not None and rem_c <= 0:
+                return RunResult(
+                    final_text=(
+                        f"(budget exceeded: session cost limit ${float(cap_cost):.4f} reached)"
+                    ),
+                    usage=Usage.zero(),
+                    turns_used=0,
+                    stopped_by_budget=True,
+                    budget_reason="max_cost_usd",
+                    tool_calls_used=0,
+                )
+            return run_until_idle(
+                session.messages,
+                mode,
+                tools,
+                memory,
+                tracer,
+                max_turns=config.max_turns,
+                max_parallel_tools=config.max_parallel_tools,
+                stream_sink=stream_sink,
+                repeat_guard_threshold=config.repeat_guard_threshold,
+                repeat_guard_terminate_at=config.repeat_guard_terminate_at,
+                repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
+                tool_pattern_guard_threshold=config.tool_pattern_guard_threshold,
+                tool_pattern_guard_terminate_at=config.tool_pattern_guard_terminate_at,
+                tool_pattern_guard_window=config.tool_pattern_guard_window,
+                error_recall_threshold=config.error_recall_threshold,
+                stop_event=session.stop_event,
+                max_cost_usd=rem_c,
+                max_tool_calls=rem_t,
+            )
+
+        result = _interactive_idle_result()
+        session_cost_usd += result.usage.total_cost_usd
+        session_tool_calls += result.tool_calls_used
         session.usage = session.usage + result.usage
         session.turn_number += 1
         session.final_text = result.final_text
@@ -345,7 +418,7 @@ def _run_interactive_session(session: ManagedSession) -> None:
         IDLE_TIMEOUT = 3600.0
         idle_since = _monotonic()
 
-        while not session.stop_event.is_set():
+        while not session.stop_event.is_set() and not result.stopped_by_budget:
             try:
                 user_msg = session.input_queue.get(timeout=1.0)
                 idle_since = _monotonic()
@@ -358,24 +431,9 @@ def _run_interactive_session(session: ManagedSession) -> None:
             tracer.event("interactive_turn", chars=len(user_msg))
             session.messages.append({"role": "user", "content": user_msg})
 
-            result = run_until_idle(
-                session.messages,
-                mode,
-                tools,
-                memory,
-                tracer,
-                max_turns=config.max_turns,
-                max_parallel_tools=config.max_parallel_tools,
-                stream_sink=stream_sink,
-                repeat_guard_threshold=config.repeat_guard_threshold,
-                repeat_guard_terminate_at=config.repeat_guard_terminate_at,
-                repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
-                tool_pattern_guard_threshold=config.tool_pattern_guard_threshold,
-                tool_pattern_guard_terminate_at=config.tool_pattern_guard_terminate_at,
-                tool_pattern_guard_window=config.tool_pattern_guard_window,
-                error_recall_threshold=config.error_recall_threshold,
-                stop_event=session.stop_event,
-            )
+            result = _interactive_idle_result()
+            session_cost_usd += result.usage.total_cost_usd
+            session_tool_calls += result.tool_calls_used
             session.usage = session.usage + result.usage
             session.turn_number += 1
             session.final_text = result.final_text
@@ -431,6 +489,9 @@ def _run_interactive_session(session: ManagedSession) -> None:
         _maybe_run_trace_bridge(session)
         tracer.close()
         _store_complete_session(session)
+        close_memory = getattr(session.components.engram_memory, "close", None)
+        if close_memory is not None:
+            close_memory()
 
 
 def _store_complete_session(session: ManagedSession) -> None:
@@ -449,6 +510,8 @@ def _store_complete_session(session: ManagedSession) -> None:
         final_text=session.final_text,
         max_turns_reached=(session.result.max_turns_reached if session.result else False),
         engram_memory=getattr(session.components, "engram_memory", None),
+        bridge_status=session.bridge_status,
+        bridge_error=session.bridge_error,
     )
 
 
@@ -466,6 +529,7 @@ def _bridge_enabled(session: ManagedSession) -> bool:
 
 def _maybe_run_trace_bridge(session: ManagedSession) -> None:
     if not (_bridge_enabled(session) and session.components.engram_memory is not None):
+        session.bridge_status = "skipped"
         return
     try:
         from harness.trace_bridge import run_trace_bridge
@@ -475,8 +539,20 @@ def _maybe_run_trace_bridge(session: ManagedSession) -> None:
             session.components.engram_memory,
             model=session.config.model,
         )
-    except Exception:
-        pass
+        session.bridge_status = "ok"
+        session.bridge_error = None
+    except Exception as exc:  # noqa: BLE001
+        session.bridge_status = "error"
+        session.bridge_error = f"{type(exc).__name__}: {exc}"
+        _emit(
+            session,
+            SSEEvent(
+                channel="control",
+                event="persistence_error",
+                data={"bridge_status": session.bridge_status, "bridge_error": session.bridge_error},
+                ts=_now(),
+            ),
+        )
 
 
 def _monotonic() -> float:
@@ -584,6 +660,17 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def _auth_middleware(request: Request, call_next):
+    if request.url.path != "/health" and not _request_is_authorized(request):
+        return JSONResponse(
+            {"detail": "Missing or invalid bearer token"},
+            status_code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await call_next(request)
+
+
 @app.get("/health")
 async def health() -> dict:
     with _sessions_lock:
@@ -674,14 +761,22 @@ def _list_in_memory_sessions(
 
 @app.post("/sessions", response_model=CreateSessionResponse)
 async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
-    from harness.cli import build_tools
     from harness.config import ToolProfile
+    from harness.tool_registry import build_tools
     from harness.tools.fs import WorkspaceScope
 
     session_id = f"ses_{uuid.uuid4().hex[:8]}"
     workspace = _validate_workspace(req.workspace)
     memory_repo = _validate_memory_repo(req.memory_repo) if req.memory_repo else None
     tool_profile = ToolProfile(req.tool_profile)
+    if tool_profile == ToolProfile.FULL and not _ALLOW_FULL_TOOLS:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "tool_profile='full' is disabled for the API server. "
+                "Set HARNESS_SERVER_ALLOW_FULL_TOOLS=1 to opt in."
+            ),
+        )
     config = SessionConfig(
         workspace=workspace,
         model=req.model,
@@ -690,6 +785,8 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         memory_repo=memory_repo,
         max_turns=req.max_turns,
         max_parallel_tools=req.max_parallel_tools,
+        max_cost_usd=req.max_cost_usd,
+        max_tool_calls=req.max_tool_calls,
         repeat_guard_threshold=req.repeat_guard_threshold,
         tool_pattern_guard_threshold=req.tool_pattern_guard_threshold,
         tool_pattern_guard_terminate_at=req.tool_pattern_guard_terminate_at,
@@ -925,6 +1022,7 @@ def serve(
     trace_dir: Path | None = None,
 ) -> None:
     """Start the harness HTTP API server."""
+    _require_server_auth_for_host(host)
     try:
         import uvicorn
     except ImportError:

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from harness.tools import CAP_READ_REPO
+
 
 class ToolHelp:
     name = "tool_help"
     mutates = False
+    capabilities = frozenset({CAP_READ_REPO})
     description = (
         "Return a compact routing guide for choosing between repo filesystem, "
         "internal workspace, and Engram memory tools."

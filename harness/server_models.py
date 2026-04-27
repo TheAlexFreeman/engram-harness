@@ -16,6 +16,8 @@ class CreateSessionRequest(BaseModel):
     memory_repo: str | None = None
     max_turns: int = Field(default=100, ge=1, le=1000)
     max_parallel_tools: int = Field(default=4, ge=1, le=32)
+    max_cost_usd: float | None = Field(default=None, ge=0)
+    max_tool_calls: int | None = Field(default=None, ge=0, le=10000)
     repeat_guard_threshold: int = Field(default=3, ge=0, le=100)
     tool_pattern_guard_threshold: int = Field(default=5, ge=0, le=100)
     tool_pattern_guard_terminate_at: int | None = Field(default=None, ge=1, le=100)
@@ -25,7 +27,7 @@ class CreateSessionRequest(BaseModel):
     trace_live: bool = False  # off by default in API mode (no stderr)
     trace_to_engram: bool | None = None
     interactive: bool = False
-    tool_profile: Literal["full", "no_shell", "read_only"] = "full"
+    tool_profile: Literal["full", "no_shell", "read_only"] = "no_shell"
 
 
 class CreateSessionResponse(BaseModel):

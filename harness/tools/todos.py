@@ -9,6 +9,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from harness.tools import CAP_READ_REPO, CAP_WRITE_REPO
+
 from .fs import WorkspaceScope
 
 _TODO_STATUSES = frozenset({"pending", "in_progress", "completed", "cancelled"})
@@ -137,6 +139,8 @@ def _relative_display(args: dict) -> str:
 
 class WriteTodos:
     name = "write_todos"
+    mutates = True
+    capabilities = frozenset({CAP_WRITE_REPO})
     description = (
         "Replace the entire todo list in the workspace (default file: todos.json). "
         "This overwrites previous todos; use update_todo for single-item status or content changes. "
@@ -184,6 +188,9 @@ class WriteTodos:
 
 class ReadTodos:
     name = "read_todos"
+    mutates = False
+    capabilities = frozenset({CAP_READ_REPO})
+    untrusted_output = True
     description = (
         "List todos from the workspace JSON file (default todos.json). "
         "Optional status filter. Paths are workspace-relative."
@@ -228,6 +235,8 @@ class ReadTodos:
 
 class UpdateTodo:
     name = "update_todo"
+    mutates = True
+    capabilities = frozenset({CAP_READ_REPO, CAP_WRITE_REPO})
     description = (
         "Update one todo by id (status and/or content) without replacing the whole list. "
         f"Default file todos.json; statuses: {', '.join(sorted(_TODO_STATUSES))}."
@@ -296,6 +305,8 @@ class UpdateTodo:
 
 class AnalyzeTodos:
     name = "analyze_todos"
+    mutates = False
+    capabilities = frozenset({CAP_READ_REPO})
     description = (
         "Summarize todos (counts by status, ids for pending/in_progress) without printing full bodies. "
         f"Default file {_DEFAULT_FILE}."

@@ -4,6 +4,8 @@ import shutil
 import subprocess
 from typing import Any
 
+from harness.tools import CAP_GIT_MUTATE, CAP_GIT_READ
+
 from .fs import WorkspaceScope
 
 _MAX_OUTPUT_CHARS = 80_000
@@ -100,6 +102,9 @@ def _validate_rev_range(rev: str) -> str:
 
 class GitStatus:
     name = "git_status"
+    mutates = False
+    capabilities = frozenset({CAP_GIT_READ})
+    untrusted_output = True
     description = (
         "Show git working-tree status using `git status --short --branch`. "
         "Optional `path` scopes the listing to a subdirectory (relative to the workspace)."
@@ -128,6 +133,9 @@ class GitStatus:
 
 class GitDiff:
     name = "git_diff"
+    mutates = False
+    capabilities = frozenset({CAP_GIT_READ})
+    untrusted_output = True
     description = (
         "Show a git diff. Defaults to the unstaged working-tree diff. "
         "Set `staged=true` for the index diff (`--cached`), pass `rev_range` "
@@ -182,6 +190,9 @@ class GitDiff:
 
 class GitLog:
     name = "git_log"
+    mutates = False
+    capabilities = frozenset({CAP_GIT_READ})
+    untrusted_output = True
     description = (
         "Show git commit history. Defaults to a compact graph with decorations "
         "(`--oneline --decorate --graph`). Set `oneline=false` for full author/date bodies. "
@@ -232,6 +243,8 @@ class GitLog:
 
 class GitCommit:
     name = "git_commit"
+    mutates = True
+    capabilities = frozenset({CAP_GIT_MUTATE})
     description = (
         "Create a git commit. `message` is required and passed via argv (-m). "
         "Set `all=true` to stage tracked changes (`-a`), `allow_empty=true` for "
@@ -282,6 +295,9 @@ class GitCommit:
 
 class Git:
     name = "git"
+    mutates = True
+    capabilities = frozenset({CAP_GIT_READ, CAP_GIT_MUTATE})
+    untrusted_output = True
     description = (
         "Run an allowlisted git subcommand with arbitrary string arguments. "
         "Arguments are passed directly as argv (no shell), so quoting is not needed. "
