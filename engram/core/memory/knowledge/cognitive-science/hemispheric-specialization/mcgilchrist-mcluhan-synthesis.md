@@ -9,7 +9,7 @@ trust: medium
 
 # McGilchrist and McLuhan: Hemispheric Modes and Media as Extensions of Consciousness
 
-**Draft synthesis file for promotion to `memory/knowledge/cognitive-science/hemispheric-specialization/mcgilchrist-mcluhan-synthesis.md` or `literature/mcluhan-mcgilchrist-consciousness-media.md`.**
+**Synthesis connecting Iain McGilchrist's hemispheric theory of attention with Marshall McLuhan's media ecology. Promoted from working note in memetics-knowledge project.**
 
 ## Core Thesis
 
@@ -66,6 +66,11 @@ McLuhan's global village is the RH's world-disclosure scaled to the species: sim
 - Is the internet producing a new secondary orality (Ong) that is structurally RH-retrieving or a hyper-LH simulation of it?
 - Can engineered systems (like Engram) restore the "master" function at cultural scale, or are we condemned to emissary dominance?
 
-**Next steps**: Flesh out with direct quotes from *The Master and His Emissary*, *Understanding Media*, and *The Matter with Things*. Add table of tetrad applications to hemispheric dominance. Cross-reference heavily to existing bridges file and McLuhan file. Promote after review.
+**Related files**
+- `mcgilchrist-knowledge-base-bridges.md` (this directory) — the 10 explicit bridges this synthesis builds upon.
+- `mcluhan-and-media-theory.md` (in literature/) — primary source document on McLuhan.
+- `master-and-emissary.md`, `matter-with-things.md`, `mcgilchrist-intellectual-network.md`.
 
-**Status**: Draft for memetics-knowledge project. Aligns with active thread on LLM cognitive frames.
+**Cross-references added to SUMMARY.md files in both cognitive-science/hemispheric-specialization/ and literature/.**
+
+This file completes the third synthesis task in the recent cogsci/literature push (following consciousness files and the McGilchrist cluster itself).

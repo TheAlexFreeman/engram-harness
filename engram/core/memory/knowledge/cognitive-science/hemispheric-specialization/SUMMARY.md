@@ -32,6 +32,9 @@ A cluster of files on Iain McGilchrist's theory of hemispheric specialization, t
 7. **`mcgilchrist-knowledge-base-bridges.md`**
    Synthesis file: ten explicit bridges between McGilchrist's framework and existing knowledge-base files. LH/RH ↔ convergent/divergent (Vervaeke); Zuhandenheit/Vorhandenheit ↔ RH/LH (Heidegger); meaning crisis/disenchantment ↔ LH-dominance (Vervaeke); affordances/motor significance ↔ RH world-disclosure (Gibson, Merleau-Ponty); interoception/somatic markers ↔ RH emotional processing (Craig, Damasio); IIT Φ ↔ RH holism (Tononi); conceptual metaphor ↔ RH metaphorical knowing (Lakoff/Johnson); active inference ↔ RH generative model (Friston); enactivism ↔ RH mode of being (Varela); Umwelt ↔ RH world-for-the-organism (Uexküll). Synthesis table: 10 traditions, all converging on the same LH/RH distinction. Recommended epistemic stance.
 
+8. **`mcgilchrist-mcluhan-synthesis.md`**
+   New synthesis connecting McGilchrist's hemispheric modes of attention to McLuhan's media theory. Core claim: media technologies culturally amplify hemispheric biases (print as LH technology; electric media as RH-retrieving but often pathological). Maps "medium is the message," extension/amputation, global village, hot/cool, tetrad, and visual/acoustic space onto master/emissary, betweenness, and civilizational LH dominance. Includes implications for Engram's memory medium and LLM cognition. Strong overlaps with the bridges file and `mcluhan-and-media-theory.md`.
+
 ## Key Claims to Remember
 
 - The LH/RH distinction is about **modes of attention**, not function-ownership — both hemispheres process everything, but differently
