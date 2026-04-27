@@ -380,6 +380,35 @@ def test_run_eval_captures_exceptions_per_task() -> None:
     assert "RuntimeError" in o.run.exception
 
 
+def test_run_eval_captures_factory_exception_per_task() -> None:
+    """Factory failures (tools/mode/memory setup) should not abort the whole suite."""
+
+    task_ok = EvalTask(id="ok", task="x")
+    task_bad = EvalTask(id="bad", task="x")
+    n = 0
+
+    def mode_factory(tools):  # noqa: ARG001
+        return ScriptedMode([_ScriptedResponse(tool_calls=[], text="ok")])
+
+    def tools_factory(_workspace: Path) -> dict:  # noqa: ARG001
+        nonlocal n
+        n += 1
+        if n == 2:
+            raise ValueError("factory boom")
+        return {}
+
+    report = run_eval(
+        [task_ok, task_bad, task_ok],
+        mode_factory=mode_factory,
+        tools_factory=tools_factory,
+    )
+    assert report.task_count == 3
+    ex = [o.run.exception for o in report.outcomes]
+    assert ex[0] is None
+    assert ex[1] is not None and "ValueError" in ex[1]
+    assert ex[2] is None
+
+
 def test_run_eval_cleans_up_workspace_by_default() -> None:
     """When ``cleanup=True`` (default) the per-task workspace is removed."""
     created: list[Path] = []

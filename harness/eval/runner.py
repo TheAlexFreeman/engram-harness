@@ -240,12 +240,25 @@ def _run_one_task(
     max_turns_override: int | None,
 ) -> RunRecord:
     """Execute a single task, capturing telemetry needed for scoring."""
-    tools = tools_factory(workspace)
-    mode = mode_factory(tools)
-    memory: MemoryBackend = (
-        memory_factory(workspace) if memory_factory is not None else _NullEvalMemory()
-    )
     tracer = _CapturingTraceSink()
+    try:
+        tools = tools_factory(workspace)
+        mode = mode_factory(tools)
+        memory: MemoryBackend = (
+            memory_factory(workspace) if memory_factory is not None else _NullEvalMemory()
+        )
+    except Exception as exc:  # noqa: BLE001
+        return RunRecord(
+            task_id=task.id,
+            final_text="",
+            turns_used=0,
+            max_turns_reached=False,
+            stopped_by_loop_detection=False,
+            tool_calls=list(tracer.tool_calls),
+            usage=Usage.zero(),
+            exception=f"{type(exc).__name__}: {exc}",
+        )
+
     max_turns = max_turns_override if max_turns_override is not None else task.max_turns
 
     try:

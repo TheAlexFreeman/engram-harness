@@ -469,10 +469,7 @@ class WorkList:
         if len(entries) > _MAX_LIST_ENTRIES:
             head = entries[:_MAX_LIST_ENTRIES]
             extra = len(entries) - _MAX_LIST_ENTRIES
-            return (
-                "\n".join(head)
-                + f"\n\n[harness: {extra} more entries omitted; refine path]"
-            )
+            return "\n".join(head) + f"\n\n[harness: {extra} more entries omitted; refine path]"
         return "\n".join(entries)
 
 
@@ -551,7 +548,7 @@ class WorkSearch:
             lines.append(
                 f"{i}. [{hit['path']}] (score={hit['score']:.2f})\n"
                 f"   {snippet}…\n"
-                f"   Read with: work_read {{\"path\": \"{hit['path']}\"}}"
+                f'   Read with: work_read {{"path": "{hit["path"]}"}}'
             )
             lines.append("")
         return "\n".join(lines)
