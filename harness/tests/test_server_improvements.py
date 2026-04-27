@@ -60,7 +60,9 @@ def test_auth_middleware_protects_non_health(monkeypatch):
 
     assert client.get("/health").status_code == 200
     assert client.get("/sessions/stats").status_code == 401
-    assert client.get("/sessions/stats", headers={"Authorization": "Bearer secret"}).status_code == 200
+    assert (
+        client.get("/sessions/stats", headers={"Authorization": "Bearer secret"}).status_code == 200
+    )
 
 
 def test_full_tool_profile_rejected_without_opt_in(tmp_path, monkeypatch):

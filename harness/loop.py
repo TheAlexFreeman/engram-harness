@@ -517,8 +517,7 @@ def run_until_idle(
                 )
                 return RunResult(
                     final_text=(
-                        f"(budget exceeded: tool calls {next_total} "
-                        f"> limit {max_tool_calls})"
+                        f"(budget exceeded: tool calls {next_total} > limit {max_tool_calls})"
                     ),
                     usage=total,
                     turns_used=turn + 1,
