@@ -8,6 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from harness.cmd_drift import main as _drift_main
+from harness.cmd_eval import main as _eval_main
 from harness.cmd_recall_debug import main as _recall_debug_main
 from harness.cmd_serve import main as _serve_main
 from harness.cmd_status import (
@@ -453,6 +454,11 @@ def main() -> None:
             except (ValueError, OSError):
                 pass
 
+    # Load before subcommand dispatch so `serve` / `eval` / `recall-debug` see
+    # the same .env as the main harness path (ANTHROPIC_API_KEY, etc.).
+    load_dotenv()
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+
     if len(sys.argv) > 1 and sys.argv[1] == "serve":
         _serve_main()
         return
@@ -465,12 +471,13 @@ def main() -> None:
         _drift_main()
         return
 
+    if len(sys.argv) > 1 and sys.argv[1] == "eval":
+        _eval_main()
+        return
+
     if len(sys.argv) > 1 and sys.argv[1] == "recall-debug":
         _recall_debug_main()
         return
-
-    load_dotenv()
-    load_dotenv(Path(__file__).resolve().parent / ".env")
 
     args = _parse_args()
 

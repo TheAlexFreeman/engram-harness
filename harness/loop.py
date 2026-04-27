@@ -550,8 +550,7 @@ def run_until_idle(
             messages.append({"role": "user", "content": diagnostic.message})
 
         repeat_guard_active = tool_calls and (
-            repeat_guard_threshold > 0
-            or _positive_limit(repeat_guard_terminate_at)
+            repeat_guard_threshold > 0 or _positive_limit(repeat_guard_terminate_at)
         )
         if repeat_guard_active:
             batch_sig = _tool_batch_signature(tool_calls, results, exempt_tools=exempt_tools)

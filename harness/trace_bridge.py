@@ -588,11 +588,7 @@ def _render_summary(
         body_lines.append("## Harness diagnostics")
         body_lines.append("")
         for diag in stats.pattern_diagnostics:
-            action = (
-                "hard-stopped"
-                if diag["kind"] == "tool_pattern_loop_detected"
-                else "nudged"
-            )
+            action = "hard-stopped" if diag["kind"] == "tool_pattern_loop_detected" else "nudged"
             terminate = (
                 f", terminate_at={diag['terminate_at']}"
                 if diag.get("terminate_at") is not None

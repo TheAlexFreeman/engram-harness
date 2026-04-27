@@ -14,8 +14,7 @@ class ToolHelp:
             "topic": {
                 "type": "string",
                 "description": (
-                    "Optional focus area: workspace, memory, files, or all. "
-                    "Defaults to all."
+                    "Optional focus area: workspace, memory, files, or all. Defaults to all."
                 ),
             }
         },
