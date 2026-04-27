@@ -318,7 +318,12 @@ def test_run_interactive_session_persists_stopped_status(tmp_path):
         interactive=True,
     )
     session.stop_event.set()
-    result = SimpleNamespace(usage=Usage.zero(), final_text="stopped early")
+    result = SimpleNamespace(
+        usage=Usage.zero(),
+        final_text="stopped early",
+        stopped_by_budget=False,
+        tool_calls_used=0,
+    )
 
     with (
         patch("harness.server.run_until_idle", return_value=result),

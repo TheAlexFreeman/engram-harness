@@ -296,6 +296,55 @@ def test_tool_call_budget_stops_before_executing_batch():
     assert tool.seen == []
 
 
+def test_session_tool_calls_remaining_resets_for_second_invocation():
+    """Session cap must carry: second ``run_until_idle`` gets the leftover budget only."""
+    from harness.loop import run_until_idle, session_remaining_tool_calls
+
+    tool = MutatingRecorder()
+    tools: dict[str, Tool] = {"mutate": tool}
+    memory = RecordingMemory()
+    prior = memory.start_session("t")
+    m1 = ScriptedMode(
+        [
+            _ScriptedResponse(
+                tool_calls=[ToolCall(name="mutate", args={"tag": "a"}, id="c1")],
+            ),
+            _ScriptedResponse(tool_calls=[], text="done"),
+        ]
+    )
+    messages = m1.initial_messages("t", prior, tools)
+    r1 = run_until_idle(
+        messages,
+        m1,
+        tools,
+        memory,
+        NullTracer(),
+        max_parallel_tools=1,
+        max_tool_calls=session_remaining_tool_calls(1, 0),
+    )
+    assert r1.tool_calls_used == 1
+    m2 = ScriptedMode(
+        [
+            _ScriptedResponse(
+                tool_calls=[ToolCall(name="mutate", args={"tag": "b"}, id="c2")],
+            ),
+        ]
+    )
+    r2 = run_until_idle(
+        messages,
+        m2,
+        tools,
+        memory,
+        NullTracer(),
+        max_parallel_tools=1,
+        max_tool_calls=session_remaining_tool_calls(1, r1.tool_calls_used),
+    )
+    assert r2.stopped_by_budget is True
+    assert r2.budget_reason == "max_tool_calls"
+    assert r2.tool_calls_used == 0
+    assert "b" not in tool.seen
+
+
 def test_todos_save_is_thread_safe(tmp_path: Path):
     scope = WorkspaceScope(root=tmp_path)
     writer = WriteTodos(scope)

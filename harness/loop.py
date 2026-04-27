@@ -252,6 +252,28 @@ class RunResult:
     output_limit_reached: bool = False
     stopped_by_budget: bool = False
     budget_reason: str | None = None
+    # Harness tool calls executed in this ``run_until_idle`` invocation (for session budgets)
+    tool_calls_used: int = 0
+
+
+def session_remaining_cost_usd(cap: float | None, consumed_session_usd: float) -> float | None:
+    """Return remaining cost budget for a session, or None if uncapped.
+
+    When the cap is active (non-negative), the returned value is the maximum
+    allowed **new** spend in the next ``run_until_idle`` call so that
+    *session* spend stays at or below ``cap`` when the caller tracks
+    ``consumed_session_usd`` from prior invocations' ``RunResult.usage``.
+    """
+    if cap is None or cap < 0:
+        return None
+    return max(0.0, cap - consumed_session_usd)
+
+
+def session_remaining_tool_calls(cap: int | None, consumed_session_calls: int) -> int | None:
+    """Return remaining tool-call budget, or None if uncapped."""
+    if cap is None or cap < 0:
+        return None
+    return max(0, cap - consumed_session_calls)
 
 
 def _execute_tool_batch(
@@ -353,6 +375,7 @@ def run_until_idle(
                 turns_used=turn,
                 max_turns_reached=False,
                 stopped_by_user=True,
+                tool_calls_used=total_tool_calls,
             )
         response = mode.complete(messages, stream=stream_sink)
         tracer.event("model_response", turn=turn)
@@ -377,6 +400,7 @@ def run_until_idle(
                 turns_used=turn + 1,
                 stopped_by_budget=True,
                 budget_reason="max_cost_usd",
+                tool_calls_used=total_tool_calls,
             )
 
         messages.append(mode.as_assistant_message(response))
@@ -426,6 +450,7 @@ def run_until_idle(
                     usage=total,
                     turns_used=turn + 1,
                     max_turns_reached=False,
+                    tool_calls_used=total_tool_calls,
                 )
 
             for j, call in enumerate(tool_calls):
@@ -447,6 +472,7 @@ def run_until_idle(
                     usage=total,
                     turns_used=turn + 1,
                     max_turns_reached=False,
+                    tool_calls_used=total_tool_calls,
                 )
 
             for call in tool_calls:
@@ -479,6 +505,7 @@ def run_until_idle(
                     turns_used=turn + 1,
                     max_turns_reached=False,
                     output_limit_reached=True,
+                    tool_calls_used=total_tool_calls,
                 )
             if output_limit_continuations < _MAX_OUTPUT_LIMIT_CONTINUATIONS:
                 output_limit_continuations += 1
@@ -503,6 +530,7 @@ def run_until_idle(
                 turns_used=turn + 1,
                 max_turns_reached=False,
                 output_limit_reached=True,
+                tool_calls_used=total_tool_calls,
             )
 
         if max_tool_calls is not None and max_tool_calls >= 0:
@@ -523,6 +551,7 @@ def run_until_idle(
                     turns_used=turn + 1,
                     stopped_by_budget=True,
                     budget_reason="max_tool_calls",
+                    tool_calls_used=total_tool_calls,
                 )
         total_tool_calls += len(tool_calls)
         results = _execute_tool_batch(
@@ -606,6 +635,7 @@ def run_until_idle(
                     turns_used=turn + 1,
                     max_turns_reached=False,
                     stopped_by_loop_detection=True,
+                    tool_calls_used=total_tool_calls,
                 )
             tracer.event(
                 "tool_pattern_guard",
@@ -674,6 +704,7 @@ def run_until_idle(
                     turns_used=turn + 1,
                     max_turns_reached=False,
                     stopped_by_loop_detection=True,
+                    tool_calls_used=total_tool_calls,
                 )
 
             if (
@@ -710,6 +741,7 @@ def run_until_idle(
         usage=total,
         turns_used=max_turns,
         max_turns_reached=True,
+        tool_calls_used=total_tool_calls,
     )
 
 

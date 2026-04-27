@@ -29,7 +29,13 @@ from harness.config import (
     build_session,
     trace_to_engram_enabled,
 )
-from harness.loop import RunResult, run, run_until_idle
+from harness.loop import (
+    RunResult,
+    run,
+    run_until_idle,
+    session_remaining_cost_usd,
+    session_remaining_tool_calls,
+)
 from harness.server_models import (
     CreateSessionRequest,
     CreateSessionResponse,
@@ -351,26 +357,49 @@ def _run_interactive_session(session: ManagedSession) -> None:
         session.messages = mode.initial_messages(task=session.task, prior=prior, tools=tools)
         tracer.event("session_start", task=session.task)
 
-        result = run_until_idle(
-            session.messages,
-            mode,
-            tools,
-            memory,
-            tracer,
-            max_turns=config.max_turns,
-            max_parallel_tools=config.max_parallel_tools,
-            stream_sink=stream_sink,
-            repeat_guard_threshold=config.repeat_guard_threshold,
-            repeat_guard_terminate_at=config.repeat_guard_terminate_at,
-            repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
-            tool_pattern_guard_threshold=config.tool_pattern_guard_threshold,
-            tool_pattern_guard_terminate_at=config.tool_pattern_guard_terminate_at,
-            tool_pattern_guard_window=config.tool_pattern_guard_window,
-            error_recall_threshold=config.error_recall_threshold,
-            stop_event=session.stop_event,
-            max_cost_usd=getattr(config, "max_cost_usd", None),
-            max_tool_calls=getattr(config, "max_tool_calls", None),
-        )
+        cap_cost = getattr(config, "max_cost_usd", None)
+        cap_tools = getattr(config, "max_tool_calls", None)
+        session_cost_usd = 0.0
+        session_tool_calls = 0
+
+        def _interactive_idle_result() -> RunResult:
+            rem_c = session_remaining_cost_usd(cap_cost, session_cost_usd)
+            rem_t = session_remaining_tool_calls(cap_tools, session_tool_calls)
+            if rem_c is not None and rem_c <= 0:
+                return RunResult(
+                    final_text=(
+                        f"(budget exceeded: session cost limit ${float(cap_cost):.4f} reached)"
+                    ),
+                    usage=Usage.zero(),
+                    turns_used=0,
+                    stopped_by_budget=True,
+                    budget_reason="max_cost_usd",
+                    tool_calls_used=0,
+                )
+            return run_until_idle(
+                session.messages,
+                mode,
+                tools,
+                memory,
+                tracer,
+                max_turns=config.max_turns,
+                max_parallel_tools=config.max_parallel_tools,
+                stream_sink=stream_sink,
+                repeat_guard_threshold=config.repeat_guard_threshold,
+                repeat_guard_terminate_at=config.repeat_guard_terminate_at,
+                repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
+                tool_pattern_guard_threshold=config.tool_pattern_guard_threshold,
+                tool_pattern_guard_terminate_at=config.tool_pattern_guard_terminate_at,
+                tool_pattern_guard_window=config.tool_pattern_guard_window,
+                error_recall_threshold=config.error_recall_threshold,
+                stop_event=session.stop_event,
+                max_cost_usd=rem_c,
+                max_tool_calls=rem_t,
+            )
+
+        result = _interactive_idle_result()
+        session_cost_usd += result.usage.total_cost_usd
+        session_tool_calls += result.tool_calls_used
         session.usage = session.usage + result.usage
         session.turn_number += 1
         session.final_text = result.final_text
@@ -389,7 +418,7 @@ def _run_interactive_session(session: ManagedSession) -> None:
         IDLE_TIMEOUT = 3600.0
         idle_since = _monotonic()
 
-        while not session.stop_event.is_set():
+        while not session.stop_event.is_set() and not result.stopped_by_budget:
             try:
                 user_msg = session.input_queue.get(timeout=1.0)
                 idle_since = _monotonic()
@@ -402,26 +431,9 @@ def _run_interactive_session(session: ManagedSession) -> None:
             tracer.event("interactive_turn", chars=len(user_msg))
             session.messages.append({"role": "user", "content": user_msg})
 
-            result = run_until_idle(
-                session.messages,
-                mode,
-                tools,
-                memory,
-                tracer,
-                max_turns=config.max_turns,
-                max_parallel_tools=config.max_parallel_tools,
-                stream_sink=stream_sink,
-                repeat_guard_threshold=config.repeat_guard_threshold,
-                repeat_guard_terminate_at=config.repeat_guard_terminate_at,
-                repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
-                tool_pattern_guard_threshold=config.tool_pattern_guard_threshold,
-                tool_pattern_guard_terminate_at=config.tool_pattern_guard_terminate_at,
-                tool_pattern_guard_window=config.tool_pattern_guard_window,
-                error_recall_threshold=config.error_recall_threshold,
-                stop_event=session.stop_event,
-                max_cost_usd=getattr(config, "max_cost_usd", None),
-                max_tool_calls=getattr(config, "max_tool_calls", None),
-            )
+            result = _interactive_idle_result()
+            session_cost_usd += result.usage.total_cost_usd
+            session_tool_calls += result.tool_calls_used
             session.usage = session.usage + result.usage
             session.turn_number += 1
             session.final_text = result.final_text

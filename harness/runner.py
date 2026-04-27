@@ -4,7 +4,14 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from harness.loop import maybe_run_reflection, run, run_until_idle
+from harness.loop import (
+    RunResult,
+    maybe_run_reflection,
+    run,
+    run_until_idle,
+    session_remaining_cost_usd,
+    session_remaining_tool_calls,
+)
 from harness.usage import Usage
 
 if TYPE_CHECKING:
@@ -43,29 +50,51 @@ def _run_subtask(
     messages: list[dict],
     components: "SessionComponents",
     tracer,
+    *,
+    session_cost_usd: float = 0.0,
+    session_tool_calls: int = 0,
 ):
-    """Run one interactive sub-task and emit sub_session_start/end markers."""
+    """Run one interactive sub-task and emit sub_session_start/end markers.
+
+    ``session_cost_usd`` / ``session_tool_calls`` are cumulative from prior
+    subtasks so per-session ``max_cost_usd`` / ``max_tool_calls`` caps apply
+    across the whole REPL, not per line.
+    """
     config = components.config
+    cap_cost = getattr(config, "max_cost_usd", None)
+    cap_tools = getattr(config, "max_tool_calls", None)
+    rem_cost = session_remaining_cost_usd(cap_cost, session_cost_usd)
+    rem_tools = session_remaining_tool_calls(cap_tools, session_tool_calls)
     tracer.event("sub_session_start", input=input_text, subtask_idx=subtask_idx)
-    r = run_until_idle(
-        messages,
-        components.mode,
-        components.tools,
-        components.memory,
-        tracer,
-        max_turns=config.max_turns,
-        max_parallel_tools=config.max_parallel_tools,
-        stream_sink=components.stream_sink,
-        repeat_guard_threshold=config.repeat_guard_threshold,
-        repeat_guard_terminate_at=config.repeat_guard_terminate_at,
-        repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
-        tool_pattern_guard_threshold=config.tool_pattern_guard_threshold,
-        tool_pattern_guard_terminate_at=config.tool_pattern_guard_terminate_at,
-        tool_pattern_guard_window=config.tool_pattern_guard_window,
-        error_recall_threshold=config.error_recall_threshold,
-        max_cost_usd=getattr(config, "max_cost_usd", None),
-        max_tool_calls=getattr(config, "max_tool_calls", None),
-    )
+    if rem_cost is not None and rem_cost <= 0:
+        r = RunResult(
+            final_text=(f"(budget exceeded: session cost limit ${float(cap_cost):.4f} reached)"),
+            usage=Usage.zero(),
+            turns_used=0,
+            stopped_by_budget=True,
+            budget_reason="max_cost_usd",
+            tool_calls_used=0,
+        )
+    else:
+        r = run_until_idle(
+            messages,
+            components.mode,
+            components.tools,
+            components.memory,
+            tracer,
+            max_turns=config.max_turns,
+            max_parallel_tools=config.max_parallel_tools,
+            stream_sink=components.stream_sink,
+            repeat_guard_threshold=config.repeat_guard_threshold,
+            repeat_guard_terminate_at=config.repeat_guard_terminate_at,
+            repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
+            tool_pattern_guard_threshold=config.tool_pattern_guard_threshold,
+            tool_pattern_guard_terminate_at=config.tool_pattern_guard_terminate_at,
+            tool_pattern_guard_window=config.tool_pattern_guard_window,
+            error_recall_threshold=config.error_recall_threshold,
+            max_cost_usd=rem_cost,
+            max_tool_calls=rem_tools,
+        )
     tracer.event(
         "sub_session_end",
         subtask_idx=subtask_idx,
@@ -86,6 +115,8 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
     stopped_by_user = False
     messages: list[dict] = []
     subtask_idx = 0
+    session_cost_usd = 0.0
+    session_tool_calls = 0
 
     with components.tracer as tracer:
         try:
@@ -98,14 +129,26 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
                 )
                 tracer.event("session_start", task=opener)
                 session_started = True
-                r0 = _run_subtask(opener, subtask_idx, messages, components, tracer)
+                r0 = _run_subtask(
+                    opener,
+                    subtask_idx,
+                    messages,
+                    components,
+                    tracer,
+                    session_cost_usd=session_cost_usd,
+                    session_tool_calls=session_tool_calls,
+                )
                 subtask_idx += 1
+                session_cost_usd += r0.usage.total_cost_usd
+                session_tool_calls += r0.tool_calls_used
                 total_usage = total_usage + r0.usage
                 total_turns += r0.turns_used
                 last_final = r0.final_text
                 print("\n" + "=" * 60)
                 print(r0.final_text)
                 print("=" * 60)
+                if r0.stopped_by_budget:
+                    session_started = False
             else:
                 first: str | None = None
                 while first is None:
@@ -131,14 +174,26 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
                         opener=first,
                     )
                     session_started = True
-                    r0 = _run_subtask(first, subtask_idx, messages, components, tracer)
+                    r0 = _run_subtask(
+                        first,
+                        subtask_idx,
+                        messages,
+                        components,
+                        tracer,
+                        session_cost_usd=session_cost_usd,
+                        session_tool_calls=session_tool_calls,
+                    )
                     subtask_idx += 1
+                    session_cost_usd += r0.usage.total_cost_usd
+                    session_tool_calls += r0.tool_calls_used
                     total_usage = total_usage + r0.usage
                     total_turns += r0.turns_used
                     last_final = r0.final_text
                     print("\n" + "=" * 60)
                     print(r0.final_text)
                     print("=" * 60)
+                    if r0.stopped_by_budget:
+                        session_started = False
 
             while session_started:
                 print("harness> ", end="", file=sys.stderr, flush=True)
@@ -153,14 +208,26 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
 
                 tracer.event("interactive_turn", chars=len(line))
                 messages.append({"role": "user", "content": line})
-                r = _run_subtask(line, subtask_idx, messages, components, tracer)
+                r = _run_subtask(
+                    line,
+                    subtask_idx,
+                    messages,
+                    components,
+                    tracer,
+                    session_cost_usd=session_cost_usd,
+                    session_tool_calls=session_tool_calls,
+                )
                 subtask_idx += 1
+                session_cost_usd += r.usage.total_cost_usd
+                session_tool_calls += r.tool_calls_used
                 total_usage = total_usage + r.usage
                 total_turns += r.turns_used
                 last_final = r.final_text
                 print("\n" + "=" * 60)
                 print(r.final_text)
                 print("=" * 60)
+                if r.stopped_by_budget:
+                    break
 
         except KeyboardInterrupt:
             print("\n[interrupt]", file=sys.stderr)
