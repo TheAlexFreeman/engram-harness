@@ -19,7 +19,7 @@ import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +100,7 @@ class TraceBridgeResult:
     access_entries: int
     commit_sha: str | None
     artifacts: list[str]
+    recall_candidates_path: Path | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +143,7 @@ def run_trace_bridge(
     reply_path = session_dir / "REPLY.md"
     spans_path = session_dir / f"{memory.session_id}.traces.jsonl"
     reflection_path = session_dir / "reflection.md"
+    recall_candidates_path = session_dir / "recall_candidates.jsonl"
 
     written: list[str] = []
     access_count = 0
@@ -175,6 +177,13 @@ def run_trace_bridge(
     spans = _build_spans(memory, tool_calls, events, stats)
     _write_jsonl(spans_path, spans)
     written.append(_relpath(memory, spans_path))
+
+    candidate_rows = _build_recall_candidate_rows(memory, tool_calls)
+    recall_candidates_written: Path | None = None
+    if candidate_rows:
+        _write_jsonl(recall_candidates_path, candidate_rows)
+        written.append(_relpath(memory, recall_candidates_path))
+        recall_candidates_written = recall_candidates_path
 
     if not subsessions:
         access_count = _emit_access_entries(
@@ -225,6 +234,7 @@ def run_trace_bridge(
         access_entries=access_count,
         commit_sha=commit_sha,
         artifacts=written,
+        recall_candidates_path=recall_candidates_written,
     )
 
 
@@ -742,6 +752,93 @@ def _build_spans(
 # ---------------------------------------------------------------------------
 # ACCESS.jsonl emission
 # ---------------------------------------------------------------------------
+
+
+def _build_recall_candidate_rows(
+    memory: EngramMemory,
+    tool_calls: list[_ToolCall],
+) -> list[dict[str, Any]]:
+    """Translate buffered ``_RecallCandidateEvent``s into JSONL rows.
+
+    Each candidate row is enriched with ``used_in_session`` — True if any
+    later ``read_file`` tool call referenced the candidate's file path.
+    That gives us a cheap signal for "did the agent actually consume what
+    we surfaced?" without needing to parse text content.
+    """
+    events = list(getattr(memory, "recall_candidate_events", []) or [])
+    if not events:
+        return []
+
+    content_prefix = getattr(memory, "content_prefix", "core")
+    read_calls: list[tuple[datetime, str]] = []
+    for tc in tool_calls:
+        if tc.name != "read_file":
+            continue
+        read_time = _parse_trace_timestamp(tc.timestamp)
+        if read_time is None:
+            continue
+        arg_path = tc.args.get("path") or tc.args.get("file_path")
+        if arg_path:
+            read_calls.append(
+                (read_time, _recall_candidate_path_key(str(arg_path), content_prefix))
+            )
+
+    rows: list[dict[str, Any]] = []
+    for ev in events:
+        recall_time = _parse_trace_timestamp(ev.timestamp)
+        ts = ev.timestamp.isoformat() if hasattr(ev.timestamp, "isoformat") else str(ev.timestamp)
+        for cand in ev.candidates:
+            fp = cand.get("file_path", "")
+            fp_key = _recall_candidate_path_key(str(fp), content_prefix) if fp else ""
+            row = {
+                "timestamp": ts,
+                "query": ev.query,
+                "namespace": ev.namespace,
+                "k": ev.k,
+                "file_path": fp,
+                "source": cand.get("source", ""),
+                "rank": cand.get("rank", 0),
+                "score": cand.get("score", 0.0),
+                "returned": bool(cand.get("returned", False)),
+                "used_in_session": (
+                    any(
+                        read_time >= recall_time and read_path == fp_key
+                        for read_time, read_path in read_calls
+                    )
+                    if recall_time is not None and fp_key
+                    else False
+                ),
+            }
+            rows.append(row)
+    return rows
+
+
+def _parse_trace_timestamp(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        raw = str(value or "")
+        if not raw:
+            return None
+        if raw.endswith("Z"):
+            raw = f"{raw[:-1]}+00:00"
+        try:
+            dt = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _recall_candidate_path_key(file_path: str, content_prefix: str = "core") -> str:
+    norm = _norm(file_path).strip("/")
+    while norm.startswith("./"):
+        norm = norm[2:]
+    prefix = content_prefix.strip("/")
+    if prefix and norm.startswith(prefix + "/"):
+        norm = norm[len(prefix) + 1 :]
+    return norm
 
 
 def _access_paths(
