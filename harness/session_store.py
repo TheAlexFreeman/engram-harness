@@ -46,6 +46,8 @@ class SessionRecord:
     max_turns_reached: bool = False
     trace_path: str | None = None
     engram_session_dir: str | None = None
+    bridge_status: str | None = None
+    bridge_error: str | None = None
     active_plan_project: str | None = None
     active_plan_id: str | None = None
 
@@ -73,6 +75,8 @@ class SessionRecord:
             "max_turns_reached": 1 if self.max_turns_reached else 0,
             "trace_path": self.trace_path,
             "engram_session_dir": self.engram_session_dir,
+            "bridge_status": self.bridge_status,
+            "bridge_error": self.bridge_error,
             "active_plan_project": self.active_plan_project,
             "active_plan_id": self.active_plan_id,
         }
@@ -109,6 +113,8 @@ class SessionRecord:
             max_turns_reached=bool(row.get("max_turns_reached", 0)),
             trace_path=row.get("trace_path"),
             engram_session_dir=row.get("engram_session_dir"),
+            bridge_status=row.get("bridge_status"),
+            bridge_error=row.get("bridge_error"),
             active_plan_project=row.get("active_plan_project"),
             active_plan_id=row.get("active_plan_id"),
         )
@@ -166,6 +172,8 @@ class SessionStore:
             row["name"] for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
         }
         additive: list[tuple[str, str]] = [
+            ("bridge_status", "TEXT"),
+            ("bridge_error", "TEXT"),
             ("active_plan_project", "TEXT"),
             ("active_plan_id", "TEXT"),
         ]
@@ -219,6 +227,8 @@ class SessionStore:
         final_text: str | None = None,
         max_turns_reached: bool = False,
         engram_session_dir: str | None = None,
+        bridge_status: str | None = None,
+        bridge_error: str | None = None,
         active_plan_project: str | None = None,
         active_plan_id: str | None = None,
     ) -> None:
@@ -239,6 +249,8 @@ class SessionStore:
             "final_text": final_text,
             "max_turns_reached": 1 if max_turns_reached else 0,
             "engram_session_dir": engram_session_dir,
+            "bridge_status": bridge_status,
+            "bridge_error": bridge_error,
             "active_plan_project": active_plan_project,
             "active_plan_id": active_plan_id,
         }
@@ -260,6 +272,8 @@ class SessionStore:
                     final_text = :final_text,
                     max_turns_reached = :max_turns_reached,
                     engram_session_dir = :engram_session_dir,
+                    bridge_status = :bridge_status,
+                    bridge_error = :bridge_error,
                     active_plan_project = :active_plan_project,
                     active_plan_id = :active_plan_id
                 WHERE session_id = :session_id

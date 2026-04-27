@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- File references
     trace_path          TEXT,   -- absolute path to JSONL trace file
     engram_session_dir  TEXT,   -- path to engram activity dir, if applicable
+    bridge_status       TEXT,   -- skipped|ok|error
+    bridge_error        TEXT,
 
     -- Workspace plan link, populated at session-end from the most-recently
     -- modified active plan in the agent's workspace. Together they form an

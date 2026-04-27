@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from harness.tools import CAP_MEMORY_WRITE, CAP_WORK_READ, CAP_WORK_WRITE
 from harness.workspace import (
     _PLAN_FAILURE_WARN_THRESHOLD,
     PLAN_STATUS_AWAITING_APPROVAL,
@@ -99,6 +100,8 @@ class WorkStatus:
 
     name = "work_status"
     mutates = False
+    capabilities = frozenset({CAP_WORK_READ})
+    untrusted_output = True
     description = (
         "Read your current orientation: CURRENT.md (active threads, their "
         "status, and the freeform notes section). Pass `project` to also "
@@ -163,6 +166,7 @@ class WorkThread:
 
     name = "work_thread"
     mutates = True
+    capabilities = frozenset({CAP_WORK_WRITE})
     description = (
         "Manage a named thread in CURRENT.md. Threads track active lines of "
         "work with a status (active | blocked | paused — conventional; free-form) "
@@ -274,6 +278,7 @@ class WorkJot:
 
     name = "work_jot"
     mutates = True
+    capabilities = frozenset({CAP_WORK_WRITE})
     description = (
         "Append a line to the freeform Notes section of CURRENT.md. Use for "
         "observations, reminders, or anything that doesn't belong to a "
@@ -318,6 +323,7 @@ class WorkNote:
 
     name = "work_note"
     mutates = True
+    capabilities = frozenset({CAP_WORK_WRITE})
     description = (
         "Create or update a persistent working document. Writes to "
         "`notes/<title>.md` or `projects/<project>/notes/<title>.md` when "
@@ -392,6 +398,8 @@ class WorkRead:
 
     name = "work_read"
     mutates = False
+    capabilities = frozenset({CAP_WORK_READ})
+    untrusted_output = True
     description = (
         "Read any workspace file by path (relative to the workspace root). "
         "Examples: CURRENT.md, notes/auth-redesign.md, "
@@ -432,6 +440,7 @@ class WorkList:
 
     name = "work_list"
     mutates = False
+    capabilities = frozenset({CAP_WORK_READ})
     description = (
         "List files and directories under the internal workspace root "
         "(non-recursive). Use this for CURRENT.md, notes/, projects/, "
@@ -483,6 +492,8 @@ class WorkSearch:
 
     name = "work_search"
     mutates = False
+    capabilities = frozenset({CAP_WORK_READ})
+    untrusted_output = True
     description = (
         "Search across all projects in the workspace by keyword. Returns a "
         "compact manifest of matching files with snippets. Useful when you "
@@ -564,6 +575,7 @@ class WorkPromote:
 
     name = "work_promote"
     mutates = True
+    capabilities = frozenset({CAP_WORK_READ, CAP_MEMORY_WRITE})
     description = (
         "Graduate a working note into durable memory. Reads the workspace "
         "file at `path`, strips any existing frontmatter, writes the body "
@@ -695,6 +707,7 @@ class WorkScratch:
 
     name = "work_scratch"
     mutates = True
+    capabilities = frozenset({CAP_WORK_WRITE})
     description = (
         "Append to the session's scratch file (`scratch/<session-id>.md`). "
         "Scratch is gitignored and cleaned up at session end. Use for "
@@ -740,6 +753,7 @@ class WorkProjectCreate:
 
     name = "work_project_create"
     mutates = True
+    capabilities = frozenset({CAP_WORK_WRITE})
     description = (
         "Create a new project with a goal and optional initial questions. "
         "Scaffolds the project directory with GOAL.md (timestamped), "
@@ -794,6 +808,7 @@ class WorkProjectGoal:
     # Can mutate: with `goal` provided, updates GOAL.md. Read-only profile
     # excludes the tool entirely to avoid half-usable registration.
     mutates = True
+    capabilities = frozenset({CAP_WORK_READ, CAP_WORK_WRITE})
     description = (
         "Read a project's goal (omit `goal`) or update it (provide `goal`). "
         "Updates preserve creation timestamp, refresh modified timestamp, "
@@ -839,6 +854,7 @@ class WorkProjectAsk:
 
     name = "work_project_ask"
     mutates = True
+    capabilities = frozenset({CAP_WORK_WRITE})
     description = (
         "Add a question to a project. Questions capture what isn't yet "
         "known. They're numbered automatically and appear in SUMMARY.md "
@@ -872,6 +888,7 @@ class WorkProjectResolve:
 
     name = "work_project_resolve"
     mutates = True
+    capabilities = frozenset({CAP_WORK_WRITE})
     description = (
         "Resolve an open question with an answer. The question moves from "
         "Open to Resolved (with a resolution date); open questions "
@@ -924,6 +941,7 @@ class WorkProjectList:
 
     name = "work_project_list"
     mutates = False
+    capabilities = frozenset({CAP_WORK_READ})
     description = (
         "List all projects with their goals and open question counts. "
         "Archived projects are excluded unless `include_archived` is true."
@@ -964,6 +982,8 @@ class WorkProjectStatus:
 
     name = "work_project_status"
     mutates = False
+    capabilities = frozenset({CAP_WORK_READ})
+    untrusted_output = True
     description = (
         "Read a project's full context via its auto-generated SUMMARY.md "
         "(goal with dates, open questions, resolved questions, file "
@@ -999,6 +1019,7 @@ class WorkProjectArchive:
 
     name = "work_project_archive"
     mutates = True
+    capabilities = frozenset({CAP_WORK_WRITE})
     description = (
         "Archive a project. Moves it to projects/_archive/<name>/, "
         "prepends the archival summary to SUMMARY.md, and auto-closes "
@@ -1075,6 +1096,7 @@ class WorkProjectPlan:
 
     name = "work_project_plan"
     mutates = True  # create/advance both write plan state
+    capabilities = frozenset({CAP_WORK_READ, CAP_WORK_WRITE})
     description = (
         "Manage multi-session plans within a project. Plans are formal work "
         "specifications with phases, postconditions, and resumption state. "

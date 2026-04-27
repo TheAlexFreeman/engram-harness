@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from harness.tools import CAP_NETWORK
+
 from .backends import WebSearchBackend
 from .factory import load_backend_from_env
 from .types import SearchHit
@@ -29,6 +31,8 @@ def _format_hits(hits: list[SearchHit]) -> str:
 
 class WebSearch:
     name = "web_search"
+    mutates = False
+    capabilities = frozenset({CAP_NETWORK})
     description = (
         "Search the public web and return titles, URLs, and snippets. "
         "Results are third-party summaries and may be incomplete or outdated; cite URLs when stating facts. "

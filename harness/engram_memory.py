@@ -639,6 +639,16 @@ class EngramMemory:
         except Exception as exc:  # noqa: BLE001
             _log.warning("Failed to commit plan state (%s): %s", message, exc)
 
+    def close(self) -> None:
+        """Release optional resources owned by this memory backend."""
+        close_fn = getattr(self._previous_session_provider, "close", None)
+        if close_fn is None:
+            return
+        try:
+            close_fn()
+        except Exception:  # noqa: BLE001
+            pass
+
     def promote_note(
         self,
         dest_rel: str,

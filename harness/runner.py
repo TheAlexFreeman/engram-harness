@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from harness.loop import maybe_run_reflection, run, run_until_idle
@@ -14,6 +15,13 @@ if TYPE_CHECKING:
 
 _INTERACTIVE_EXIT = frozenset({"exit", "quit"})
 _INTERACTIVE_SESSION_LABEL = "Interactive session"
+
+
+@dataclass
+class TraceBridgeStatus:
+    status: str = "skipped"
+    error: str | None = None
+    commit_sha: str | None = None
 
 
 def _read_interactive_line() -> str | None:
@@ -55,6 +63,8 @@ def _run_subtask(
         tool_pattern_guard_terminate_at=config.tool_pattern_guard_terminate_at,
         tool_pattern_guard_window=config.tool_pattern_guard_window,
         error_recall_threshold=config.error_recall_threshold,
+        max_cost_usd=getattr(config, "max_cost_usd", None),
+        max_tool_calls=getattr(config, "max_tool_calls", None),
     )
     tracer.event(
         "sub_session_end",
@@ -208,13 +218,15 @@ def run_batch(args: "argparse.Namespace", components: "SessionComponents"):
             error_recall_threshold=config.error_recall_threshold,
             skip_end_session_commit=bridge,
             reflect=getattr(config, "reflect", True),
+            max_cost_usd=getattr(config, "max_cost_usd", None),
+            max_tool_calls=getattr(config, "max_tool_calls", None),
         )
 
 
-def run_trace_bridge_if_enabled(components: "SessionComponents") -> None:
+def run_trace_bridge_if_enabled(components: "SessionComponents") -> TraceBridgeStatus:
     """Run the trace bridge if configured."""
     if not (_bridge_enabled(components) and components.engram_memory is not None):
-        return
+        return TraceBridgeStatus()
     try:
         from harness.trace_bridge import run_trace_bridge
 
@@ -229,5 +241,7 @@ def run_trace_bridge_if_enabled(components: "SessionComponents") -> None:
             + (f", commit {bridge_result.commit_sha[:8]}" if bridge_result.commit_sha else ""),
             file=sys.stderr,
         )
+        return TraceBridgeStatus(status="ok", commit_sha=bridge_result.commit_sha)
     except Exception as exc:  # noqa: BLE001
         print(f"[warning] trace bridge failed: {exc}", file=sys.stderr)
+        return TraceBridgeStatus(status="error", error=f"{type(exc).__name__}: {exc}")

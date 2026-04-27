@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from harness.tools import CAP_SHELL
+
 from ._prelude import build_prelude
 from ._python_runner import (
     _DEFAULT_TIMEOUT,
@@ -15,6 +17,9 @@ from .fs import WorkspaceScope
 
 class PythonEval:
     name = "python_eval"
+    mutates = True
+    capabilities = frozenset({CAP_SHELL})
+    untrusted_output = True
     description = (
         "Evaluate a Python snippet and return the result. "
         "Code runs in a fresh subprocess with workspace context available "

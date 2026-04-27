@@ -110,6 +110,8 @@ def record_completed_session(
     final_text: str | None,
     max_turns_reached: bool,
     engram_memory: "EngramMemory | None" = None,
+    bridge_status: str | None = None,
+    bridge_error: str | None = None,
 ) -> None:
     """Write the final state of a completed session into ``SessionStore``.
 
@@ -144,6 +146,8 @@ def record_completed_session(
             final_text=final_text,
             max_turns_reached=max_turns_reached,
             engram_session_dir=engram_dir,
+            bridge_status=bridge_status,
+            bridge_error=bridge_error,
             active_plan_project=plan_project,
             active_plan_id=plan_id,
         )

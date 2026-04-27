@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from harness.loop import run
+from harness.pricing import ModelPricing, PricingTable
 from harness.tools import Tool, ToolCall, ToolResult
 from harness.tools.fs import WorkspaceScope
 from harness.tools.todos import WriteTodos
@@ -34,11 +35,28 @@ class SleepingTool:
         return f"slept {duration}s (tool={self.name}, tag={args.get('tag', '')})"
 
 
+class MutatingRecorder:
+    name = "mutate"
+    description = "mutating recorder"
+    input_schema = {"type": "object", "properties": {"tag": {"type": "string"}}}
+    mutates = True
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    def run(self, args: dict) -> str:
+        tag = str(args.get("tag", ""))
+        time.sleep(0.05 if tag == "first" else 0.0)
+        self.seen.append(tag)
+        return tag
+
+
 @dataclass
 class _ScriptedResponse:
     tool_calls: list[ToolCall]
     text: str = ""
     stop_reason: str | None = None
+    usage: Usage = field(default_factory=Usage.zero)
 
 
 class ScriptedMode:
@@ -72,7 +90,7 @@ class ScriptedMode:
         return response.text
 
     def extract_usage(self, response: Any) -> Usage:
-        return Usage.zero()
+        return response.usage
 
 
 class NullTracer:
@@ -194,6 +212,88 @@ def test_max_parallel_tools_one_is_sequential():
 
     # Sequential: ~1.2s. Give generous lower bound to avoid flakiness.
     assert elapsed >= 1.1, f"expected sequential behavior, got {elapsed:.3f}s"
+
+
+def test_mutating_tools_are_serialized_in_model_order():
+    tool = MutatingRecorder()
+    tools: dict[str, Tool] = {"mutate": tool}
+    mode = ScriptedMode(
+        [
+            _ScriptedResponse(
+                tool_calls=[
+                    ToolCall(name="mutate", args={"tag": "first"}, id="call_1"),
+                    ToolCall(name="mutate", args={"tag": "second"}, id="call_2"),
+                ]
+            ),
+            _ScriptedResponse(tool_calls=[], text="done"),
+        ]
+    )
+    tracer_events: list[tuple[str, dict[str, Any]]] = []
+
+    class Tracer:
+        def event(self, kind: str, **data: Any) -> None:
+            tracer_events.append((kind, data))
+
+        def close(self) -> None:
+            pass
+
+    run(
+        task="go",
+        mode=mode,
+        tools=tools,
+        memory=RecordingMemory(),
+        tracer=Tracer(),
+        max_parallel_tools=4,
+    )
+
+    assert tool.seen == ["first", "second"]
+    dispatches = [data for kind, data in tracer_events if kind == "tool_dispatch"]
+    assert dispatches[0]["strategy"] == "sequential_mutating"
+
+
+def test_cost_budget_stops_after_model_turn():
+    usage = Usage(model="test", input_tokens=1)
+    mode = ScriptedMode([_ScriptedResponse(tool_calls=[], text="too expensive", usage=usage)])
+    result = run(
+        task="go",
+        mode=mode,
+        tools={},
+        memory=RecordingMemory(),
+        tracer=NullTracer(),
+        pricing=PricingTable(models={"test": ModelPricing(input_per_1m=1_000_000)}),
+        max_cost_usd=0.1,
+    )
+
+    assert result.stopped_by_budget is True
+    assert result.budget_reason == "max_cost_usd"
+    assert "budget exceeded" in result.final_text
+
+
+def test_tool_call_budget_stops_before_executing_batch():
+    tool = MutatingRecorder()
+    tools: dict[str, Tool] = {"mutate": tool}
+    mode = ScriptedMode(
+        [
+            _ScriptedResponse(
+                tool_calls=[
+                    ToolCall(name="mutate", args={"tag": "first"}, id="call_1"),
+                    ToolCall(name="mutate", args={"tag": "second"}, id="call_2"),
+                ]
+            )
+        ]
+    )
+    result = run(
+        task="go",
+        mode=mode,
+        tools=tools,
+        memory=RecordingMemory(),
+        tracer=NullTracer(),
+        max_tool_calls=1,
+    )
+
+    assert result.stopped_by_budget is True
+    assert result.budget_reason == "max_tool_calls"
+    assert tool.seen == []
 
 
 def test_todos_save_is_thread_safe(tmp_path: Path):
