@@ -202,6 +202,43 @@ def append_edges(
     return written
 
 
+def _edge_identity(edge: LinkEdge | dict[str, Any]) -> tuple[str, str, str, str]:
+    if isinstance(edge, LinkEdge):
+        return (edge.src, edge.dst, edge.kind, edge.session_id)
+    return (
+        str(edge.get("from", "")),
+        str(edge.get("to", "")),
+        str(edge.get("kind", "")),
+        str(edge.get("session_id", "")),
+    )
+
+
+def append_new_edges(
+    content_root: Path,
+    edges: Iterable[LinkEdge],
+) -> list[Path]:
+    """Append only edges that are not already present in their namespace file.
+
+    Identity is scoped to the stable event fields ``from``, ``to``, ``kind``,
+    and ``session_id``. This keeps trace-bridge reruns idempotent while still
+    allowing future sessions to add fresh evidence for the same pair.
+    """
+    grouped = group_edges_by_namespace(edges)
+    written: list[Path] = []
+    for namespace, namespace_edges in grouped.items():
+        path = links_path_for_namespace(content_root, namespace)
+        existing = {_edge_identity(row) for row in read_edges(path)}
+        new_edges = [edge for edge in namespace_edges if _edge_identity(edge) not in existing]
+        if not new_edges:
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [json.dumps(edge.to_dict(), ensure_ascii=False) for edge in new_edges]
+        with path.open("a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        written.append(path)
+    return written
+
+
 def read_edges(path: Path) -> list[dict[str, Any]]:
     """Read a ``LINKS.jsonl`` file into a list of dicts.
 
@@ -231,5 +268,6 @@ __all__ = [
     "group_edges_by_namespace",
     "links_path_for_namespace",
     "append_edges",
+    "append_new_edges",
     "read_edges",
 ]

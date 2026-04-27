@@ -745,7 +745,7 @@ def _emit_co_retrieval_links(
         return []
 
     from harness._engram_fs.link_graph import (
-        append_edges,
+        append_new_edges,
         derive_co_retrieval_edges,
     )
 
@@ -754,7 +754,7 @@ def _emit_co_retrieval_links(
     edges = derive_co_retrieval_edges(events, session_id=str(session_id), ts=ts)
     if not edges:
         return []
-    return append_edges(memory.content_root, edges)
+    return append_new_edges(memory.content_root, edges)
 
 
 def _build_recall_candidate_rows(

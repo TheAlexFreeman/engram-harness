@@ -18,6 +18,7 @@ from harness._engram_fs.link_graph import (
     _common_namespace,
     _path_namespace,
     append_edges,
+    append_new_edges,
     derive_co_retrieval_edges,
     group_edges_by_namespace,
     links_path_for_namespace,
@@ -285,6 +286,47 @@ def test_append_edges_is_append_only(tmp_path: Path) -> None:
     assert pairs == {("a", "b"), ("c", "d")}
 
 
+def test_append_new_edges_skips_same_session_identity(tmp_path: Path) -> None:
+    """Trace-bridge retries should not duplicate an edge already emitted."""
+    first = LinkEdge(
+        src="memory/knowledge/a.md",
+        dst="memory/knowledge/b.md",
+        kind="co-retrieved",
+        score=1.0,
+        source="access-log",
+        session_id="s1",
+        namespace="memory/knowledge",
+        ts="2026-04-26",
+    )
+    retry = LinkEdge(
+        src="memory/knowledge/a.md",
+        dst="memory/knowledge/b.md",
+        kind="co-retrieved",
+        score=5.0,
+        source="access-log",
+        session_id="s1",
+        namespace="memory/knowledge",
+        ts="2026-04-27",
+    )
+    later_session = LinkEdge(
+        src="memory/knowledge/a.md",
+        dst="memory/knowledge/b.md",
+        kind="co-retrieved",
+        score=1.0,
+        source="access-log",
+        session_id="s2",
+        namespace="memory/knowledge",
+        ts="2026-04-27",
+    )
+
+    assert append_new_edges(tmp_path, [first])
+    assert append_new_edges(tmp_path, [retry]) == []
+    assert append_new_edges(tmp_path, [later_session])
+
+    rows = read_edges(tmp_path / "memory/knowledge/LINKS.jsonl")
+    assert [(r["session_id"], r["score"]) for r in rows] == [("s1", 1.0), ("s2", 1.0)]
+
+
 def test_read_edges_skips_malformed_lines(tmp_path: Path) -> None:
     """The audit tool cleans up garbage; the bridge should never fail because
     an old row is malformed."""
@@ -370,6 +412,39 @@ def test_trace_bridge_writes_co_retrieval_edges(engram_repo: Path) -> None:
         assert r["kind"] == "co-retrieved"
         assert r["source"] == "access-log"
         assert r["session_id"] == mem.session_id
+
+
+def test_trace_bridge_rerun_does_not_duplicate_co_retrieval_edges(
+    engram_repo: Path,
+) -> None:
+    """Re-processing the same session should be a no-op for link rows."""
+    from harness.trace_bridge import run_trace_bridge
+
+    knowledge = engram_repo / "core" / "memory" / "knowledge"
+    (knowledge / "auth.md").write_text("JWT authentication notes for the auth flow.")
+    (knowledge / "tokens.md").write_text("JWT token signing details and rotation.")
+
+    mem = EngramMemory(engram_repo, embed=False)
+    mem.start_session("test")
+    mem.recall("JWT", k=2)
+    mem.end_session("done", skip_commit=True, defer_artifacts=True)
+
+    session_dir = engram_repo / "core" / mem.session_dir_rel
+    trace = session_dir / "ACTIONS.native.jsonl"
+    trace.write_text(
+        json.dumps({"kind": "session_start", "task": "x", "ts": datetime.now().isoformat()}) + "\n",
+        encoding="utf-8",
+    )
+
+    first = run_trace_bridge(trace, mem, commit=False)
+    assert first.link_paths, "expected initial bridge run to write LINKS.jsonl"
+    path = first.link_paths[0]
+    first_rows = read_edges(path)
+    assert first_rows
+
+    second = run_trace_bridge(trace, mem, commit=False)
+    assert second.link_paths == []
+    assert read_edges(path) == first_rows
 
 
 def test_trace_bridge_skips_link_emit_when_no_recalls(engram_repo: Path) -> None:
