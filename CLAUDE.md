@@ -36,7 +36,8 @@ from this project; what the harness needs it owns at `harness/_engram_fs/`.
 
 **Working on the integration seam.** `harness/engram_memory.py` implements the
 `MemoryBackend` protocol against an Engram repo (compact returning-session
-bootstrap, semantic or keyword recall via hybrid BM25 + RRF fusion, buffered
+bootstrap, semantic or keyword recall via hybrid BM25 + RRF fusion with
+helpfulness-weighted re-rank from ACCESS history, buffered
 records flushed at `end_session`). It accepts an optional `workspace_dir` so
 the bootstrap can surface an active-plan briefing for the workspace at the
 project root, and an optional `session_id` so `harness resume` can continue an
