@@ -190,9 +190,7 @@ def test_build_index_merges_across_namespaces(tmp_path: Path) -> None:
         "memory/skills",
         [{"file": "memory/skills/s.md", "date": "2026-04-01", "helpfulness": 0.3}],
     )
-    idx = build_helpfulness_index(
-        content_root, namespaces=("memory/knowledge", "memory/skills")
-    )
+    idx = build_helpfulness_index(content_root, namespaces=("memory/knowledge", "memory/skills"))
     assert idx.by_path == {
         "memory/knowledge/k.md": pytest.approx(0.9),
         "memory/skills/s.md": pytest.approx(0.3),
@@ -258,9 +256,7 @@ def test_build_index_empty_prefix_is_passthrough(tmp_path: Path) -> None:
         "memory/knowledge",
         [{"file": "memory/knowledge/x.md", "date": "2026-04-01", "helpfulness": 0.5}],
     )
-    idx = build_helpfulness_index(
-        content_root, namespaces=("memory/knowledge",), content_prefix=""
-    )
+    idx = build_helpfulness_index(content_root, namespaces=("memory/knowledge",), content_prefix="")
     assert "memory/knowledge/x.md" in idx.by_path
 
 
@@ -347,9 +343,7 @@ def test_recall_promotes_helpful_file(tmp_path: Path, monkeypatch) -> None:
     assert celery_idx < ssr_idx
 
 
-def test_recall_disabled_via_env_preserves_rrf_order(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_recall_disabled_via_env_preserves_rrf_order(tmp_path: Path, monkeypatch) -> None:
     """With HARNESS_HELPFULNESS_RERANK=0, even strong helpfulness signal
     must NOT reorder. Compares disabled-mode order against itself with
     no signal."""
