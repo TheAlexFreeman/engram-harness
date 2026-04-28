@@ -21,6 +21,8 @@ from harness._engram_fs.trust_decay import (
     partition_candidates,
     render_candidates_md,
     render_lifecycle_jsonl,
+    thresholds_from_yaml,
+    thresholds_to_yaml,
     trust_score,
 )
 
@@ -438,6 +440,24 @@ def test_partition_custom_thresholds() -> None:
     assert partition_candidates([row], thresholds=loose).promote == [row]
     # Default thresholds reject the same row.
     assert partition_candidates([row]).promote == []
+
+
+def test_thresholds_yaml_round_trip() -> None:
+    t = CandidateThresholds(
+        promote_min_effective=0.42,
+        promote_min_accesses=7,
+        promote_min_helpfulness=0.71,
+        demote_max_effective=0.19,
+        demote_min_accesses=4,
+        demote_max_helpfulness=0.29,
+    )
+    loaded = thresholds_from_yaml(thresholds_to_yaml(t))
+    assert loaded == t
+
+
+def test_thresholds_from_yaml_invalid_returns_none() -> None:
+    assert thresholds_from_yaml("not: yaml: [") is None
+    assert thresholds_from_yaml("") is None
 
 
 # ---------------------------------------------------------------------------

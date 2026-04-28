@@ -118,11 +118,16 @@ _NON_CONTENT_NAMES = frozenset(
         "ACCESS.jsonl",
         "LINKS.jsonl",
         "_lifecycle.jsonl",
+        "_lifecycle_thresholds.yaml",
         "_promote_candidates.md",
         "_demote_candidates.md",
         "_session-rollups.jsonl",
     }
 )
+
+# Written next to `_lifecycle.jsonl` by ``harness decay-sweep`` so
+# ``memory_lifecycle_review`` can partition with the same thresholds as the last run.
+LIFECYCLE_THRESHOLDS_FILENAME = "_lifecycle_thresholds.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +455,52 @@ def partition_candidates(
     return partition
 
 
+def thresholds_to_yaml(thresholds: CandidateThresholds) -> str:
+    """Serialize thresholds for ``_lifecycle_thresholds.yaml`` next to ``_lifecycle.jsonl``."""
+    import yaml
+
+    payload = {
+        "promote_min_effective": thresholds.promote_min_effective,
+        "promote_min_accesses": thresholds.promote_min_accesses,
+        "promote_min_helpfulness": thresholds.promote_min_helpfulness,
+        "demote_max_effective": thresholds.demote_max_effective,
+        "demote_min_accesses": thresholds.demote_min_accesses,
+        "demote_max_helpfulness": thresholds.demote_max_helpfulness,
+    }
+    text = yaml.safe_dump(payload, sort_keys=True, default_flow_style=False, allow_unicode=True)
+    return text.rstrip() + "\n"
+
+
+def thresholds_from_yaml(text: str) -> CandidateThresholds | None:
+    """Parse a thresholds YAML document; returns ``None`` if unusable."""
+    import yaml
+
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    base = CandidateThresholds()
+    try:
+        return CandidateThresholds(
+            promote_min_effective=float(
+                raw.get("promote_min_effective", base.promote_min_effective)
+            ),
+            promote_min_accesses=int(raw.get("promote_min_accesses", base.promote_min_accesses)),
+            promote_min_helpfulness=float(
+                raw.get("promote_min_helpfulness", base.promote_min_helpfulness)
+            ),
+            demote_max_effective=float(raw.get("demote_max_effective", base.demote_max_effective)),
+            demote_min_accesses=int(raw.get("demote_min_accesses", base.demote_min_accesses)),
+            demote_max_helpfulness=float(
+                raw.get("demote_max_helpfulness", base.demote_max_helpfulness)
+            ),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
@@ -552,6 +603,9 @@ __all__ = [
     "decay_factor",
     "effective_trust",
     "partition_candidates",
+    "thresholds_from_yaml",
+    "thresholds_to_yaml",
+    "LIFECYCLE_THRESHOLDS_FILENAME",
     "render_candidates_frontmatter",
     "render_candidates_md",
     "render_lifecycle_jsonl",
