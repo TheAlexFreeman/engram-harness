@@ -277,6 +277,29 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--injection-classifier-model",
+        type=str,
+        default=None,
+        metavar="MODEL",
+        help=(
+            "D1 Layer 2: model used to classify untrusted tool outputs for "
+            "prompt-injection attempts. Empty / unset disables. Falls back to "
+            "HARNESS_INJECTION_CLASSIFIER_MODEL env var. "
+            "Suggested: claude-haiku-4-5-20251001."
+        ),
+    )
+    parser.add_argument(
+        "--injection-classifier-threshold",
+        type=float,
+        default=0.6,
+        metavar="P",
+        help=(
+            "Suspicion confidence (0.0–1.0) at or above which the "
+            "injection classifier prepends a warning to the wrapped tool "
+            "output. Default 0.6."
+        ),
+    )
+    parser.add_argument(
         "--trace-live",
         dest="trace_live",
         action="store_true",
