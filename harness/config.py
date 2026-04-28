@@ -65,6 +65,14 @@ class SessionConfig:
     # for 1M Opus). Defaults to None so the loop falls through to the
     # ``HARNESS_COMPACTION_INPUT_TOKEN_THRESHOLD`` env var.
     compaction_input_token_threshold: int | None = None
+    # D1 Layer 2: prompt-injection classifier model. None / "" disables;
+    # falls through to ``HARNESS_INJECTION_CLASSIFIER_MODEL`` env var.
+    # Recommended: a Haiku-class model — verdicts are short JSON.
+    injection_classifier_model: str | None = None
+    # Confidence threshold (0.0–1.0): only verdicts at or above this fire
+    # the warning prefix on the wrapped tool output. Trace events still
+    # record sub-threshold verdicts for audit.
+    injection_classifier_threshold: float = 0.6
 
     # Streaming / tracing
     stream: bool = True
@@ -217,6 +225,8 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         tool_pattern_guard_window=getattr(args, "tool_pattern_guard_window", 12),
         error_recall_threshold=getattr(args, "error_recall_threshold", 0),
         compaction_input_token_threshold=getattr(args, "compaction_input_token_threshold", None),
+        injection_classifier_model=getattr(args, "injection_classifier_model", None),
+        injection_classifier_threshold=getattr(args, "injection_classifier_threshold", 0.6),
         stream=args.stream,
         stream_max_block_chars=getattr(args, "stream_max_block_chars", 4000),
         trace_live=args.trace_live,
@@ -598,6 +608,8 @@ def build_session(
         max_tool_calls=config.max_tool_calls,
     )
 
+    _wire_injection_classifier(config, tracer=tracer)
+
     return SessionComponents(
         mode=mode,
         tools=tools,
@@ -699,3 +711,67 @@ def _wire_subagent_spawn(
 
     _ = DEFAULT_ALLOWED_TOOLS  # imported for visibility; consumed by the tool itself
     spawn_tool.set_spawn_fn(spawn)
+
+
+def _wire_injection_classifier(config: SessionConfig, *, tracer: Any) -> None:
+    """Install (or clear) the prompt-injection classifier for this session.
+
+    Reads the model from (in order of precedence):
+    1. ``config.injection_classifier_model`` if set
+    2. ``HARNESS_INJECTION_CLASSIFIER_MODEL`` env var
+    3. None — default disabled, costs nothing
+
+    When enabled, every untrusted-tool result gets classified; suspicious
+    verdicts at confidence ≥ ``injection_classifier_threshold`` get a
+    visible warning prepended. Each classification fires an
+    ``injection_classification`` trace event regardless of verdict so
+    downstream tooling can audit false-positive rates.
+
+    This setter is global, so successive sessions overwrite each other.
+    Single-session use only — safe under the harness's typical CLI
+    pattern, fine for the API server because each session builds in a
+    different process or with disjoint dispatch boundaries.
+    """
+    from harness.tools import set_injection_classifier
+
+    model = getattr(config, "injection_classifier_model", None) or os.environ.get(
+        "HARNESS_INJECTION_CLASSIFIER_MODEL", ""
+    )
+    threshold = float(getattr(config, "injection_classifier_threshold", 0.6) or 0.6)
+    if not model:
+        set_injection_classifier(None)
+        return
+
+    try:
+        from harness.safety.injection_detector import AnthropicInjectionClassifier
+
+        classifier = AnthropicInjectionClassifier(model=model)
+    except Exception as exc:  # noqa: BLE001
+        # Anthropic SDK missing or no API key — degrade gracefully.
+        try:
+            tracer.event(
+                "injection_classifier_disabled",
+                reason=f"{type(exc).__name__}: {exc}",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        set_injection_classifier(None)
+        return
+
+    def _on_classify(tool_name: str, verdict: Any) -> None:
+        try:
+            tracer.event(
+                "injection_classification",
+                tool=tool_name,
+                suspicious=bool(getattr(verdict, "suspicious", False)),
+                confidence=float(getattr(verdict, "confidence", 0.0) or 0.0),
+                reason=str(getattr(verdict, "reason", "") or "")[:240],
+                error=getattr(verdict, "error", None),
+                elapsed_ms=int(getattr(verdict, "elapsed_ms", 0) or 0),
+                input_tokens=int(getattr(verdict.usage, "input_tokens", 0) or 0),
+                output_tokens=int(getattr(verdict.usage, "output_tokens", 0) or 0),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    set_injection_classifier(classifier, threshold=threshold, on_classify=_on_classify)

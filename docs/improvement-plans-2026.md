@@ -627,7 +627,7 @@ drift. Tune thresholds from real data before considering enforcement.
 
 ### Theme D — Safety and governance
 
-#### D1. Two-layer prompt-injection defense for tool outputs
+#### D1. Two-layer prompt-injection defense for tool outputs — **shipped (advisory)**
 
 **Why.** Anthropic's Claude Code Auto Mode runs two layers: a
 server-side prompt-injection probe on tool *outputs* before they enter
