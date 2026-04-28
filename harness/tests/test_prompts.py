@@ -47,8 +47,16 @@ def test_native_prompt_light_mode_token_budget() -> None:
 
 
 def test_native_prompt_full_mode_token_budget() -> None:
+    """Full-mode (memory + work) prompt budget cap.
+
+    Originally 10,500 after the P1 workspace compression. Bumped to 11,500
+    when ``memory_lifecycle_review`` (A5) and ``pause_for_user`` (B4) were
+    added to the memory section — each is a real tool the agent calls and
+    needs prompt-level guidance for. New ceiling still enforces a meaningful
+    budget; raise again only when adding another tool that justifies it.
+    """
     prompt = system_prompt_native(with_memory_tools=True, with_work_tools=True)
-    assert len(prompt) <= 10_500
+    assert len(prompt) <= 11_500
 
 
 def test_prompt_plans_addendum_excluded_by_default() -> None:
