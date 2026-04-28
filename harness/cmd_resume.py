@@ -329,6 +329,9 @@ def _resume_one(
                 compaction_input_token_threshold=getattr(
                     config, "compaction_input_token_threshold", None
                 ),
+                full_compaction_input_token_threshold=getattr(
+                    config, "full_compaction_input_token_threshold", None
+                ),
                 pause_handle=components.pause_handle,
                 resume_state=resume_state,
             )
