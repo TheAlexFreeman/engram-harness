@@ -300,6 +300,18 @@ def execute(call: ToolCall, registry: dict[str, Tool]) -> ToolResult:
             ),
             is_error=True,
         )
+    # D2: human-in-the-loop approval gate. Runs *before* tool.run() so
+    # a denial short-circuits without touching local state. Untrusted-
+    # output wrapping and per-tool truncation still run on the
+    # synthetic decline message so the model sees a stable shape.
+    approval_decision = _maybe_check_approval(call, tool)
+    if approval_decision is not None and not approval_decision.approved:
+        reason = (approval_decision.reason or "approval declined").strip()
+        if approval_decision.error:
+            reason = f"{reason} (channel error: {approval_decision.error})"
+        decline_msg = f"[harness] {call.name} not executed — {reason}"
+        return ToolResult(call=call, content=decline_msg, is_error=False)
+
     untrusted = _is_untrusted(tool)
     try:
         content = tool.run(call.args)
@@ -317,3 +329,19 @@ def execute(call: ToolCall, registry: dict[str, Tool]) -> ToolResult:
             content = _maybe_apply_injection_classifier(call.name, content)
         content = _truncate_tool_output(call.name, content)
         return ToolResult(call=call, content=content, is_error=True)
+
+
+def _maybe_check_approval(call: ToolCall, tool: Tool | None):
+    """Run the installed approval channel (if any) for this call.
+
+    Lazy-imported so importing :mod:`harness.tools` does not pull in
+    the safety package on cold start. Returns ``None`` when there is
+    no channel or the tool is not gated.
+    """
+    if tool is None:
+        return None
+    try:
+        from harness.safety.approval import check_approval
+    except Exception:  # noqa: BLE001
+        return None
+    return check_approval(call.name, tool, call.args)

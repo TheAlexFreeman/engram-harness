@@ -656,7 +656,7 @@ new `harness/safety/injection_detector.py`, prompt section update.
 **Risks:** false positives blocking legitimate tool outputs. Make
 advisory not enforcing in v1.
 
-#### D2. Async human-in-the-loop primitive
+#### D2. Async human-in-the-loop primitive — **shipped (CLI + webhook channels)**
 
 **Why.** HumanLayer's `require_approval` decorator (block specific tool
 calls pending out-of-band Slack/email response) is the standard pattern
