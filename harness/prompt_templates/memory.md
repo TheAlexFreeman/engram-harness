@@ -13,8 +13,9 @@ in the workspace, not in memory.
 
 The memory operations below use `memory: <op>(...)` syntax for readability;
 the underlying native tool names are `memory_recall`, `memory_remember`,
-`memory_review`, `memory_context`, and `memory_trace`. Each op is
-independent; you may issue several in a single response.
+`memory_review`, `memory_context`, `memory_trace`, `memory_lifecycle_review`,
+and `pause_for_user`. Each op is independent; you may issue several in a
+single response.
 
 ### memory: recall
 
@@ -88,3 +89,23 @@ user_correction, blocker, dead_end, dependency. Labels are free-form.
 (`approach_change`), discover something that should persist (`key_finding`), or
 hit a repeating blocker (`blocker`). Optional for other labels. Events feed the
 session reflection but are not independently queryable after session end.
+
+### memory: lifecycle_review
+
+Surface promote / demote candidates from the latest `harness decay-sweep`
+(read-only). Use when curating memory or deciding what to refresh, retire,
+or revise. `kind` is `"promote"`, `"demote"`, or `"both"` (default).
+
+    memory: lifecycle_review({"namespace": "memory/knowledge", "kind": "demote", "limit": 5})
+
+### pause_for_user
+
+Halt the session and wait for the user. The loop checkpoints to disk and
+exits; the user resumes with `harness resume <session_id> [--reply <text>]`
+and their reply becomes this tool's result. Use sparingly — every pause is
+a real interruption. Suitable for clarifications only the user can give,
+approval gates on high-blast-radius work, or taste decisions. Make the
+question specific and self-contained: the user may resume hours later with
+no other context loaded.
+
+    pause_for_user({"question": "OK to drop the legacy auth path? It has zero traffic in 30 days."})

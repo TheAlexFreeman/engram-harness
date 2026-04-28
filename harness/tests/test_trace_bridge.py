@@ -639,9 +639,9 @@ def test_recall_dedupe_fetch_phase_skipped_in_access(
     repo: Path, memory: EngramMemory, tmp_path: Path
 ) -> None:
     """Fetch-phase recall events must not produce a second ACCESS entry."""
-    from harness.tools.recall import RecallMemory
+    from harness.tools.memory_tools import MemoryRecall
 
-    tool = RecallMemory(memory)
+    tool = MemoryRecall(memory)
     tool.run({"query": "celery"})  # manifest call
     tool.run({"query": "celery", "result_index": 1})  # fetch call
 
