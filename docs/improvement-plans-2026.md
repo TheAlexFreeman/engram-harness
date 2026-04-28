@@ -382,7 +382,7 @@ tool_use/tool_result invariant Anthropic's API enforces.
 boundary placement wrong (mid-batch); failure modes are subtle and
 need real-session testing.
 
-#### B3. Code-as-action tool (sandboxed Python executor)
+#### B3. Code-as-action tool (sandboxed Python executor) — **shipped (AST allowlist + subprocess)**
 
 **Why.** smolagents and CoAct-1 show ~20–30% step reductions when
 agents can write code as actions instead of JSON tool calls. For
