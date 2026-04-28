@@ -174,12 +174,11 @@ def test_loop_returns_paused_when_pause_tool_called() -> None:
         pause_handle=handle,
     )
 
-    assert result.paused is True
-    assert result.pause is not None
-    assert result.pause.question == "Continue with terse style?"
-    assert result.pause.tool_use_id == "toolu_pause_1"
-    assert result.messages is messages  # live reference
-    assert isinstance(result.pause_loop_state, LoopCounters)
+    assert result.paused is not None
+    assert result.paused.pause_info.question == "Continue with terse style?"
+    assert result.paused.pause_info.tool_use_id == "toolu_pause_1"
+    assert result.paused.messages is messages  # live reference
+    assert isinstance(result.paused.loop_state, LoopCounters)
     # Mode should have been called exactly once — the loop bailed before
     # the second response.
     assert mode._idx == 1
@@ -200,7 +199,7 @@ def test_loop_pauses_after_mixed_batch_runs_all_tools() -> None:
 
     result = run_until_idle(messages, mode, tools, memory, NullTracer(), pause_handle=handle)
 
-    assert result.paused is True
+    assert result.paused is not None
     # Both tool_results are in the messages list.
     last_msg = messages[-1]
     assert last_msg["role"] == "user"
@@ -230,9 +229,8 @@ def test_full_pause_resume_roundtrip() -> None:
 
     # First leg: run until pause.
     first_result = run_until_idle(messages, mode, tools, memory, NullTracer(), pause_handle=handle)
-    assert first_result.paused is True
-    assert first_result.pause is not None
-    paused_messages = list(first_result.messages or [])
+    assert first_result.paused is not None
+    paused_messages = list(first_result.paused.messages)
 
     # Build a checkpoint payload (JSON-portable).
     payload = serialize_checkpoint(
@@ -245,9 +243,9 @@ def test_full_pause_resume_roundtrip() -> None:
         trace_path="/tr/test.jsonl",
         messages=paused_messages,
         usage=first_result.usage,
-        loop_state=first_result.pause_loop_state,
+        loop_state=first_result.paused.loop_state,
         memory_state=serialize_memory_state(memory),
-        pause=first_result.pause,
+        pause=first_result.paused.pause_info,
         checkpoint_at="2026-04-27T20:00:00",
     )
     # Round-trip via the JSON-portable dict — tests the serialize path too.
@@ -304,7 +302,7 @@ def test_full_pause_resume_roundtrip() -> None:
         resume_usage=resume_state.usage,
     )
 
-    assert second_result.paused is False
+    assert second_result.paused is None
     assert second_result.final_text == "all done"
 
     # The second model call observed the mutated tool_result content (with
@@ -354,7 +352,7 @@ def test_loop_does_not_pause_without_handle() -> None:
     result = run_until_idle(messages, mode, tools, memory, NullTracer(), pause_handle=None)
     # Without a handle wired into the loop, the loop never sees the request
     # and the conversation continues.
-    assert result.paused is False
+    assert result.paused is None
     assert result.final_text == "continued"
 
 
@@ -372,8 +370,8 @@ def test_pause_loop_state_carries_correct_counters() -> None:
     memory = RecordingMemory()
 
     result = run_until_idle(messages, mode, tools, memory, NullTracer(), pause_handle=handle)
-    assert result.paused is True
-    counters = result.pause_loop_state
+    assert result.paused is not None
+    counters = result.paused.loop_state
     assert isinstance(counters, LoopCounters)
     # 2 tool calls total: one note, one pause.
     assert counters.total_tool_calls == 2

@@ -259,6 +259,25 @@ class ResumeState:
     usage: Any  # harness.usage.Usage; not imported here to keep the module dep-light
 
 
+@dataclass
+class PauseOutcome:
+    """Set on ``RunResult.paused`` when the loop exited via ``pause_for_user``.
+
+    Bundles the three pause-only auxiliary values together so the invariant
+    "if the loop paused, all three of these are populated" is load-bearing
+    in the type rather than maintained defensively at every call site.
+    Replaces the prior pattern of four parallel fields on RunResult (boolean
+    flag plus three optionals).
+
+    Truthiness is preserved: ``if result.paused:`` still works because a
+    populated ``PauseOutcome`` is truthy and ``None`` is falsy.
+    """
+
+    pause_info: PauseInfo
+    loop_state: "LoopCounters"
+    messages: list[dict[str, Any]]
+
+
 def serialize_loop_state(state: LoopCounters) -> dict[str, Any]:
     sig = state.prev_batch_sig
     return {
@@ -487,6 +506,7 @@ __all__ = [
     "Checkpoint",
     "LoopCounters",
     "PauseInfo",
+    "PauseOutcome",
     "ResumeState",
     "deserialize_checkpoint",
     "find_pause_tool_result",
