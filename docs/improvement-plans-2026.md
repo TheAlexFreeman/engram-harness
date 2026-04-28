@@ -559,7 +559,7 @@ diverge → bug. Pairs with C2 (eval on trace data).
 **Risks:** Mode wrapping complexity (need to preserve provider-specific
 response shapes). Minor.
 
-#### C4. Drift detection (rolling-window quality alerts)
+#### C4. Drift detection (rolling-window quality alerts) — **shipped**
 
 **Why.** Production agents quietly degrade — model versions change,
 prompt drift, memory pollution, tool API changes. Score-threshold
@@ -567,24 +567,37 @@ alerts on rolling production windows are now table stakes (LangSmith,
 Phoenix, Braintrust all ship them). Our SessionStore has the data;
 nothing computes the alert.
 
-**Proposed shape.**
-1. New `harness drift` CLI computes, over the last N sessions:
-   - Tool-call error rate (existing data).
-   - Mean recall helpfulness (existing data).
-   - Reflection-derived "outcome quality" (PR #19 data).
-   - Cost-per-task (existing data).
-2. Compare to a rolling baseline (e.g. previous 4 weeks).
-3. Configurable thresholds; flags regressions in stderr / a
-   `_drift_alerts.md` artifact.
+**Shape (as built).**
+1. ✅ `harness drift` CLI computes, over the last N sessions:
+   - ✅ Tool-call error rate (`error_status_rate`, `avg_error_count`).
+   - ✅ Mean recall helpfulness (`mean_recall_helpfulness`) — read from
+     per-namespace `_session-rollups.jsonl` files when an Engram
+     content root is reachable; gracefully skipped otherwise.
+   - ✅ Outcome quality (`low_outcome_quality_rate`) — composite of
+     status="error", `max_turns_reached`, and high-error-density
+     sessions. The same classification is now also written to
+     `reflection.md` frontmatter as `outcome_quality`, so future
+     LLM-authored reflections can override it without changing the
+     drift logic.
+   - ✅ Cost-per-task (`avg_cost_usd`).
+2. ✅ Compare against a rolling baseline (default 7d current vs
+   28d baseline).
+3. ✅ Configurable thresholds; flags regressions in stderr **and**
+   writes `_drift_alerts.md` next to the SessionStore DB by default
+   (override with `--alerts-path`, suppress with `--no-write-alerts`).
+   Stale artifact files are removed when the latest sweep is clean.
 
-**Files:** new `harness/cmd_drift.py`, possibly new analyzer module
-`harness/analytics.py`.
+The direction map is per-metric: most metrics alert on a relative
+*increase*; `mean_recall_helpfulness` alerts on a *decrease*.
+Helpfulness alerts are gated on `min_baseline_rollups` separately
+from session count, since rollup volume can lag session volume.
 
-**Complexity:** small-medium. 1 PR.
+**Files (as shipped):** `harness/analytics.py`, `harness/cmd_drift.py`,
+`harness/trace_bridge.py` (added `outcome_quality` /
+`memory_influence` / `recall_events` to reflection frontmatter).
 
-**Dependencies:** SessionStore (have it).
-
-**Risks:** alert noise — baseline tuning matters. Start advisory only.
+**Status:** advisory-only — no auto-suppression of the harness loop on
+drift. Tune thresholds from real data before considering enforcement.
 
 ### Theme D — Safety and governance
 

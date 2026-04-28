@@ -635,6 +635,16 @@ def _render_reflection(
     elif stats.error_count > stats.tool_call_count * 0.25:
         outcome = "high error rate"
 
+    # Surface the classification on the frontmatter as well as the rendered
+    # body. The drift analyzer (C4) reads the SessionStore-derived twin in
+    # ``analytics.classify_outcome_quality``; keeping the field here means
+    # future LLM-authored reflections can override it at write time and the
+    # drift signal automatically picks the new value up if it ever switches
+    # to reading reflection.md.
+    fm["outcome_quality"] = outcome
+    fm["memory_influence"] = influence
+    fm["recall_events"] = len(memory.recall_events)
+
     body_lines = [
         "# Session Reflection",
         "",
