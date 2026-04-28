@@ -28,20 +28,21 @@ sequencing is the recommendation that matters most.
 provenance/versioning layer, the integration seam (PRs #15–#19) between
 the harness loop, the workspace, and Engram memory.
 
-**Status as of 2026-04-27.** Of the contemporary-practice gaps this
+**Status as of 2026-04-28.** Of the contemporary-practice gaps this
 document identified at the start of April 2026, the following have shipped:
-A1 (hybrid retrieval), A3 (link graph), A4 (sleep-time consolidate), A5
-(promotion/decay lifecycle), A6 (recall observability), B1 (subagents),
-B4 (durable interrupt + resume), B5 (result-aware loop detection), C1 (OTel
+A1 (hybrid retrieval), A2 (bi-temporal facts + invalidation), A3 (link
+graph), A4 (sleep-time consolidate), A5 (promotion/decay lifecycle), A6
+(recall observability), B1 (subagents), B2 (tiered context compaction —
+all three layers), B3 (code-as-action sandboxed Python tool), B4
+(durable interrupt + resume), B5 (result-aware loop detection), C1 (OTel
 GenAI conformance), C2 (eval harness skeleton), C3 (replay mode), C4 (drift
-detection). System-prompt template extraction (system-prompt-improvements-plan.md)
-also shipped end-to-end. 12 of 19 themes complete.
+detection), D1 (two-layer prompt-injection defense), D2 (human-in-the-loop
+approval). System-prompt template extraction
+(system-prompt-improvements-plan.md) also shipped end-to-end. 18 of 19
+themes complete.
 
-**What's left** (open at the time of this update): A2 (bi-temporal facts +
-invalidation), B2 (tiered context compaction), B3 (code-as-action tool),
-D1 (two-layer prompt-injection defense), D2 (async human-in-the-loop), E1
-(DSPy/GEPA prompt optimization). Per-theme detail and updated sequencing
-follow.
+**What's left** (open at the time of this update): E1 (DSPy/GEPA prompt
+optimization). Per-theme detail follows.
 
 ---
 
@@ -348,7 +349,7 @@ nested spans.
 **Risks:** infinite recursion (fix: depth bound); cost blowup (fix:
 budget tracking propagates to subagents).
 
-#### B2. Tiered context compaction (in-loop, not just session-end) — **Layer 1 + Layer 2 shipped, Layer 3 deferred**
+#### B2. Tiered context compaction (in-loop, not just session-end) — **all three layers shipped**
 
 **Why.** Claude Code's compaction pipeline is multi-stage: per-tool
 output budget cap → trim old turns → microcompact → semantic compact

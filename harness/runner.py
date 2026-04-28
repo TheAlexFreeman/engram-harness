@@ -97,6 +97,9 @@ def _run_subtask(
             compaction_input_token_threshold=getattr(
                 config, "compaction_input_token_threshold", None
             ),
+            full_compaction_input_token_threshold=getattr(
+                config, "full_compaction_input_token_threshold", None
+            ),
         )
     tracer.event(
         "sub_session_end",
@@ -292,6 +295,9 @@ def run_batch(args: "argparse.Namespace", components: "SessionComponents"):
             max_tool_calls=getattr(config, "max_tool_calls", None),
             compaction_input_token_threshold=getattr(
                 config, "compaction_input_token_threshold", None
+            ),
+            full_compaction_input_token_threshold=getattr(
+                config, "full_compaction_input_token_threshold", None
             ),
         )
 

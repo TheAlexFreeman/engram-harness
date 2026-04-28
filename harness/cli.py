@@ -277,6 +277,19 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--full-compaction-input-token-threshold",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "B2 Layer 3: when a model call's input_tokens exceeds N, replace "
+            "the bulk of the conversation with a single summary. Reserved for "
+            "the high-water mark — recommended at ~90%% of context. 0 / unset "
+            "disables. Falls back to the HARNESS_FULL_COMPACTION_INPUT_TOKEN_THRESHOLD "
+            "env var when omitted."
+        ),
+    )
+    parser.add_argument(
         "--injection-classifier-model",
         type=str,
         default=None,

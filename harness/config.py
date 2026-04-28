@@ -65,6 +65,13 @@ class SessionConfig:
     # for 1M Opus). Defaults to None so the loop falls through to the
     # ``HARNESS_COMPACTION_INPUT_TOKEN_THRESHOLD`` env var.
     compaction_input_token_threshold: int | None = None
+    # B2 Layer 3: at this (higher) threshold, do a full-conversation
+    # compact — replace the bulk of the conversation with a single
+    # comprehensive summary. Reserved for the genuine high-water mark.
+    # Recommended at ~90% of context (e.g. 180k for 200k Sonnet, 900k
+    # for 1M Opus). Falls through to
+    # ``HARNESS_FULL_COMPACTION_INPUT_TOKEN_THRESHOLD`` env var.
+    full_compaction_input_token_threshold: int | None = None
     # D1 Layer 2: prompt-injection classifier model. None / "" disables;
     # falls through to ``HARNESS_INJECTION_CLASSIFIER_MODEL`` env var.
     # Recommended: a Haiku-class model — verdicts are short JSON.
@@ -236,6 +243,9 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         tool_pattern_guard_window=getattr(args, "tool_pattern_guard_window", 12),
         error_recall_threshold=getattr(args, "error_recall_threshold", 0),
         compaction_input_token_threshold=getattr(args, "compaction_input_token_threshold", None),
+        full_compaction_input_token_threshold=getattr(
+            args, "full_compaction_input_token_threshold", None
+        ),
         injection_classifier_model=getattr(args, "injection_classifier_model", None),
         injection_classifier_threshold=getattr(args, "injection_classifier_threshold", 0.6),
         approval_channel=getattr(args, "approval_channel", None),

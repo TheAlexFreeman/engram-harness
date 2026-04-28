@@ -1,25 +1,35 @@
-"""B2 Layer 2: in-loop context compaction.
+"""B2 Layers 2 + 3: in-loop context compaction.
 
-When a session's input-token count crosses a configured high-water mark,
-the harness summarizes older tool interactions and replaces their
-content with a brief placeholder + a single summary message appended to
-the conversation. The cleanup preserves the tool_use ↔ tool_result
-adjacency the Anthropic API requires (we mutate ``content`` only, never
-remove or reorder messages within compacted pairs).
+Two-tier compaction at the conversation level. When a session's
+input-token count crosses a configured low-water mark, Layer 2
+summarizes older tool interactions and rewrites their tool_result
+contents to a placeholder; the conversation's tool_use ↔ tool_result
+adjacency is preserved (we mutate content only). When the session
+crosses a higher high-water mark, Layer 3 *removes* the bulk of the
+conversation between the original task and the last few turns and
+substitutes a single comprehensive summary user message.
 
 Tier in the B2 stack:
 
 * Layer 1 (per-tool output budget) — sized at dispatch time, lives in
   :mod:`harness.tools.__init__` (``_truncate_tool_output``).
-* Layer 2 (this module) — sized at high-water mark, summarizes the
-  oldest tool_result blocks via a no-tool model call.
-* Layer 3 (deferred) — full conversation compact at 90% capacity.
+* Layer 2 (this module, :func:`maybe_compact`) — sized at the
+  low-water mark, summarizes the oldest tool_result blocks via a
+  no-tool model call.
+* Layer 3 (this module, :func:`maybe_full_compact`) — sized at the
+  high-water mark, replaces the bulk of the conversation with a
+  single comprehensive summary message.
 
-The trigger is opt-in: ``HARNESS_COMPACTION_INPUT_TOKEN_THRESHOLD`` set
-to a positive integer turns it on. Default is disabled (``0``) so
-existing workflows are unaffected; surface a recommended value for the
-target model in docs once the feature has been exercised on real
-sessions.
+Both triggers are opt-in:
+
+* ``HARNESS_COMPACTION_INPUT_TOKEN_THRESHOLD`` for Layer 2 (or the
+  ``--compaction-input-token-threshold`` CLI flag).
+* ``HARNESS_FULL_COMPACTION_INPUT_TOKEN_THRESHOLD`` for Layer 3 (or
+  ``--full-compaction-input-token-threshold``).
+
+Default is disabled (``0``) for both so existing workflows are
+unaffected. Recommended values: ~70%% of context for Layer 2 and
+~90%% for Layer 3.
 """
 
 from __future__ import annotations
@@ -74,6 +84,51 @@ _COMPACTION_PROMPT = (
 )
 
 
+# Layer 3 keeps the original task message + this many recent tool pairs
+# intact. More aggressive than Layer 2 (which keeps DEFAULT_KEEP_RECENT_PAIRS=4
+# pairs) because Layer 3 fires only when the session is genuinely close
+# to its context budget — preserving fewer working-memory turns is a
+# justifiable price for the headroom Layer 3 buys.
+DEFAULT_FULL_KEEP_RECENT_PAIRS = 2
+
+# Cap on the region text we feed the Layer 3 summarizer. Layer 3
+# typically runs on a much larger region than Layer 2 (it's compacting
+# *everything* between the initial task and the last few turns), so the
+# per-pair cap is tighter to keep the prompt under a manageable size.
+_FULL_PER_PAIR_PROMPT_CAP = 2000
+
+_FULL_COMPACTION_PROMPT = (
+    "You are doing a deep compaction of an agent session that has nearly "
+    "filled its context budget. Below is the bulk of the conversation "
+    "between the original user task and the most recent few turns; "
+    "everything in this region will be replaced with your summary, so "
+    "be thorough about *what the agent must not forget* to keep working "
+    "on the task.\n\n"
+    "Write a structured summary (under 1000 words). Include these sections "
+    "as appropriate:\n\n"
+    "## Goal\n"
+    "What the user originally asked for, in one sentence.\n\n"
+    "## Progress\n"
+    "What has been accomplished. Files written/edited (with paths). "
+    "Major decisions made. Tests run and their results.\n\n"
+    "## Findings\n"
+    "Specific facts the agent learned and may need again: function names, "
+    "identifiers, error messages, version numbers, configuration values, "
+    "API shapes.\n\n"
+    "## Pending\n"
+    "Open questions, partial work, and anything that still needs doing. "
+    "If the agent was mid-edit on a file, name the file and the state.\n\n"
+    "## Cautions\n"
+    "Approaches that didn't work, dead ends to avoid revisiting, and any "
+    "constraints the user expressed.\n\n"
+    "Use concrete language. Prefer specific identifiers over abstractions. "
+    "Drop anything that is *only* useful as conversational history.\n\n"
+    "===== Begin compacted region =====\n\n"
+    "{region_text}\n\n"
+    "===== End compacted region ====="
+)
+
+
 @dataclass
 class CompactionResult:
     """Outcome of a single :func:`maybe_compact` call.
@@ -96,6 +151,14 @@ class CompactionResult:
 
 def _env_threshold() -> int:
     raw = os.environ.get("HARNESS_COMPACTION_INPUT_TOKEN_THRESHOLD", "0")
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        return 0
+
+
+def _env_full_threshold() -> int:
+    raw = os.environ.get("HARNESS_FULL_COMPACTION_INPUT_TOKEN_THRESHOLD", "0")
     try:
         return max(int(raw), 0)
     except ValueError:
@@ -389,6 +452,212 @@ def maybe_compact(
     return CompactionResult(
         triggered=True,
         pairs_compacted=len(fresh_pairs),
+        summary_chars=len(summary_text),
+        chars_before=chars_before,
+        chars_after=chars_after,
+        usage=usage,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Layer 3: full conversation compact at high-water mark
+# ---------------------------------------------------------------------------
+
+
+# Sentinel content for a Layer 3 summary message — distinct from
+# COMPACTED_PLACEHOLDER so future compactions can tell which tier
+# previously ran. Layer 3 produces a single new user message; that
+# message's content carries the marker.
+FULL_COMPACTED_BANNER = "[harness full compaction summary]"
+
+
+def _full_summary_message(summary_text: str) -> dict[str, Any]:
+    """Wrap the layer-3 summary in a user-role message with a clear banner."""
+    body = (
+        f"{FULL_COMPACTED_BANNER} The bulk of the prior conversation between "
+        "the original task and the recent few turns was compacted because "
+        "the session was approaching its context budget. Use this summary "
+        "as the canonical record of progress so far; the original messages "
+        "have been removed.\n\n"
+        f"{summary_text.strip()}"
+    )
+    return {"role": "user", "content": body}
+
+
+def _build_message_chunk(msg: dict[str, Any], cap: int) -> str:
+    """Render a single message (any role) as plain text for the layer-3 prompt.
+
+    Differs from :func:`_build_pair_chunk` in that we may render
+    standalone messages (not just tool pairs): user-text nudges,
+    assistant-text-only turns, and tool_result messages whose
+    ``content`` is already a placeholder from a prior Layer 2 pass.
+    """
+    role = msg.get("role", "?")
+    content = msg.get("content")
+
+    parts: list[str] = []
+    if isinstance(content, str):
+        parts.append(f"{role.capitalize()}: {content}")
+    elif isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "text":
+                parts.append(f"{role.capitalize()}: {block.get('text', '')}")
+            elif btype == "tool_use":
+                args_blob = json.dumps(block.get("input", {}), default=str, sort_keys=True)
+                parts.append(
+                    f"{role.capitalize()} tool call: {block.get('name', '?')}({args_blob})"
+                )
+            elif btype == "tool_result":
+                text = _extract_text_from_block_content(block.get("content", ""))
+                tag = "Tool error" if block.get("is_error") else "Tool result"
+                parts.append(f"{tag}: {text}")
+    chunk = "\n".join(parts)
+    if len(chunk) <= cap:
+        return chunk
+    head = chunk[: cap - 200]
+    tail = chunk[-150:]
+    return f"{head}\n[... {len(chunk) - cap} chars elided ...]\n{tail}"
+
+
+def _has_full_compaction_summary(messages: list[dict[str, Any]]) -> bool:
+    """Return whether any user-text message already carries the L3 banner."""
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str) and FULL_COMPACTED_BANNER in content:
+            return True
+    return False
+
+
+def maybe_full_compact(
+    messages: list[dict[str, Any]],
+    mode: Mode,
+    tracer: TraceSink,
+    *,
+    input_tokens: int,
+    threshold_tokens: int | None = None,
+    keep_recent_pairs: int = DEFAULT_FULL_KEEP_RECENT_PAIRS,
+    pricing: PricingTable | None = None,
+) -> CompactionResult:
+    """B2 Layer 3: full conversation compact.
+
+    More aggressive than Layer 2. Where Layer 2 rewrites tool_result
+    contents but keeps the conversation structure intact, Layer 3
+    *removes* the bulk of the conversation and replaces it with a
+    single comprehensive summary. The trade-off: cheaper subsequent
+    turns at the cost of losing the model's ability to drill into
+    older message detail. Reserved for the genuine high-water mark.
+
+    Mutates ``messages`` in place when triggered.
+
+    Skips silently when:
+
+    * the threshold is disabled (``0`` or unset)
+    * ``input_tokens`` hasn't crossed the threshold
+    * there are not enough older tool pairs (must have more than
+      ``keep_recent_pairs``) to compact
+    * a Layer 3 summary already exists (idempotent — re-running this
+      pass on a partly-compacted conversation is a no-op)
+    * the mode doesn't implement ``reflect``
+    * the summarization model call fails (caller never fails because
+      compaction failed)
+
+    Layer-2 placeholder rows inside the compacted region are dropped
+    along with their pair messages — the new summary supersedes them
+    so they no longer pull weight in the kept conversation.
+    """
+    threshold = threshold_tokens if threshold_tokens is not None else _env_full_threshold()
+    if threshold <= 0:
+        return CompactionResult(triggered=False, skipped_reason="disabled")
+    if input_tokens < threshold:
+        return CompactionResult(triggered=False, skipped_reason="below_threshold")
+
+    if _has_full_compaction_summary(messages):
+        return CompactionResult(triggered=False, skipped_reason="already_full_compacted")
+
+    pairs = _find_tool_pairs(messages)
+    if len(pairs) <= keep_recent_pairs:
+        return CompactionResult(triggered=False, skipped_reason="not_enough_pairs")
+
+    # Region: from index 1 (right after the original user task at
+    # index 0) up to the message just before the first kept pair's
+    # assistant message.
+    first_kept_pair = pairs[-keep_recent_pairs]
+    region_start = 1
+    region_end = first_kept_pair[0]  # exclusive
+    if region_start >= region_end:
+        return CompactionResult(triggered=False, skipped_reason="nothing_to_compact")
+
+    reflect_fn = getattr(mode, "reflect", None)
+    if reflect_fn is None:
+        return CompactionResult(triggered=False, skipped_reason="mode_no_reflect")
+
+    region_indices = list(range(region_start, region_end))
+    chars_before = _measure_chars(messages, region_indices)
+
+    region_chunks: list[str] = []
+    for idx, mi in enumerate(region_indices, start=1):
+        chunk = _build_message_chunk(messages[mi], cap=_FULL_PER_PAIR_PROMPT_CAP)
+        if not chunk:
+            continue
+        region_chunks.append(f"--- Message {idx} ---\n{chunk}")
+    region_text = "\n\n".join(region_chunks)
+    prompt = _FULL_COMPACTION_PROMPT.format(region_text=region_text)
+
+    tracer.event(
+        "full_compaction_start",
+        messages_compacted=len(region_indices),
+        input_tokens=input_tokens,
+        threshold=threshold,
+        chars_before=chars_before,
+    )
+
+    try:
+        text, raw_usage = reflect_fn([], prompt)
+    except Exception as exc:  # noqa: BLE001
+        tracer.event(
+            "full_compaction_error",
+            error=type(exc).__name__,
+            message=str(exc)[:200],
+        )
+        return CompactionResult(
+            triggered=False,
+            skipped_reason="reflect_failed",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+    summary_text = (text or "").strip()
+    if not summary_text:
+        tracer.event("full_compaction_error", error="empty_summary")
+        return CompactionResult(triggered=False, skipped_reason="empty_summary")
+
+    if pricing is None:
+        pricing = load_pricing()
+    usage = compute_cost(raw_usage, pricing)
+
+    summary_msg = _full_summary_message(summary_text)
+
+    # Atomic edit: slice out the region and insert the summary.
+    messages[region_start:region_end] = [summary_msg]
+
+    chars_after = len(summary_msg["content"])
+
+    tracer.event(
+        "full_compaction_complete",
+        messages_compacted=len(region_indices),
+        summary_chars=len(summary_text),
+        chars_before=chars_before,
+        chars_after=chars_after,
+        **usage.as_trace_dict(),
+    )
+
+    return CompactionResult(
+        triggered=True,
+        pairs_compacted=len(region_indices),
         summary_chars=len(summary_text),
         chars_before=chars_before,
         chars_after=chars_after,

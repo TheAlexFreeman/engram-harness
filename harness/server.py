@@ -311,6 +311,9 @@ def _run_session(session: ManagedSession) -> None:
             compaction_input_token_threshold=getattr(
                 session.config, "compaction_input_token_threshold", None
             ),
+            full_compaction_input_token_threshold=getattr(
+                session.config, "full_compaction_input_token_threshold", None
+            ),
             pause_handle=session.components.pause_handle,
         )
         session.result = result
@@ -405,6 +408,9 @@ def _run_interactive_session(session: ManagedSession) -> None:
                 max_tool_calls=rem_t,
                 compaction_input_token_threshold=getattr(
                     config, "compaction_input_token_threshold", None
+                ),
+                full_compaction_input_token_threshold=getattr(
+                    config, "full_compaction_input_token_threshold", None
                 ),
             )
 
@@ -859,6 +865,7 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         tool_pattern_guard_window=req.tool_pattern_guard_window,
         error_recall_threshold=req.error_recall_threshold,
         compaction_input_token_threshold=req.compaction_input_token_threshold,
+        full_compaction_input_token_threshold=req.full_compaction_input_token_threshold,
         stream=req.stream,
         trace_live=req.trace_live,
         trace_to_engram=req.trace_to_engram,

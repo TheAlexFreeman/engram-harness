@@ -21,9 +21,12 @@ from typing import Any
 
 from harness.compaction import (
     COMPACTED_PLACEHOLDER,
+    FULL_COMPACTED_BANNER,
     _find_tool_pairs,
+    _has_full_compaction_summary,
     _is_already_compacted,
     maybe_compact,
+    maybe_full_compact,
 )
 from harness.tests.test_parallel_tools import (
     RecordingMemory,
@@ -567,3 +570,216 @@ def test_loop_invokes_compaction_and_folds_cost():
     # reflect returns input_tokens=300, output_tokens=80, summed across
     # however many compactions fired.
     assert result.usage.input_tokens >= 300
+
+
+# ---------------------------------------------------------------------------
+# B2 Layer 3 — full conversation compact
+# ---------------------------------------------------------------------------
+
+
+def test_full_compact_disabled_when_threshold_zero():
+    msgs = _build_messages(num_pairs=10)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    result = maybe_full_compact(msgs, mode, tracer, input_tokens=999_999, threshold_tokens=0)
+    assert result.triggered is False
+    assert result.skipped_reason == "disabled"
+    assert mode.reflect_calls == []
+
+
+def test_full_compact_skips_below_threshold():
+    msgs = _build_messages(num_pairs=10)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    result = maybe_full_compact(msgs, mode, tracer, input_tokens=10_000, threshold_tokens=100_000)
+    assert result.triggered is False
+    assert result.skipped_reason == "below_threshold"
+
+
+def test_full_compact_replaces_bulk_with_summary():
+    """Layer 3 *removes* the bulk of the conversation, replacing it
+    with a single user-role summary message. The original task at
+    index 0 and the last K pairs survive."""
+    msgs = _build_messages(num_pairs=10, content_size=400)
+    pre_count = len(msgs)
+    pre_pairs = _find_tool_pairs(msgs)
+    assert len(pre_pairs) == 10
+
+    mode = _SummarizingMode(
+        summary_text=(
+            "## Goal\nFix the bug.\n"
+            "## Progress\nRead 6 files; identified root cause.\n"
+            "## Pending\nWrite the fix and run tests.\n"
+        )
+    )
+    tracer = _RecordingTracer()
+    result = maybe_full_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=2,
+    )
+
+    assert result.triggered is True
+    assert result.summary_chars > 0
+
+    # The conversation shrunk: original task + summary + last 2 pairs.
+    # = 1 + 1 + 4 = 6 messages.
+    pairs_after = _find_tool_pairs(msgs)
+    assert len(pairs_after) == 2  # only the last 2 pairs preserved
+    # First message is still the original user task.
+    assert msgs[0]["content"] == "do the task"
+    # Second message is the summary banner.
+    assert msgs[1]["role"] == "user"
+    assert FULL_COMPACTED_BANNER in msgs[1]["content"]
+    assert "## Goal" in msgs[1]["content"]
+    # And we shrunk overall.
+    assert len(msgs) < pre_count
+
+
+def test_full_compact_idempotent_when_summary_already_present():
+    msgs = _build_messages(num_pairs=10, content_size=200)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    r1 = maybe_full_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=2,
+    )
+    assert r1.triggered is True
+
+    # Even if input_tokens is still way over threshold, a second pass
+    # should detect the existing summary and skip.
+    r2 = maybe_full_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=2,
+    )
+    assert r2.triggered is False
+    assert r2.skipped_reason == "already_full_compacted"
+    # The mode's reflect was called only once.
+    assert len(mode.reflect_calls) == 1
+
+
+def test_full_compact_skips_when_too_few_pairs():
+    msgs = _build_messages(num_pairs=2)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    result = maybe_full_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=2,
+    )
+    assert result.triggered is False
+    assert result.skipped_reason == "not_enough_pairs"
+
+
+def test_full_compact_skips_when_mode_lacks_reflect():
+    msgs = _build_messages(num_pairs=10)
+    mode = _NoReflectMode()
+    tracer = _RecordingTracer()
+    result = maybe_full_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=2,
+    )
+    assert result.triggered is False
+    assert result.skipped_reason == "mode_no_reflect"
+
+
+def test_full_compact_traces_lifecycle_events():
+    msgs = _build_messages(num_pairs=10, content_size=200)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    maybe_full_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=2,
+    )
+    kinds = [k for k, _ in tracer.events]
+    assert "full_compaction_start" in kinds
+    assert "full_compaction_complete" in kinds
+
+
+def test_full_compact_handles_empty_summary_gracefully():
+    msgs = _build_messages(num_pairs=10, content_size=200)
+    mode = _SummarizingMode(summary_text="   ")
+    tracer = _RecordingTracer()
+    result = maybe_full_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=2,
+    )
+    assert result.triggered is False
+    assert result.skipped_reason == "empty_summary"
+
+
+def test_has_full_compaction_summary_detects_marker():
+    msgs = [
+        {"role": "user", "content": "task"},
+        {
+            "role": "user",
+            "content": f"{FULL_COMPACTED_BANNER} prior session compacted...",
+        },
+    ]
+    assert _has_full_compaction_summary(msgs) is True
+
+    msgs2 = [{"role": "user", "content": "task"}]
+    assert _has_full_compaction_summary(msgs2) is False
+
+
+def test_full_compact_env_var_threshold(monkeypatch):
+    monkeypatch.setenv("HARNESS_FULL_COMPACTION_INPUT_TOKEN_THRESHOLD", "50000")
+    msgs = _build_messages(num_pairs=10, content_size=200)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    # threshold_tokens=None → consult the env var.
+    result = maybe_full_compact(msgs, mode, tracer, input_tokens=100_000, threshold_tokens=None)
+    assert result.triggered is True
+
+
+def test_full_compact_reflect_failure_swallowed():
+    msgs = _build_messages(num_pairs=10, content_size=200)
+    mode = _ExplodingReflectMode()
+    tracer = _RecordingTracer()
+    result = maybe_full_compact(msgs, mode, tracer, input_tokens=200_000, threshold_tokens=100_000)
+    assert result.triggered is False
+    assert result.skipped_reason == "reflect_failed"
+    kinds = [k for k, _ in tracer.events]
+    assert "full_compaction_error" in kinds
+
+
+def test_full_compact_preserves_initial_task_message():
+    msgs = _build_messages(num_pairs=10, content_size=200)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    maybe_full_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=2,
+    )
+    # The original user task at index 0 is untouched.
+    assert msgs[0] == {"role": "user", "content": "do the task"}
