@@ -102,39 +102,41 @@ a contributor could pick one up cold."
 
 ### Theme A — Memory infrastructure
 
-#### A1. Hybrid retrieval (BM25 + semantic + cheap reranker)
+#### A1. Hybrid retrieval (BM25 + semantic + cheap reranker) — **shipped, with helpfulness re-rank follow-on**
 
 **Why.** Every benchmarked memory system in 2025 — mem0, Graphiti, Cognee,
 LangGraph LangMem — runs hybrid retrieval as the default. Pure semantic
 similarity is a known failure mode (the "semantic-causal mismatch"
 problem: finds similar-looking but irrelevant content). Our
 [harness/_engram_fs/embedding_index.py](../harness/_engram_fs/embedding_index.py)
-is semantic-only with a keyword fallback when `sentence-transformers` is
-absent — but no fusion, no rerank.
+was semantic-only with a keyword fallback — no fusion, no rerank.
 
-**Proposed shape.**
-1. Add a BM25 index alongside the embedding index. Either `rank_bm25`
-   (small dep) or a hand-rolled IDF-weighted scorer. Sidecar storage:
-   `<namespace>/_bm25.jsonl` with `{file, term, tf}` rows, refreshed on
-   commit (best-effort).
-2. Modify `EngramMemory.recall` to run semantic + BM25 in parallel,
-   fuse via reciprocal rank fusion (RRF).
-3. Optional second stage: cheap reranker. Cohere Rerank is the obvious
-   choice but adds a paid dep; alternative is a tiny cross-encoder
-   (`ms-marco-MiniLM-L-6-v2`) loaded lazily.
-4. Expose retrieval candidates with scores + provenance in the trace
-   (so we can later answer "why did we miss X?" — see A6).
+**Shipped.**
+- ✅ BM25 index alongside the embedding index
+  ([bm25_index.py](../harness/_engram_fs/bm25_index.py)) with reciprocal
+  rank fusion. EngramMemory.recall runs both in parallel and fuses.
+- ✅ Retrieval candidates exposed with scores + provenance via A6
+  (recall_candidates.jsonl + `harness recall-debug`).
+- ✅ **Helpfulness-weighted re-rank** as a third blend stage. The trace
+  bridge has been writing per-recall helpfulness scores into ACCESS.jsonl
+  for months; A1 follow-on closes the loop by reweighting RRF candidates
+  by their historical mean helpfulness from A5's `aggregate_access`.
+  Multiplicative blend: `score × (0.5 + clamp(mean_helpfulness, 0, 1))`.
+  Files with no ACCESS history default to neutral (1.0× = identity), so
+  early-corpus sessions are unaffected. Enabled by default; disable with
+  `HARNESS_HELPFULNESS_RERANK=0`. Lives at
+  [helpfulness_index.py](../harness/_engram_fs/helpfulness_index.py).
 
-**Files:** `harness/_engram_fs/embedding_index.py`,
-`harness/engram_memory.py`, new `harness/_engram_fs/bm25_index.py`.
-
-**Complexity:** medium. ~2 PRs (BM25 + fusion in one; reranker in two).
-
-**Dependencies:** none for BM25; optional rerank model. Both lazy-imported
-to preserve graceful-degradation.
-
-**Risks:** index staleness (commits invalidate BM25 sidecars); rerank
-latency. Both have known mitigations.
+**Deferred (follow-on PRs, not blocking the current shipped state):**
+- Cross-encoder reranker (`ms-marco-MiniLM-L-6-v2` or similar). The
+  helpfulness re-rank covers the most valuable axis of "what gets
+  reordered" using data we already have; the cross-encoder would catch
+  semantic-causal mismatches the helpfulness signal can't see.
+- Per-task helpfulness (ACCESS rows carry `task`; the rerank could weight
+  files helpful for *similar* tasks higher). Needs a query→task-slug
+  similarity function.
+- Time-decayed helpfulness (recent helpfulness weighted more than
+  ancient). Could reuse A5's `decay_factor`.
 
 #### A2. Bi-temporal facts + invalidation (don't delete; supersede)
 

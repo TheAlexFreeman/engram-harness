@@ -287,6 +287,11 @@ class EngramMemory:
         # BM25 backend always available (pure Python). Index is built lazily
         # on first recall so loading EngramMemory stays cheap.
         self._bm25_index = None
+        # A1 follow-on: per-session helpfulness index. Built once on first
+        # recall (~5-20 ms) by aggregating ACCESS.jsonl across all search
+        # scopes; reused for the rest of the session. Stays None when the
+        # rerank is disabled so we don't pay the build cost.
+        self._helpfulness_index = None
 
     # ------------------------------------------------------------------
     # Session lifecycle (the protocol)
@@ -359,18 +364,41 @@ class EngramMemory:
         bm25_hits = self._bm25_recall(q, k=k, scopes=scopes)
         keyword_hits: list[dict[str, Any]] = []
 
+        # A1 follow-on: collect 2× the requested results pre-rerank so the
+        # helpfulness blend has room to actually reorder; clamp to ``k``
+        # after the rerank below. With the rerank disabled the loose slice
+        # is harmless — RRF order is preserved and we still ``[:k]`` at the
+        # end.
+        rerank_pool = max(k * 2, k)
+
         if not sem_hits and not bm25_hits:
             # Last-resort: density-scored keyword scan over .md files. Used
             # when the BM25 index is empty (fresh repo) or fails entirely.
             keyword_hits = self._keyword_recall(q, k=k, scopes=scopes)
             hits = list(keyword_hits)
         elif not sem_hits:
-            hits = bm25_hits[:k]
+            hits = bm25_hits[:rerank_pool]
         elif not bm25_hits:
-            hits = sem_hits[:k]
+            hits = sem_hits[:rerank_pool]
         else:
-            hits = reciprocal_rank_fusion([sem_hits, bm25_hits])[:k]
+            hits = reciprocal_rank_fusion([sem_hits, bm25_hits])[:rerank_pool]
 
+        # A1 follow-on: helpfulness re-rank. Reweights each candidate's
+        # score by its historical mean helpfulness from ACCESS.jsonl, then
+        # re-sorts. Files with no ACCESS history default to neutral, so
+        # this is a no-op on early-corpus sessions. Disable with
+        # ``HARNESS_HELPFULNESS_RERANK=0``.
+        from harness._engram_fs.helpfulness_index import helpfulness_rerank_enabled
+
+        if helpfulness_rerank_enabled() and hits:
+            # RRF attaches ``rrf_score``; backend ``score`` columns mix semantic
+            # and BM25 scales — blend using ``rrf_score`` only when fusion ran.
+            fused_hybrid = bool(sem_hits and bm25_hits)
+            self._get_helpfulness_index().rerank(
+                hits, score_key="rrf_score" if fused_hybrid else "score"
+            )
+
+        hits = hits[:k]
         returned_paths = {h["file_path"] for h in hits}
         self._capture_recall_candidates(
             query=q,
@@ -1113,6 +1141,29 @@ class EngramMemory:
 
             self._bm25_index = BM25Index(self.repo.root, self.content_root)
         return self._bm25_index
+
+    def _get_helpfulness_index(self):
+        """Build (or return cached) the per-session helpfulness index.
+
+        Aggregates ACCESS.jsonl across all search scopes once per session
+        (~5-20 ms cold). Reused for the rest of the session — new ACCESS
+        rows land at end-of-session via the trace bridge, so within a
+        session the index is stable.
+
+        Passes ``content_prefix`` so the index strips the ``core/`` (or
+        ``engram/core/``) prefix the trace bridge writes into ACCESS rows,
+        leaving keys like ``memory/knowledge/foo.md`` that match what
+        ``recall`` hits carry on their ``file_path`` field.
+        """
+        if self._helpfulness_index is None:
+            from harness._engram_fs.helpfulness_index import build_helpfulness_index
+
+            self._helpfulness_index = build_helpfulness_index(
+                self.content_root,
+                namespaces=_SEARCH_SCOPES,
+                content_prefix=self.content_prefix,
+            )
+        return self._helpfulness_index
 
     def _bm25_recall(
         self, query: str, *, k: int, scopes: tuple[str, ...] = _SEARCH_SCOPES
