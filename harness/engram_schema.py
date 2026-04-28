@@ -18,9 +18,7 @@ SEARCH_SCOPES: tuple[str, ...] = (
     "memory/activity",
 )
 
-PROMPT_RECALL_NAMESPACES: frozenset[str] = frozenset(
-    {"knowledge", "skills", "activity", "users"}
-)
+PROMPT_RECALL_NAMESPACES: frozenset[str] = frozenset({"knowledge", "skills", "activity", "users"})
 
 ACCESS_TRACKED_ROOTS: tuple[str, ...] = (
     "memory/users",

@@ -20,9 +20,7 @@ def test_namespace_sets_preserve_intentional_differences() -> None:
 
 
 def test_strip_content_prefix_normalizes_git_root_relative_paths() -> None:
-    assert strip_content_prefix("core/memory/knowledge/x.md", "core") == (
-        "memory/knowledge/x.md"
-    )
+    assert strip_content_prefix("core/memory/knowledge/x.md", "core") == ("memory/knowledge/x.md")
     assert strip_content_prefix("./engram/core/memory/skills/s.md", "engram/core") == (
         "memory/skills/s.md"
     )
@@ -33,8 +31,6 @@ def test_strip_content_prefix_normalizes_git_root_relative_paths() -> None:
 
 def test_access_namespace_uses_shared_tracked_roots() -> None:
     assert access_namespace("core/memory/knowledge/x.md", "core") == "memory/knowledge"
-    assert access_namespace("memory/activity/2026/04/28/act-001/summary.md") == (
-        "memory/activity"
-    )
+    assert access_namespace("memory/activity/2026/04/28/act-001/summary.md") == ("memory/activity")
     assert access_namespace("memory/working/CURRENT.md") is None
     assert access_namespace("workspace/CURRENT.md") is None

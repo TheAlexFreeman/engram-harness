@@ -231,7 +231,9 @@ def test_run_trace_bridge_minimal_session(repo: Path, memory: EngramMemory, tmp_
     assert rec["session_id"] == f"core/{memory._session_dir_rel()}"
 
 
-def test_memory_review_writes_access_entry(repo: Path, memory: EngramMemory, tmp_path: Path) -> None:
+def test_memory_review_writes_access_entry(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
     trace = tmp_path / "trace.jsonl"
     ts = _now_iso()
     events: list[dict] = [

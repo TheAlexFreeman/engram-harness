@@ -578,6 +578,7 @@ def main() -> None:
     paused_result = None
     try:
         if args.interactive:
+
             def _on_interactive_pause(result, task_text: str) -> None:
                 nonlocal paused_result
                 paused_result = result
