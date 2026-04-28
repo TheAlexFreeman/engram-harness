@@ -73,6 +73,17 @@ class SessionConfig:
     # the warning prefix on the wrapped tool output. Trace events still
     # record sub-threshold verdicts for audit.
     injection_classifier_threshold: float = 0.6
+    # D2: approval channel for high-blast-radius tool dispatches. ``None``
+    # / ``"none"`` disables (the dispatch boundary auto-runs every tool).
+    # ``"cli"`` prompts on stderr/stdin; ``"webhook"`` posts to a URL
+    # configured via ``approval_webhook_url`` and polls for a decision.
+    approval_channel: str | None = None
+    approval_webhook_url: str | None = None
+    approval_timeout_sec: float = 300.0
+    # Tools whose dispatches always require approval, regardless of the
+    # tool's class attribute. Useful for opting in third-party tools that
+    # don't declare ``requires_approval``.
+    approval_gated_tools: list[str] = field(default_factory=list)
 
     # Streaming / tracing
     stream: bool = True
@@ -227,6 +238,10 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         compaction_input_token_threshold=getattr(args, "compaction_input_token_threshold", None),
         injection_classifier_model=getattr(args, "injection_classifier_model", None),
         injection_classifier_threshold=getattr(args, "injection_classifier_threshold", 0.6),
+        approval_channel=getattr(args, "approval_channel", None),
+        approval_webhook_url=getattr(args, "approval_webhook_url", None),
+        approval_timeout_sec=getattr(args, "approval_timeout_sec", 300.0),
+        approval_gated_tools=list(getattr(args, "approval_gated_tools", None) or []),
         stream=args.stream,
         stream_max_block_chars=getattr(args, "stream_max_block_chars", 4000),
         trace_live=args.trace_live,
@@ -609,6 +624,7 @@ def build_session(
     )
 
     _wire_injection_classifier(config, tracer=tracer)
+    _wire_approval_channel(config, tracer=tracer)
 
     return SessionComponents(
         mode=mode,
@@ -775,3 +791,65 @@ def _wire_injection_classifier(config: SessionConfig, *, tracer: Any) -> None:
             pass
 
     set_injection_classifier(classifier, threshold=threshold, on_classify=_on_classify)
+
+
+def _wire_approval_channel(config: SessionConfig, *, tracer: Any) -> None:
+    """Install (or clear) the human-in-the-loop approval channel for this session.
+
+    Picks the channel from (in order): ``config.approval_channel`` →
+    ``HARNESS_APPROVAL_CHANNEL`` env var → disabled. Webhook channels
+    require either ``config.approval_webhook_url`` or
+    ``HARNESS_APPROVAL_WEBHOOK_URL``; without one, the channel is
+    silently disabled rather than mis-configured.
+
+    Wires an ``on_approval`` callback to the session tracer so each
+    decision becomes an ``approval_decision`` trace event for audit.
+    """
+    from harness.safety.approval import build_channel_from_spec, set_approval_channel
+
+    spec = (
+        (
+            getattr(config, "approval_channel", None)
+            or os.environ.get("HARNESS_APPROVAL_CHANNEL")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    if spec in ("", "none", "off"):
+        set_approval_channel(None)
+        return
+
+    webhook_url = getattr(config, "approval_webhook_url", None) or os.environ.get(
+        "HARNESS_APPROVAL_WEBHOOK_URL"
+    )
+    timeout_sec = float(getattr(config, "approval_timeout_sec", 300.0) or 300.0)
+    channel = build_channel_from_spec(spec, webhook_url=webhook_url, timeout_sec=timeout_sec)
+    if channel is None:
+        try:
+            tracer.event(
+                "approval_channel_disabled",
+                reason=f"unrecognised or unconfigured spec: {spec!r}",
+                webhook_url_set=bool(webhook_url),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        set_approval_channel(None)
+        return
+
+    gated = list(getattr(config, "approval_gated_tools", None) or [])
+
+    def _on_approval(tool_name: str, request: Any, decision: Any) -> None:
+        try:
+            tracer.event(
+                "approval_decision",
+                tool=tool_name,
+                approved=bool(getattr(decision, "approved", False)),
+                reason=str(getattr(decision, "reason", "") or "")[:240],
+                error=getattr(decision, "error", None),
+                request_id=getattr(request, "request_id", ""),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    set_approval_channel(channel, gated_tools=gated, on_approval=_on_approval)

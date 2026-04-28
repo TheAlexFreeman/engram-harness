@@ -300,6 +300,48 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--approval-channel",
+        type=str,
+        default=None,
+        choices=["none", "cli", "webhook"],
+        metavar="CHANNEL",
+        help=(
+            "D2: gate high-blast-radius tools behind a human-in-the-loop "
+            "approval step. 'cli' prompts on stderr/stdin synchronously; "
+            "'webhook' posts to --approval-webhook-url and polls. "
+            "Default disabled. Falls back to HARNESS_APPROVAL_CHANNEL env var."
+        ),
+    )
+    parser.add_argument(
+        "--approval-webhook-url",
+        type=str,
+        default=None,
+        metavar="URL",
+        help=(
+            "Endpoint for webhook approval requests. Required when "
+            "--approval-channel=webhook. Falls back to HARNESS_APPROVAL_WEBHOOK_URL."
+        ),
+    )
+    parser.add_argument(
+        "--approval-timeout-sec",
+        type=float,
+        default=300.0,
+        metavar="SECONDS",
+        help=("Webhook poll deadline before falling back to denial. Default 300 (5 minutes)."),
+    )
+    parser.add_argument(
+        "--approval-gate",
+        action="append",
+        default=None,
+        dest="approval_gated_tools",
+        metavar="TOOL",
+        help=(
+            "Tool name that always requires approval (repeatable). Use to gate "
+            "tools that don't ship with requires_approval=True. Example: "
+            "--approval-gate bash --approval-gate write_file."
+        ),
+    )
+    parser.add_argument(
         "--trace-live",
         dest="trace_live",
         action="store_true",

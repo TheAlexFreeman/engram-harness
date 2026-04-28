@@ -6,6 +6,16 @@ holds the heavier model-side and policy-side defenses that compose with
 it.
 """
 
+from harness.safety.approval import (
+    ApprovalChannel,
+    ApprovalDecision,
+    ApprovalRequest,
+    CLIApprovalChannel,
+    WebhookApprovalChannel,
+    build_channel_from_spec,
+    check_approval,
+    set_approval_channel,
+)
 from harness.safety.injection_detector import (
     AnthropicInjectionClassifier,
     InjectionClassifier,
@@ -15,7 +25,15 @@ from harness.safety.injection_detector import (
 
 __all__ = [
     "AnthropicInjectionClassifier",
+    "ApprovalChannel",
+    "ApprovalDecision",
+    "ApprovalRequest",
+    "CLIApprovalChannel",
     "InjectionClassifier",
     "InjectionVerdict",
+    "WebhookApprovalChannel",
+    "build_channel_from_spec",
+    "check_approval",
     "classify_with_safe_fallback",
+    "set_approval_channel",
 ]
