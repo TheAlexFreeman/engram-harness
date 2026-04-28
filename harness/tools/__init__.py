@@ -51,6 +51,56 @@ class Tool(Protocol):
     def run(self, args: dict) -> str: ...
 
 
+# --- Per-tool-result output budget (B2 layer 1) --------------------------
+#
+# Single-tool noise (a long bash log, a verbose web fetch, a deeply nested
+# JSON dump, a Python traceback hundreds of lines deep) is one of the most
+# common ways context gets blown out on long sessions. This is a cheap
+# safety net at the dispatch boundary: any tool result over the budget
+# gets head/tail truncated with a marker stating how many chars were
+# elided.
+#
+# The budget is intentionally generous (~6k tokens at the typical 4-chars-
+# per-token ratio): individual tools already have their own truncation
+# (memory_review caps at 16k, memory_recall at 12k, read_file does its
+# own paging). This is the upper-bound safety net for callers that don't
+# self-cap.
+#
+# Override via the ``HARNESS_TOOL_OUTPUT_BUDGET`` env var; set to ``0`` to
+# disable truncation entirely.
+import os as _os
+
+try:
+    _TOOL_OUTPUT_BUDGET_CHARS = int(_os.environ.get("HARNESS_TOOL_OUTPUT_BUDGET", "24000"))
+except ValueError:
+    _TOOL_OUTPUT_BUDGET_CHARS = 24_000
+
+
+def _truncate_tool_output(tool_name: str, content: str) -> str:
+    """Head/tail truncate a tool result that exceeds the per-tool budget.
+
+    Below the budget the content is returned unchanged. At or above it,
+    the result becomes ``<head><marker><tail>`` where head and tail each
+    take roughly half the budget. The marker spells out how many chars
+    were elided so the model can choose to retry with a narrower call.
+    Disabled when the budget is set to zero.
+    """
+    budget = _TOOL_OUTPUT_BUDGET_CHARS
+    if budget <= 0 or len(content) <= budget:
+        return content
+    overflow = len(content) - budget
+    half = budget // 2
+    head = content[:half]
+    tail = content[-half:] if half > 0 else ""
+    marker = (
+        f"\n\n[harness] tool output truncated — "
+        f"{overflow} of {len(content)} chars elided. "
+        f"Retry {tool_name!r} with a narrower scope (offset/limit, grep filter, head -n) "
+        f"or use a file-producing tool to inspect the full output.\n\n"
+    )
+    return head + marker + tail
+
+
 # --- Untrusted-output marker (D1 layer 1) ---------------------------------
 #
 # Wrapping tool output that came from an external source with explicit
@@ -104,6 +154,11 @@ def execute(call: ToolCall, registry: dict[str, Tool]) -> ToolResult:
     returned content is wrapped with ``<untrusted_tool_output>`` markers
     so the model can distinguish it from harness-trusted text — even
     when the tool returns an error.
+
+    Tool output is then head/tail truncated if it exceeds the per-tool
+    budget (B2 layer 1) — a cheap context-protection safety net for
+    tools that don't self-cap. The truncation runs *after* untrusted
+    wrapping so the marker stays visible.
     """
     tool = registry.get(call.name)
     if tool is None:
@@ -129,6 +184,7 @@ def execute(call: ToolCall, registry: dict[str, Tool]) -> ToolResult:
         content = tool.run(call.args)
         if untrusted:
             content = _wrap_untrusted(call.name, content)
+        content = _truncate_tool_output(call.name, content)
         return ToolResult(call=call, content=content, is_error=False)
     except Exception as e:
         import traceback
@@ -136,4 +192,5 @@ def execute(call: ToolCall, registry: dict[str, Tool]) -> ToolResult:
         content = f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}"
         if untrusted:
             content = _wrap_untrusted(call.name, content)
+        content = _truncate_tool_output(call.name, content)
         return ToolResult(call=call, content=content, is_error=True)
