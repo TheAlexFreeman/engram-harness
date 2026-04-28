@@ -688,10 +688,12 @@ class MemoryLifecycleReview:
         from datetime import date
 
         from harness._engram_fs.trust_decay import (
+            LIFECYCLE_THRESHOLDS_FILENAME,
             CandidateThresholds,
             FileLifecycle,
             compute_lifecycle_view,
             partition_candidates,
+            thresholds_from_yaml,
         )
 
         kind = (args.get("kind") or "both").strip().lower()
@@ -715,7 +717,6 @@ class MemoryLifecycleReview:
             namespaces = _LIFECYCLE_DEFAULT_NAMESPACES
 
         content_root = self._memory.content_root
-        thresholds = CandidateThresholds()
         today = date.today()
 
         promote: list[FileLifecycle] = []
@@ -740,6 +741,17 @@ class MemoryLifecycleReview:
             else:
                 cache_misses.append(ns)
                 view = compute_lifecycle_view(ns_root, today, namespace_rel=ns)
+
+            thresholds_path = ns_root / LIFECYCLE_THRESHOLDS_FILENAME
+            thresholds = CandidateThresholds()
+            if thresholds_path.is_file():
+                try:
+                    raw_yaml = thresholds_path.read_text(encoding="utf-8")
+                except OSError:
+                    raw_yaml = ""
+                parsed = thresholds_from_yaml(raw_yaml)
+                if parsed is not None:
+                    thresholds = parsed
 
             partition = partition_candidates(view, thresholds=thresholds)
             promote.extend(partition.promote)

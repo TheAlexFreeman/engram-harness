@@ -35,6 +35,7 @@ from harness._engram_fs.trust_decay import (
     DEFAULT_PROMOTE_MIN_ACCESSES,
     DEFAULT_PROMOTE_MIN_EFFECTIVE,
     DEFAULT_PROMOTE_MIN_HELPFULNESS,
+    LIFECYCLE_THRESHOLDS_FILENAME,
     CandidatePartition,
     CandidateThresholds,
     FileLifecycle,
@@ -43,6 +44,7 @@ from harness._engram_fs.trust_decay import (
     render_candidates_frontmatter,
     render_candidates_md,
     render_lifecycle_jsonl,
+    thresholds_to_yaml,
 )
 
 _log = logging.getLogger(__name__)
@@ -113,16 +115,32 @@ def _resolve_content_root(memory_repo: str | None) -> Path | None:
 def _build_git_repo(content_root: Path):
     """Open a ``GitRepo`` for the repo containing ``content_root``.
 
-    Mirrors cmd_consolidate's resolution: when the content root sits in a
-    ``core/`` subdirectory, the git repo root is one level up. Returns
+    Uses the same ``content_prefix`` mapping as ``EngramMemory`` (via
+    ``_git_relative_prefix``) so ``git add`` paths match git-root-relative
+    paths (e.g. ``core/memory/...`` under a standard layout). Returns
     ``None`` when git isn't available or initialized — the caller treats that
     as "write only, don't commit."
     """
     try:
-        from harness._engram_fs import GitRepo
+        import subprocess
 
-        target = content_root.parent if content_root.name == "core" else content_root
-        return GitRepo(target)
+        from harness._engram_fs import GitRepo
+        from harness.engram_memory import _git_relative_prefix
+
+        prefix = _git_relative_prefix(content_root)
+        cwd = content_root if content_root.is_dir() else content_root.parent
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            stdin=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            raise ValueError(result.stderr or "git rev-parse failed")
+        git_root = Path(result.stdout.strip()).resolve()
+        return GitRepo(git_root, content_prefix=prefix)
     except Exception as exc:  # noqa: BLE001
         _log.warning("git not available, decay sweep will write only: %s", exc)
         return None
@@ -194,9 +212,11 @@ def _sweep_namespace(
 
     # Lifecycle sidecar — full rewrite of the entire view (gitignored).
     lifecycle_path = namespace_root / _LIFECYCLE_FILENAME
+    thresholds_path = namespace_root / LIFECYCLE_THRESHOLDS_FILENAME
     try:
         lifecycle_text = render_lifecycle_jsonl(view)
         lifecycle_path.write_text(lifecycle_text, encoding="utf-8")
+        thresholds_path.write_text(thresholds_to_yaml(thresholds), encoding="utf-8")
     except OSError as exc:
         outcome.skipped_reason = f"lifecycle write error: {exc}"
         return outcome, view, partition

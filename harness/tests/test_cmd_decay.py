@@ -18,8 +18,12 @@ import pytest
 from harness._engram_fs.frontmatter_utils import read_with_frontmatter, write_with_frontmatter
 from harness._engram_fs.trust_decay import (
     DEFAULT_HALF_LIFE_DAYS,
+    LIFECYCLE_THRESHOLDS_FILENAME,
+    CandidateThresholds,
+    thresholds_from_yaml,
 )
 from harness.cmd_decay import (
+    _build_git_repo,
     sweep,
 )
 
@@ -197,8 +201,31 @@ def test_sweep_writes_lifecycle_and_candidate_files(tmp_path: Path) -> None:
     assert promote_fm.get("kind") == "promote"
     assert promote_fm.get("tool") == "harness-decay-sweep"
 
+    thr_text = (knowledge / LIFECYCLE_THRESHOLDS_FILENAME).read_text(encoding="utf-8")
+    parsed_thr = thresholds_from_yaml(thr_text)
+    assert parsed_thr == CandidateThresholds()
+
     # No commit happened (no git_repo provided).
     assert result.commit_sha is None
+
+
+def test_sweep_writes_threshold_yaml_reflects_custom_thresholds(tmp_path: Path) -> None:
+    content_root = _make_repo(tmp_path)
+    _seed_namespace(content_root)
+    custom = CandidateThresholds(promote_min_accesses=99)
+    sweep(
+        content_root,
+        namespaces=["memory/knowledge"],
+        today=_today(),
+        thresholds=custom,
+        dry_run=False,
+    )
+    ns_root = content_root / "memory" / "knowledge"
+    loaded = thresholds_from_yaml(
+        (ns_root / LIFECYCLE_THRESHOLDS_FILENAME).read_text(encoding="utf-8")
+    )
+    assert loaded is not None
+    assert loaded.promote_min_accesses == 99
 
 
 def test_sweep_removes_stale_candidate_when_no_rows_this_run(tmp_path: Path) -> None:
@@ -296,8 +323,6 @@ def test_sweep_with_only_user_stated_files_writes_nothing(tmp_path: Path) -> Non
 
 
 def test_sweep_commits_when_git_repo_provided(tmp_path: Path) -> None:
-    from harness._engram_fs import GitRepo
-
     repo_root = tmp_path
     content_root = _make_repo(repo_root)
     _seed_namespace(content_root)
@@ -305,7 +330,8 @@ def test_sweep_commits_when_git_repo_provided(tmp_path: Path) -> None:
     subprocess.run(["git", "add", "-A"], cwd=str(repo_root), check=True)
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=str(repo_root), check=True)
 
-    git_repo = GitRepo(repo_root, content_prefix="core")
+    git_repo = _build_git_repo(content_root)
+    assert git_repo is not None
     result = sweep(
         content_root,
         namespaces=["memory/knowledge"],
@@ -336,11 +362,12 @@ def test_sweep_commits_when_git_repo_provided(tmp_path: Path) -> None:
         text=True,
     )
     files_in_commit = {ln.strip() for ln in show.stdout.splitlines() if ln.strip()}
-    # Both candidate files should be committed; the sidecar should not be
+    # Both candidate files should be committed; derived sidecars should not be
     # part of this commit's tree-diff.
     assert any(name.endswith("_promote_candidates.md") for name in files_in_commit)
     assert any(name.endswith("_demote_candidates.md") for name in files_in_commit)
     assert not any(name.endswith("_lifecycle.jsonl") for name in files_in_commit)
+    assert not any(name.endswith("_lifecycle_thresholds.yaml") for name in files_in_commit)
 
 
 # ---------------------------------------------------------------------------
