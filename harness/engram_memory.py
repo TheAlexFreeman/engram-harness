@@ -391,7 +391,12 @@ class EngramMemory:
         from harness._engram_fs.helpfulness_index import helpfulness_rerank_enabled
 
         if helpfulness_rerank_enabled() and hits:
-            self._get_helpfulness_index().rerank(hits)
+            # RRF attaches ``rrf_score``; backend ``score`` columns mix semantic
+            # and BM25 scales — blend using ``rrf_score`` only when fusion ran.
+            fused_hybrid = bool(sem_hits and bm25_hits)
+            self._get_helpfulness_index().rerank(
+                hits, score_key="rrf_score" if fused_hybrid else "score"
+            )
 
         hits = hits[:k]
         returned_paths = {h["file_path"] for h in hits}

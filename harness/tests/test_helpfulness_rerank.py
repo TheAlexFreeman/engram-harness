@@ -137,6 +137,18 @@ def test_rerank_handles_empty_list() -> None:
     assert hits == []
 
 
+def test_rerank_score_key_rrf_preserves_identity_under_neutral_helpfulness() -> None:
+    """Hybrid fusion keeps incomparable backend ``score`` values; neutral
+    helpfulness must reorder only by ``rrf_score``, not raw semantic/BM25."""
+    idx = HelpfulnessIndex(by_path={})
+    hits = [
+        {"file_path": "bm25_heavy.md", "score": 50.0, "rrf_score": 0.02},
+        {"file_path": "semantic_pick.md", "score": 0.01, "rrf_score": 0.05},
+    ]
+    idx.rerank(hits, score_key="rrf_score")
+    assert [h["file_path"] for h in hits] == ["semantic_pick.md", "bm25_heavy.md"]
+
+
 # ---------------------------------------------------------------------------
 # build_helpfulness_index — cross-namespace aggregation
 # ---------------------------------------------------------------------------

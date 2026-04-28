@@ -84,17 +84,23 @@ class HelpfulnessIndex:
             mean = 1.0
         return score * (MULTIPLIER_FLOOR + mean)
 
-    def rerank(self, hits: list[dict]) -> list[dict]:
-        """Reweight each hit's ``score`` field in place and re-sort by it.
+    def rerank(self, hits: list[dict], *, score_key: str = "score") -> list[dict]:
+        """Reweight each hit and re-sort by the blended result.
 
-        Mutates the dicts in ``hits`` (each gains an updated ``score`` and
-        a new ``rrf_score_pre_rerank`` carrying the original value for
-        observability). Returns the same list, sorted by the new score
-        descending so the caller can slice ``[:k]`` directly.
+        Reads the base ordering signal from ``hit[score_key]`` (default
+        ``\"score\"``). Hybrid recall passes ``score_key=\"rrf_score\"`` so the
+        blend uses reciprocal-rank fusion totals, which are comparable across
+        candidates; backend-specific ``score`` values (semantic vs BM25 scale)
+        must not drive sorting when neutral helpfulness should preserve RRF
+        order.
+
+        Mutates each dict: sets ``rrf_score_pre_rerank`` to the original value
+        taken from ``score_key``, writes the helpfulness-blended float into
+        ``score``, and sorts by ``score`` descending.
         """
         for hit in hits:
             file_path = hit.get("file_path", "")
-            original = float(hit.get("score", 0.0))
+            original = float(hit.get(score_key, 0.0))
             hit["rrf_score_pre_rerank"] = original
             hit["score"] = self.reweight(original, file_path)
         hits.sort(key=lambda h: float(h.get("score", 0.0)), reverse=True)
