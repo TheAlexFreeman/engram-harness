@@ -18,12 +18,10 @@ import pytest
 from harness._engram_fs.frontmatter_utils import read_with_frontmatter, write_with_frontmatter
 from harness._engram_fs.trust_decay import (
     DEFAULT_HALF_LIFE_DAYS,
-    CandidateThresholds,
 )
 from harness.cmd_decay import (
     sweep,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
