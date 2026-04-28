@@ -4,6 +4,7 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from harness.config import RunPolicy
 from harness.loop import (
     RunResult,
     maybe_run_reflection,
@@ -12,7 +13,6 @@ from harness.loop import (
     session_remaining_cost_usd,
     session_remaining_tool_calls,
 )
-from harness.config import RunPolicy
 from harness.usage import Usage
 
 if TYPE_CHECKING:

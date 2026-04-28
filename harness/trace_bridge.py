@@ -23,13 +23,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from harness.engram_memory import EngramMemory, MemorySessionSnapshot
 from harness.engram_schema import (
     ACCESS_TRACKED_ROOTS,
     SESSION_ROLLUP_FILENAME,
-    access_namespace as schema_access_namespace,
     strip_content_prefix,
 )
-from harness.engram_memory import EngramMemory, MemorySessionSnapshot
+from harness.engram_schema import (
+    access_namespace as schema_access_namespace,
+)
 from harness.session_artifacts import (
     buffered_records_section,
     recall_events_section,
