@@ -11,12 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import pytest
-
 from harness.checkpoint import (
-    LoopCounters,
     PAUSE_PLACEHOLDER,
-    PauseInfo,
+    LoopCounters,
     ResumeState,
     mutate_pause_reply,
     serialize_checkpoint,
@@ -27,7 +24,6 @@ from harness.tests.test_parallel_tools import NullTracer, RecordingMemory  # noq
 from harness.tools import Tool, ToolCall, ToolResult
 from harness.tools.pause import PauseForUser, PauseHandle
 from harness.usage import Usage
-
 
 # ---------------------------------------------------------------------------
 # Synthetic mode that emits realistic tool_use / tool_result shapes
@@ -198,9 +194,7 @@ def test_loop_pauses_after_mixed_batch_runs_all_tools() -> None:
         args={"question": "pick one?"},
         id="toolu_pause_2",
     )
-    mode = RealisticMode(
-        [_Resp(tool_calls=[note_call, pause_call], stop_reason="tool_use")]
-    )
+    mode = RealisticMode([_Resp(tool_calls=[note_call, pause_call], stop_reason="tool_use")])
     memory = RecordingMemory()
     messages = mode.initial_messages(task="t", prior="", tools=tools)
 
@@ -235,9 +229,7 @@ def test_full_pause_resume_roundtrip() -> None:
     messages = mode.initial_messages(task="t", prior="", tools=tools)
 
     # First leg: run until pause.
-    first_result = run_until_idle(
-        messages, mode, tools, memory, NullTracer(), pause_handle=handle
-    )
+    first_result = run_until_idle(messages, mode, tools, memory, NullTracer(), pause_handle=handle)
     assert first_result.paused is True
     assert first_result.pause is not None
     paused_messages = list(first_result.messages or [])
@@ -359,9 +351,7 @@ def test_loop_does_not_pause_without_handle() -> None:
     messages = mode.initial_messages(task="t", prior="", tools=tools)
     memory = RecordingMemory()
 
-    result = run_until_idle(
-        messages, mode, tools, memory, NullTracer(), pause_handle=None
-    )
+    result = run_until_idle(messages, mode, tools, memory, NullTracer(), pause_handle=None)
     # Without a handle wired into the loop, the loop never sees the request
     # and the conversation continues.
     assert result.paused is False
@@ -381,9 +371,7 @@ def test_pause_loop_state_carries_correct_counters() -> None:
     messages = mode.initial_messages(task="t", prior="", tools=tools)
     memory = RecordingMemory()
 
-    result = run_until_idle(
-        messages, mode, tools, memory, NullTracer(), pause_handle=handle
-    )
+    result = run_until_idle(messages, mode, tools, memory, NullTracer(), pause_handle=handle)
     assert result.paused is True
     counters = result.pause_loop_state
     assert isinstance(counters, LoopCounters)
@@ -407,8 +395,6 @@ def test_pause_handle_reset_between_uses() -> None:
     messages = mode.initial_messages(task="t", prior="", tools=tools)
     memory = RecordingMemory()
 
-    result = run_until_idle(
-        messages, mode, tools, memory, NullTracer(), pause_handle=handle
-    )
+    result = run_until_idle(messages, mode, tools, memory, NullTracer(), pause_handle=handle)
     assert result.paused
     assert handle.requested is False  # cleared by the loop after capturing
