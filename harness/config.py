@@ -284,6 +284,7 @@ def _build_memory(
         MemoryRecall,
         MemoryRemember,
         MemoryReview,
+        MemorySupersede,
         MemoryTrace,
     )
     from harness.tools.work_tools import (
@@ -390,7 +391,13 @@ def _build_memory(
         MemoryLifecycleReview(engram),
     ]
     if not read_only:
-        memory_tools.extend([MemoryRemember(engram), MemoryTrace(engram)])
+        memory_tools.extend(
+            [
+                MemoryRemember(engram),
+                MemorySupersede(engram),
+                MemoryTrace(engram),
+            ]
+        )
         # B4: pause/resume primitive. Only mounted when both a handle is
         # provided and the profile is non-read-only. The handle lives on
         # SessionComponents so the loop can poll it after each tool batch.

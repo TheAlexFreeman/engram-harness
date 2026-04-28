@@ -349,7 +349,14 @@ class EngramMemory:
 
         return "".join(sections)
 
-    def recall(self, query: str, k: int = 5, *, namespace: str | None = None) -> list[Memory]:
+    def recall(
+        self,
+        query: str,
+        k: int = 5,
+        *,
+        namespace: str | None = None,
+        include_superseded: bool = False,
+    ) -> list[Memory]:
         q = (query or "").strip()
         if not q:
             return []
@@ -392,6 +399,14 @@ class EngramMemory:
 
         if helpfulness_rerank_enabled() and hits:
             self._get_helpfulness_index().rerank(hits)
+
+        # A2: filter out superseded / expired files unless the caller
+        # explicitly asks to see them. Done after the rerank so any
+        # surviving hits keep their relative order. Filter is a peek at
+        # frontmatter; we cap the work by reading only the candidates
+        # that survived earlier passes.
+        if not include_superseded and hits:
+            hits = [h for h in hits if not _is_path_superseded(self.content_root / h["file_path"])]
 
         hits = hits[:k]
         returned_paths = {h["file_path"] for h in hits}
@@ -667,6 +682,102 @@ class EngramMemory:
             close_fn()
         except Exception:  # noqa: BLE001
             pass
+
+    def supersede_file(
+        self,
+        old_rel: str,
+        new_rel: str,
+        new_body: str,
+        *,
+        reason: str = "",
+        new_trust: str = "medium",
+    ) -> tuple[Path, Path]:
+        """A2: invalidate ``old_rel`` and write ``new_rel`` as the replacement.
+
+        Atomic in the git sense — both files end up in a single commit.
+        On the old file we set ``valid_to`` to today and
+        ``superseded_by`` to the new file's relative path; the body is
+        left untouched so the historical record stays intact. On the
+        new file we write the standard ``agent-generated`` frontmatter
+        and add ``supersedes`` for forward traceability.
+
+        Returns ``(old_abs_path, new_abs_path)``. Raises ``ValueError``
+        when the old file does not exist, when the new path already
+        exists (no clobber), or when the paths fail
+        ``_normalize_memory_path`` validation.
+        """
+        from harness._engram_fs import (
+            read_with_frontmatter,
+            write_with_frontmatter,
+        )
+        from harness._engram_fs.frontmatter_policy import validate_bitemporal_fields
+
+        old_norm = _normalize_memory_path(old_rel)
+        new_norm = _normalize_memory_path(new_rel)
+        if old_norm == new_norm:
+            raise ValueError("supersede requires distinct old and new paths")
+        if not new_norm.endswith(".md"):
+            raise ValueError(f"new memory path must be .md (got {new_rel!r})")
+
+        old_abs = (self.content_root / old_norm).resolve()
+        new_abs = (self.content_root / new_norm).resolve()
+        memory_root = (self.content_root / "memory").resolve()
+        for label, abs_path in (("old", old_abs), ("new", new_abs)):
+            try:
+                abs_path.relative_to(memory_root)
+            except ValueError as exc:
+                raise ValueError(f"{label} path must resolve under memory/: {abs_path}") from exc
+        if not old_abs.is_file():
+            raise ValueError(f"old memory file does not exist: {old_norm}")
+        if new_abs.exists():
+            raise ValueError(
+                f"refusing to overwrite existing memory file: {new_norm} "
+                "(choose a different path or remove the existing file first)"
+            )
+
+        today = datetime.now().date().isoformat()
+
+        old_fm, old_body = read_with_frontmatter(old_abs)
+        old_fm = dict(old_fm)
+        # Preserve any existing valid_from; set valid_to and superseded_by.
+        old_fm["valid_to"] = today
+        # Strip the "memory/" prefix in stored references for compactness;
+        # keep paths uniform with the rest of the format.
+        old_fm["superseded_by"] = new_norm[len("memory/") :]
+        if reason:
+            old_fm["supersede_reason"] = reason[:240]
+        validate_bitemporal_fields(old_fm, context=f"old file {old_norm!r}")
+
+        new_fm: dict[str, Any] = {
+            "source": "agent-generated",
+            "trust": new_trust,
+            "created": today,
+            "valid_from": today,
+            "supersedes": old_norm[len("memory/") :],
+            "tool": "harness",
+        }
+        if reason:
+            new_fm["supersede_reason"] = reason[:240]
+        if self.session_id:
+            new_fm["session_id"] = self.session_id
+
+        new_abs.parent.mkdir(parents=True, exist_ok=True)
+        # Write old first so the supersede chain is consistent on disk
+        # even if the new write fails midway.
+        write_with_frontmatter(old_abs, old_fm, old_body)
+        write_with_frontmatter(new_abs, new_fm, new_body.strip())
+
+        commit_msg = f"[chat] supersede {old_norm} -> {new_norm}"
+        if reason:
+            commit_msg += f"\n\n{reason[:240]}"
+        try:
+            self.repo.add(old_norm)
+            self.repo.add(new_norm)
+            if self.repo.has_staged_changes(old_norm) or self.repo.has_staged_changes(new_norm):
+                self.repo.commit(commit_msg, paths=[old_norm, new_norm])
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Failed to commit supersede %s -> %s: %s", old_norm, new_norm, exc)
+        return old_abs, new_abs
 
     def promote_note(
         self,
@@ -1482,6 +1593,25 @@ def _read_trust(abs_path: Path) -> str:
         return str(fm.get("trust", "")).lower()
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _is_path_superseded(abs_path: Path) -> bool:
+    """Return whether a memory file's frontmatter marks it as superseded.
+
+    Reads only the frontmatter — file is missing, unparseable, or has no
+    bi-temporal annotation → ``False``. Lifts to the recall path so we
+    can hide expired/superseded facts without changing the indexes.
+    """
+    if not abs_path.is_file():
+        return False
+    try:
+        from harness._engram_fs import read_with_frontmatter
+        from harness._engram_fs.frontmatter_policy import is_superseded
+
+        fm, _ = read_with_frontmatter(abs_path)
+        return is_superseded(fm)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _first_match_snippet(text: str, tokens: list[str], *, ctx: int = 200) -> str:

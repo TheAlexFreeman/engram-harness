@@ -138,7 +138,7 @@ was semantic-only with a keyword fallback — no fusion, no rerank.
 - Time-decayed helpfulness (recent helpfulness weighted more than
   ancient). Could reuse A5's `decay_factor`.
 
-#### A2. Bi-temporal facts + invalidation (don't delete; supersede)
+#### A2. Bi-temporal facts + invalidation (don't delete; supersede) — **shipped (v1)**
 
 **Why.** Zep, Graphiti, and Cognee all encode facts with `t_valid_start`
 and `t_valid_end` plus an invalidation rather than deletion model.
