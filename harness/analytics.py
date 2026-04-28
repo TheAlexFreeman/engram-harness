@@ -36,6 +36,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
+from harness.engram_schema import ACCESS_TRACKED_ROOTS, SESSION_ROLLUP_FILENAME
+
 _log = logging.getLogger(__name__)
 
 # Defaults: 7d current, 28d baseline, 25% relative-change alert threshold.
@@ -63,15 +65,9 @@ _DRIFT_DIRECTION: dict[str, str] = {
 # reflection.md frontmatter agree on what "low outcome quality" means.
 _HIGH_ERROR_DENSITY = 0.25
 
-# Where rollup files live, by namespace. Mirrors ``trace_bridge._ACCESS_ROOTS``;
-# duplicated here so the analytics module stays import-light.
-_ROLLUP_NAMESPACES: tuple[str, ...] = (
-    "memory/users",
-    "memory/knowledge",
-    "memory/skills",
-    "memory/activity",
-)
-_SESSION_ROLLUP_FILENAME = "_session-rollups.jsonl"
+# Where trace-bridge rollup files live, by ACCESS-tracked namespace.
+_ROLLUP_NAMESPACES: tuple[str, ...] = ACCESS_TRACKED_ROOTS
+_SESSION_ROLLUP_FILENAME = SESSION_ROLLUP_FILENAME
 
 
 @dataclass

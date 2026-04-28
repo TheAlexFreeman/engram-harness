@@ -8,7 +8,9 @@ real EngramMemory are stubbed out — those layers are tested separately.
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from harness.checkpoint import (
@@ -19,7 +21,9 @@ from harness.checkpoint import (
     serialize_checkpoint,
     serialize_memory_state,
 )
+from harness.config import SessionComponents, SessionConfig
 from harness.loop import run_until_idle
+from harness.runner import run_batch, run_interactive
 from harness.tests.test_parallel_tools import NullTracer, RecordingMemory  # noqa: PLC2701
 from harness.tools import Tool, ToolCall, ToolResult
 from harness.tools.pause import PauseForUser, PauseHandle
@@ -133,6 +137,14 @@ class _NoteTool:
         return f"noted: {args.get('text', '')}"
 
 
+class _ContextTracer(NullTracer):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -144,6 +156,27 @@ def _build_pause_session():
     note_tool = _NoteTool()
     tools: dict[str, Tool] = {pause_tool.name: pause_tool, note_tool.name: note_tool}
     return handle, pause_tool, note_tool, tools
+
+
+def _components_for_pause(mode, memory, tools, handle) -> SessionComponents:
+    return SessionComponents(
+        mode=mode,
+        tools=tools,
+        memory=memory,
+        engram_memory=None,
+        tracer=_ContextTracer(),
+        stream_sink=None,
+        trace_path=Path("/tmp/test-trace.jsonl"),
+        config=SessionConfig(
+            workspace=Path("/tmp"),
+            max_turns=5,
+            max_parallel_tools=1,
+            trace_to_engram=False,
+            stream=False,
+            trace_live=False,
+        ),
+        pause_handle=handle,
+    )
 
 
 def test_loop_returns_paused_when_pause_tool_called() -> None:
@@ -182,6 +215,51 @@ def test_loop_returns_paused_when_pause_tool_called() -> None:
     # Mode should have been called exactly once — the loop bailed before
     # the second response.
     assert mode._idx == 1
+
+
+def test_run_batch_threads_pause_handle() -> None:
+    handle, _, _, tools = _build_pause_session()
+    pause_call = ToolCall(
+        name="pause_for_user",
+        args={"question": "Batch pause?"},
+        id="toolu_batch_pause",
+    )
+    mode = RealisticMode([_Resp(tool_calls=[pause_call], stop_reason="tool_use")])
+    memory = RecordingMemory()
+    components = _components_for_pause(mode, memory, tools, handle)
+
+    result = run_batch(argparse.Namespace(task="batch task"), components)
+
+    assert result.paused is not None
+    assert result.paused.pause_info.tool_use_id == "toolu_batch_pause"
+    assert memory.end_calls == 0
+
+
+def test_run_interactive_threads_pause_handle_and_callback() -> None:
+    handle, _, _, tools = _build_pause_session()
+    pause_call = ToolCall(
+        name="pause_for_user",
+        args={"question": "Interactive pause?"},
+        id="toolu_interactive_pause",
+    )
+    mode = RealisticMode([_Resp(tool_calls=[pause_call], stop_reason="tool_use")])
+    memory = RecordingMemory()
+    components = _components_for_pause(mode, memory, tools, handle)
+    paused: list[tuple[object, str]] = []
+
+    usage = run_interactive(
+        argparse.Namespace(task="interactive task", interactive=True),
+        components,
+        on_pause=lambda result, task: paused.append((result, task)),
+    )
+
+    assert usage.total_cost_usd == 0
+    assert len(paused) == 1
+    result, task = paused[0]
+    assert task == "interactive task"
+    assert result.paused is not None
+    assert result.paused.pause_info.tool_use_id == "toolu_interactive_pause"
+    assert memory.end_calls == 0
 
 
 def test_loop_pauses_after_mixed_batch_runs_all_tools() -> None:

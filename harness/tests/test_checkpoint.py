@@ -301,6 +301,117 @@ def test_serialize_checkpoint_with_dataclass_usage() -> None:
     assert payload["pause"]["question"] == "ok?"
 
 
+def test_serialize_checkpoint_preserves_extra() -> None:
+    payload = serialize_checkpoint(
+        session_id="act-001",
+        task="t",
+        model="m",
+        mode="native",
+        workspace="/ws",
+        memory_repo="/repo",
+        trace_path="/tr/act-001.jsonl",
+        messages=_conversation_with_pause(),
+        usage={},
+        loop_state=_sample_loop_state(),
+        memory_state={},
+        pause=_sample_pause(),
+        extra={"session_config": {"max_turns": 7}},
+    )
+
+    cp = deserialize_checkpoint(payload)
+    assert cp.extra["session_config"]["max_turns"] == 7
+
+
+def test_resume_config_from_checkpoint_uses_snapshot(tmp_path: Path) -> None:
+    from harness.cmd_resume import _config_from_checkpoint
+    from harness.config import ToolProfile
+
+    payload = serialize_checkpoint(
+        session_id="act-001",
+        task="t",
+        model="m",
+        mode="native",
+        workspace=str(tmp_path / "workspace"),
+        memory_repo=str(tmp_path / "engram"),
+        trace_path=str(tmp_path / "trace.jsonl"),
+        messages=_conversation_with_pause(),
+        usage={},
+        loop_state=_sample_loop_state(),
+        memory_state={},
+        pause=_sample_pause(),
+        extra={
+            "session_config": {
+                "tool_profile": "no_shell",
+                "max_turns": 9,
+                "max_parallel_tools": 2,
+                "max_cost_usd": 0.5,
+                "max_tool_calls": 12,
+                "repeat_guard_threshold": 0,
+                "repeat_guard_terminate_at": 6,
+                "repeat_guard_exempt_tools": ["poll"],
+                "tool_pattern_guard_threshold": 8,
+                "tool_pattern_guard_terminate_at": 10,
+                "tool_pattern_guard_window": 18,
+                "error_recall_threshold": 4,
+                "compaction_input_token_threshold": 100,
+                "full_compaction_input_token_threshold": 200,
+                "reflect": False,
+                "trace_to_engram": False,
+            }
+        },
+    )
+    config = _config_from_checkpoint(deserialize_checkpoint(payload))
+
+    assert config.memory_backend == "engram"
+    assert config.workspace == tmp_path / "workspace"
+    assert config.memory_repo == tmp_path / "engram"
+    assert config.tool_profile == ToolProfile.NO_SHELL
+    assert config.max_turns == 9
+    assert config.max_parallel_tools == 2
+    assert config.max_cost_usd == 0.5
+    assert config.max_tool_calls == 12
+    assert config.repeat_guard_threshold == 0
+    assert config.repeat_guard_terminate_at == 6
+    assert config.repeat_guard_exempt_tools == ["poll"]
+    assert config.tool_pattern_guard_threshold == 8
+    assert config.tool_pattern_guard_terminate_at == 10
+    assert config.tool_pattern_guard_window == 18
+    assert config.error_recall_threshold == 4
+    assert config.compaction_input_token_threshold == 100
+    assert config.full_compaction_input_token_threshold == 200
+    assert config.reflect is False
+    assert config.trace_to_engram is False
+
+
+def test_resume_config_from_older_checkpoint_uses_defaults(tmp_path: Path) -> None:
+    from harness.cmd_resume import _config_from_checkpoint
+    from harness.config import ToolProfile
+
+    payload = serialize_checkpoint(
+        session_id="act-001",
+        task="t",
+        model="m",
+        mode="native",
+        workspace=str(tmp_path / "workspace"),
+        memory_repo=str(tmp_path / "engram"),
+        trace_path=str(tmp_path / "trace.jsonl"),
+        messages=_conversation_with_pause(),
+        usage={},
+        loop_state=_sample_loop_state(),
+        memory_state={},
+        pause=_sample_pause(),
+    )
+    config = _config_from_checkpoint(deserialize_checkpoint(payload))
+
+    assert config.workspace == tmp_path / "workspace"
+    assert config.model == "m"
+    assert config.mode == "native"
+    assert config.memory_backend == "engram"
+    assert config.memory_repo == tmp_path / "engram"
+    assert config.tool_profile == ToolProfile.FULL
+    assert config.max_turns == 100
+
+
 def test_deserialize_checkpoint_validates_version() -> None:
     payload = {"version": 99, "session_id": "x"}
     with pytest.raises(ValueError, match="unsupported checkpoint version"):

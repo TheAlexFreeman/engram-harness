@@ -9,12 +9,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from harness.config import (
+    RunPolicy,
     SessionConfig,
     ToolProfile,
     _has_active_plan_context,
     _tool_prompt_flags,
     build_session,
     config_from_args,
+    serialize_session_config,
+    session_config_from_snapshot,
     trace_to_engram_enabled,
 )
 from harness.stream import NullStreamSink, StderrStreamPrinter
@@ -89,6 +92,118 @@ def test_tool_prompt_flags_read_only_surface() -> None:
         "work_status": SimpleNamespace(mutates=False),
     }
     assert _tool_prompt_flags(tools) == (True, True, False, False)
+
+
+def test_session_config_snapshot_roundtrip(tmp_path) -> None:
+    config = SessionConfig(
+        workspace=tmp_path / "workspace",
+        model="claude-opus-4-7",
+        memory_backend="engram",
+        memory_repo=tmp_path / "engram",
+        max_turns=12,
+        max_parallel_tools=2,
+        max_cost_usd=1.25,
+        max_tool_calls=44,
+        repeat_guard_threshold=0,
+        repeat_guard_terminate_at=8,
+        repeat_guard_exempt_tools=["poll_status"],
+        tool_pattern_guard_threshold=7,
+        tool_pattern_guard_terminate_at=11,
+        tool_pattern_guard_window=20,
+        error_recall_threshold=3,
+        compaction_input_token_threshold=123,
+        full_compaction_input_token_threshold=456,
+        trace_to_engram=False,
+        reflect=False,
+        tool_profile=ToolProfile.NO_SHELL,
+        grok_include=["reasoning.encrypted_content"],
+    )
+
+    snapshot = serialize_session_config(config)
+    restored = session_config_from_snapshot(
+        snapshot,
+        workspace=config.workspace,
+        model=config.model,
+        mode=config.mode,
+        memory_repo=config.memory_repo,
+    )
+
+    assert restored.workspace == config.workspace
+    assert restored.memory_repo == config.memory_repo
+    assert restored.tool_profile == ToolProfile.NO_SHELL
+    assert restored.max_turns == 12
+    assert restored.max_parallel_tools == 2
+    assert restored.max_cost_usd == 1.25
+    assert restored.max_tool_calls == 44
+    assert restored.repeat_guard_threshold == 0
+    assert restored.repeat_guard_terminate_at == 8
+    assert restored.repeat_guard_exempt_tools == ["poll_status"]
+    assert restored.tool_pattern_guard_threshold == 7
+    assert restored.tool_pattern_guard_terminate_at == 11
+    assert restored.tool_pattern_guard_window == 20
+    assert restored.error_recall_threshold == 3
+    assert restored.compaction_input_token_threshold == 123
+    assert restored.full_compaction_input_token_threshold == 456
+    assert restored.trace_to_engram is False
+    assert restored.reflect is False
+    assert restored.grok_include == ["reasoning.encrypted_content"]
+
+
+def test_session_config_from_empty_snapshot_uses_resume_defaults(tmp_path) -> None:
+    restored = session_config_from_snapshot(
+        {},
+        workspace=tmp_path / "workspace",
+        model="claude-sonnet-4-6",
+        mode="native",
+        memory_repo=tmp_path / "engram",
+    )
+
+    assert restored.workspace == tmp_path / "workspace"
+    assert restored.memory_backend == "engram"
+    assert restored.memory_repo == tmp_path / "engram"
+    assert restored.tool_profile == ToolProfile.FULL
+    assert restored.max_turns == 100
+
+
+def test_run_policy_from_config_and_remaining_budget(tmp_path) -> None:
+    handle = object()
+    config = SessionConfig(
+        workspace=tmp_path,
+        max_turns=15,
+        max_parallel_tools=3,
+        max_cost_usd=2.0,
+        max_tool_calls=20,
+        repeat_guard_threshold=0,
+        repeat_guard_terminate_at=5,
+        repeat_guard_exempt_tools=["poll"],
+        tool_pattern_guard_threshold=6,
+        tool_pattern_guard_terminate_at=9,
+        tool_pattern_guard_window=14,
+        error_recall_threshold=2,
+        compaction_input_token_threshold=100,
+        full_compaction_input_token_threshold=200,
+        reflect=False,
+    )
+
+    policy = RunPolicy.from_config(config, pause_handle=handle)
+    limited = policy.for_remaining_budget(max_cost_usd=0.5, max_tool_calls=4)
+    kwargs = limited.run_kwargs()
+
+    assert kwargs["max_turns"] == 15
+    assert kwargs["max_parallel_tools"] == 3
+    assert kwargs["max_cost_usd"] == 0.5
+    assert kwargs["max_tool_calls"] == 4
+    assert kwargs["repeat_guard_threshold"] == 0
+    assert kwargs["repeat_guard_terminate_at"] == 5
+    assert kwargs["repeat_guard_exempt_tools"] == ["poll"]
+    assert kwargs["tool_pattern_guard_threshold"] == 6
+    assert kwargs["tool_pattern_guard_terminate_at"] == 9
+    assert kwargs["tool_pattern_guard_window"] == 14
+    assert kwargs["error_recall_threshold"] == 2
+    assert kwargs["compaction_input_token_threshold"] == 100
+    assert kwargs["full_compaction_input_token_threshold"] == 200
+    assert kwargs["reflect"] is False
+    assert kwargs["pause_handle"] is handle
 
 
 def test_has_active_plan_context_detects_workspace_plan(tmp_path) -> None:

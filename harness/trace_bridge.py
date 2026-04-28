@@ -23,22 +23,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from harness.engram_memory import EngramMemory
+from harness.engram_schema import (
+    ACCESS_TRACKED_ROOTS,
+    SESSION_ROLLUP_FILENAME,
+    access_namespace as schema_access_namespace,
+    strip_content_prefix,
+)
+from harness.engram_memory import EngramMemory, MemorySessionSnapshot
+from harness.session_artifacts import (
+    buffered_records_section,
+    recall_events_section,
+    trace_events_section,
+)
 
 _log = logging.getLogger(__name__)
 
-# ACCESS-tracked memory roots (paths *within* the content root). Reads of files
-# anywhere inside these get an entry in the corresponding ACCESS.jsonl.
-# The workspace is intentionally absent: it is a peer of memory at the project
-# root rather than a subdirectory of content_root, and the design doc
-# (docs/workspace-affordances-draft.md) marks it as ungoverned — no trust
-# frontmatter, no ACCESS.jsonl, no aggregation pipeline.
-_ACCESS_ROOTS = (
-    "memory/users",
-    "memory/knowledge",
-    "memory/skills",
-    "memory/activity",
-)
+# ACCESS-tracked memory roots (paths *within* the content root). The workspace
+# is intentionally absent; see ``harness.engram_schema.ACCESS_TRACKED_ROOTS``.
+_ACCESS_ROOTS = ACCESS_TRACKED_ROOTS
 
 # Helpfulness presets — keep the bands explicit so the trace bridge is auditable.
 HELPFULNESS_READ_THEN_EDIT = 0.85
@@ -103,6 +105,14 @@ class TraceBridgeResult:
     link_paths: list[Path] = field(default_factory=list)
 
 
+@dataclass
+class _AccessObservation:
+    namespace: str
+    file: str
+    helpfulness: float
+    note: str
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -154,11 +164,12 @@ def run_trace_bridge(
     events = list(_read_events(trace_path))
     stats = _aggregate_stats(events)
 
-    session_dir_rel = memory.session_dir_rel
-    session_dir = memory.content_root / session_dir_rel
+    snapshot = memory.session_snapshot()
+    session_dir_rel = snapshot.session_dir_rel
+    session_dir = snapshot.content_root / session_dir_rel
     session_dir.mkdir(parents=True, exist_ok=True)
 
-    content_prefix = getattr(memory, "content_prefix", "core")
+    content_prefix = snapshot.content_prefix
 
     tool_calls = _extract_tool_calls(events)
 
@@ -176,32 +187,32 @@ def run_trace_bridge(
     if subsessions:
         for idx, segment in enumerate(subsessions):
             sub_written, sub_access = _run_subsession_bridge(
-                memory, session_dir, segment, idx, content_prefix
+                memory, snapshot, session_dir, segment, idx, content_prefix
             )
             written.extend(sub_written)
             access_count += sub_access
             sub_ids.append(f"sub-{idx + 1:03d}")
 
-    summary_text = _render_summary(memory, stats, tool_calls, sub_sessions=sub_ids)
+    summary_text = _render_summary(snapshot, stats, tool_calls, sub_sessions=sub_ids)
     _write_artifact(summary_path, summary_text)
     written.append(_relpath(memory, summary_path))
 
-    reflection_text = _render_reflection(memory, stats, tool_calls)
+    reflection_text = _render_reflection(snapshot, stats, tool_calls)
     _write_artifact(reflection_path, reflection_text)
     written.append(_relpath(memory, reflection_path))
 
-    spans = _build_spans(memory, tool_calls, events, stats)
+    spans = _build_spans(snapshot, tool_calls, events, stats)
     _write_jsonl(spans_path, spans)
     written.append(_relpath(memory, spans_path))
 
-    candidate_rows = _build_recall_candidate_rows(memory, tool_calls)
+    candidate_rows = _build_recall_candidate_rows(snapshot, tool_calls)
     recall_candidates_written: Path | None = None
     if candidate_rows:
         _write_jsonl(recall_candidates_path, candidate_rows)
         written.append(_relpath(memory, recall_candidates_path))
         recall_candidates_written = recall_candidates_path
 
-    link_paths = _emit_co_retrieval_links(memory, stats)
+    link_paths = _emit_co_retrieval_links(snapshot, stats)
     for path in link_paths:
         try:
             written.append(_relpath(memory, path))
@@ -210,9 +221,9 @@ def run_trace_bridge(
 
     if not subsessions:
         access_count = _emit_access_entries(
-            memory, tool_calls, stats, content_prefix=content_prefix
+            snapshot, tool_calls, stats, content_prefix=content_prefix
         )
-        _emit_session_rollups(memory, tool_calls, stats, content_prefix=content_prefix)
+        _emit_session_rollups(snapshot, tool_calls, stats, content_prefix=content_prefix)
 
     if trace_path.is_file():
         try:
@@ -296,6 +307,7 @@ def _split_subsessions(events: list[dict[str, Any]]) -> "list[list[dict]] | None
 
 def _run_subsession_bridge(
     memory: EngramMemory,
+    snapshot: MemorySessionSnapshot,
     session_dir: Path,
     segment_events: list[dict[str, Any]],
     subtask_idx: int,
@@ -319,14 +331,14 @@ def _run_subsession_bridge(
     summary_path = sub_dir / "summary.md"
     reflection_path = sub_dir / "reflection.md"
 
-    summary_text = _render_summary(memory, stats, tool_calls)
+    summary_text = _render_summary(snapshot, stats, tool_calls)
     _write_artifact(summary_path, summary_text)
 
-    reflection_text = _render_reflection(memory, stats, tool_calls)
+    reflection_text = _render_reflection(snapshot, stats, tool_calls)
     _write_artifact(reflection_path, reflection_text)
 
-    access_count = _emit_access_entries(memory, tool_calls, stats, content_prefix=content_prefix)
-    _emit_session_rollups(memory, tool_calls, stats, content_prefix=content_prefix)
+    access_count = _emit_access_entries(snapshot, tool_calls, stats, content_prefix=content_prefix)
+    _emit_session_rollups(snapshot, tool_calls, stats, content_prefix=content_prefix)
 
     written = [
         _relpath(memory, summary_path),
@@ -480,7 +492,7 @@ def _derive_read_helpfulness(
     read_index: int,
     tool_calls: list[_ToolCall],
 ) -> tuple[float, str]:
-    """Return (helpfulness, note) for a `read_file` of *target_path*."""
+    """Return (helpfulness, note) for a file/memory read of *target_path*."""
     target_norm = _norm(target_path)
     for tc in tool_calls[read_index + 1 :]:
         if tc.name in ("edit_file", "write_file"):
@@ -517,7 +529,7 @@ def _derive_recall_helpfulness(
 
 
 def _render_summary(
-    memory: EngramMemory,
+    memory: MemorySessionSnapshot,
     stats: _SessionStats,
     calls: list[_ToolCall],
     *,
@@ -601,33 +613,15 @@ def _render_summary(
             )
         body_lines.append("")
 
-    # Mirror EngramMemory.end_session() so that error/note records the agent
-    # buffered during the run survive when the bridge rewrites this same file.
-    if memory.buffered_records:
-        body_lines.append("## Notable events")
-        body_lines.append("")
-        for rec in memory.buffered_records:
-            ts = rec.timestamp.isoformat(timespec="seconds")
-            body_lines.append(f"- `{ts}` [{rec.kind}] {rec.content}")
-        body_lines.append("")
-
-    if memory.recall_events:
-        body_lines.append("## Memory recall")
-        body_lines.append("")
-        for ev in memory.recall_events[:10]:
-            body_lines.append(
-                f"- {ev.file_path} ← {ev.query!r} (trust={ev.trust or '?'} score={ev.score:.3f})"
-            )
-        if len(memory.recall_events) > 10:
-            body_lines.append(f"- … {len(memory.recall_events) - 10} more")
-        body_lines.append("")
+    body_lines.extend(buffered_records_section(memory.buffered_records))
+    body_lines.extend(recall_events_section(memory.recall_events))
 
     body = "\n".join(body_lines)
     return _serialize_with_frontmatter(fm, body)
 
 
 def _render_reflection(
-    memory: EngramMemory,
+    memory: MemorySessionSnapshot,
     stats: _SessionStats,
     calls: list[_ToolCall],
 ) -> str:
@@ -700,26 +694,14 @@ def _render_reflection(
             body_lines.append("- (none)")
         body_lines.append("")
 
-    trace_events = memory.trace_events
-    if trace_events:
-        body_lines.append("## Agent-annotated events")
-        body_lines.append("")
-        for ev in trace_events:
-            tail_bits = []
-            if ev.reason:
-                tail_bits.append(ev.reason)
-            if ev.detail:
-                tail_bits.append(f"({ev.detail})")
-            tail = f" — {' '.join(tail_bits)}" if tail_bits else ""
-            body_lines.append(f"- **{ev.event}**{tail}")
-        body_lines.append("")
+    body_lines.extend(trace_events_section(memory.trace_events))
 
     body = "\n".join(body_lines)
     return _serialize_with_frontmatter(fm, body)
 
 
 def _build_spans(
-    memory: EngramMemory,
+    memory: MemorySessionSnapshot,
     calls: list[_ToolCall],
     events: list[dict[str, Any]],
     stats: _SessionStats,
@@ -761,7 +743,7 @@ def _build_spans(
 
 
 def _emit_co_retrieval_links(
-    memory: EngramMemory,
+    memory: MemorySessionSnapshot,
     stats: _SessionStats,
 ) -> list[Path]:
     """Derive co-retrieval edges from this session's recall candidates and
@@ -789,13 +771,13 @@ def _emit_co_retrieval_links(
 
 
 def _build_recall_candidate_rows(
-    memory: EngramMemory,
+    memory: MemorySessionSnapshot,
     tool_calls: list[_ToolCall],
 ) -> list[dict[str, Any]]:
     """Translate buffered ``_RecallCandidateEvent``s into JSONL rows.
 
     Each candidate row is enriched with ``used_in_session`` — True if any
-    later ``read_file`` tool call referenced the candidate's file path.
+    later read-like tool call referenced the candidate's file path.
     That gives us a cheap signal for "did the agent actually consume what
     we surfaced?" without needing to parse text content.
     """
@@ -806,12 +788,10 @@ def _build_recall_candidate_rows(
     content_prefix = getattr(memory, "content_prefix", "core")
     read_calls: list[tuple[datetime, str]] = []
     for tc in tool_calls:
-        if tc.name != "read_file":
-            continue
         read_time = _parse_trace_timestamp(tc.timestamp)
         if read_time is None:
             continue
-        arg_path = tc.args.get("path") or tc.args.get("file_path")
+        arg_path = _read_target_path(tc)
         if arg_path:
             read_calls.append(
                 (read_time, _recall_candidate_path_key(str(arg_path), content_prefix))
@@ -866,29 +846,22 @@ def _parse_trace_timestamp(value: Any) -> datetime | None:
 
 
 def _recall_candidate_path_key(file_path: str, content_prefix: str = "core") -> str:
-    norm = _norm(file_path).strip("/")
-    while norm.startswith("./"):
-        norm = norm[2:]
-    prefix = content_prefix.strip("/")
-    if prefix and norm.startswith(prefix + "/"):
-        norm = norm[len(prefix) + 1 :]
-    return norm
+    return strip_content_prefix(_norm(file_path), content_prefix)
 
 
 def _access_paths(
-    memory: EngramMemory,
+    memory: MemorySessionSnapshot,
     tool_calls: list[_ToolCall],
     content_prefix: str = "core",
 ) -> list[str]:
     seen: set[str] = set()
     for tc in tool_calls:
-        if tc.name == "read_file":
-            arg_path = tc.args.get("path") or tc.args.get("file_path")
-            if not arg_path:
-                continue
-            namespace = _access_namespace(str(arg_path), content_prefix)
-            if namespace:
-                seen.add(f"{namespace}/ACCESS.jsonl")
+        arg_path = _read_target_path(tc)
+        if not arg_path:
+            continue
+        namespace = _access_namespace(str(arg_path), content_prefix)
+        if namespace:
+            seen.add(f"{namespace}/ACCESS.jsonl")
     for ev in memory.recall_events:
         if getattr(ev, "phase", "manifest") == "fetch":
             continue
@@ -898,8 +871,49 @@ def _access_paths(
     return sorted(seen)
 
 
+def _access_observations(
+    memory: MemorySessionSnapshot,
+    tool_calls: list[_ToolCall],
+    content_prefix: str,
+) -> list[_AccessObservation]:
+    observations: list[_AccessObservation] = []
+    for idx, tc in enumerate(tool_calls):
+        arg_path = _read_target_path(tc)
+        if not arg_path:
+            continue
+        namespace = _access_namespace(str(arg_path), content_prefix)
+        if not namespace:
+            continue
+        helpfulness, note = _derive_read_helpfulness(str(arg_path), idx, tool_calls)
+        observations.append(
+            _AccessObservation(
+                namespace=namespace,
+                file=_normalize_for_access(str(arg_path), content_prefix),
+                helpfulness=helpfulness,
+                note=note,
+            )
+        )
+
+    for ev in memory.recall_events:
+        if getattr(ev, "phase", "manifest") == "fetch":
+            continue
+        namespace = _access_namespace(ev.file_path, content_prefix)
+        if not namespace:
+            continue
+        helpfulness, note = _derive_recall_helpfulness(ev.file_path, ev.timestamp, tool_calls)
+        observations.append(
+            _AccessObservation(
+                namespace=namespace,
+                file=_normalize_for_access(ev.file_path, content_prefix),
+                helpfulness=helpfulness,
+                note=f"recall: {note}",
+            )
+        )
+    return observations
+
+
 def _emit_access_entries(
-    memory: EngramMemory,
+    memory: MemorySessionSnapshot,
     tool_calls: list[_ToolCall],
     stats: _SessionStats,
     *,
@@ -916,43 +930,16 @@ def _emit_access_entries(
         f"{_prefix}/{memory.session_dir_rel}" if _prefix else memory.session_dir_rel
     )
 
-    for idx, tc in enumerate(tool_calls):
-        if tc.name != "read_file":
-            continue
-        arg_path = tc.args.get("path") or tc.args.get("file_path")
-        if not arg_path:
-            continue
-        access_dir_rel = _access_namespace(str(arg_path), content_prefix)
-        if not access_dir_rel:
-            continue
-        helpfulness, note = _derive_read_helpfulness(str(arg_path), idx, tool_calls)
+    for observation in _access_observations(memory, tool_calls, content_prefix):
         entry = {
-            "file": _normalize_for_access(str(arg_path), content_prefix),
+            "file": observation.file,
             "date": access_date,
             "task": task_slug,
-            "helpfulness": round(helpfulness, 3),
-            "note": note,
+            "helpfulness": round(observation.helpfulness, 3),
+            "note": observation.note,
             "session_id": canonical_session_id,
         }
-        access_path = memory.content_root / access_dir_rel / "ACCESS.jsonl"
-        entries_by_file[access_path].append(entry)
-
-    for ev in memory.recall_events:
-        if getattr(ev, "phase", "manifest") == "fetch":
-            continue  # skip fetch-phase duplicates; manifest already registered this access
-        access_dir_rel = _access_namespace(ev.file_path, content_prefix)
-        if not access_dir_rel:
-            continue
-        helpfulness, note = _derive_recall_helpfulness(ev.file_path, ev.timestamp, tool_calls)
-        entry = {
-            "file": _normalize_for_access(ev.file_path, content_prefix),
-            "date": access_date,
-            "task": task_slug,
-            "helpfulness": round(helpfulness, 3),
-            "note": f"recall: {note}",
-            "session_id": canonical_session_id,
-        }
-        access_path = memory.content_root / access_dir_rel / "ACCESS.jsonl"
+        access_path = memory.content_root / observation.namespace / "ACCESS.jsonl"
         entries_by_file[access_path].append(entry)
 
     total = 0
@@ -973,12 +960,12 @@ def _emit_access_entries(
 # the cheap, harness-resident analogue of Engram's external aggregation
 # pipeline. Idempotent: dedupes on (session_id, date) so reruns don't
 # double-count.
-_SESSION_ROLLUP_FILENAME = "_session-rollups.jsonl"
+_SESSION_ROLLUP_FILENAME = SESSION_ROLLUP_FILENAME
 _TOP_FILES_PER_ROLLUP = 5
 
 
 def _emit_session_rollups(
-    memory: EngramMemory,
+    memory: MemorySessionSnapshot,
     tool_calls: list[_ToolCall],
     stats: _SessionStats,
     *,
@@ -997,8 +984,7 @@ def _emit_session_rollups(
     aggregation pass — but it gives the harness an in-process, append-only
     audit trail of what each session contributed to each namespace.
     """
-    # Re-derive entries per namespace from the same source data
-    # _emit_access_entries uses. Cheap; keeps this function independent.
+    # Rollups summarize the same observations appended to ACCESS.jsonl.
     entries_by_ns: dict[str, list[dict[str, Any]]] = defaultdict(list)
     access_date = stats.session_date or datetime.now().date().isoformat()
     task_slug = _task_slug(stats.task) or memory.session_id
@@ -1007,34 +993,11 @@ def _emit_session_rollups(
         f"{_prefix}/{memory.session_dir_rel}" if _prefix else memory.session_dir_rel
     )
 
-    for idx, tc in enumerate(tool_calls):
-        if tc.name != "read_file":
-            continue
-        arg_path = tc.args.get("path") or tc.args.get("file_path")
-        if not arg_path:
-            continue
-        ns = _access_namespace(str(arg_path), content_prefix)
-        if not ns:
-            continue
-        helpfulness, _ = _derive_read_helpfulness(str(arg_path), idx, tool_calls)
-        entries_by_ns[ns].append(
+    for observation in _access_observations(memory, tool_calls, content_prefix):
+        entries_by_ns[observation.namespace].append(
             {
-                "file": _normalize_for_access(str(arg_path), content_prefix),
-                "helpfulness": float(helpfulness),
-            }
-        )
-
-    for ev in memory.recall_events:
-        if getattr(ev, "phase", "manifest") == "fetch":
-            continue
-        ns = _access_namespace(ev.file_path, content_prefix)
-        if not ns:
-            continue
-        helpfulness, _ = _derive_recall_helpfulness(ev.file_path, ev.timestamp, tool_calls)
-        entries_by_ns[ns].append(
-            {
-                "file": _normalize_for_access(ev.file_path, content_prefix),
-                "helpfulness": float(helpfulness),
+                "file": observation.file,
+                "helpfulness": float(observation.helpfulness),
             }
         )
 
@@ -1171,14 +1134,33 @@ def _access_namespace(file_path: str, content_prefix: str = "core") -> str | Non
       - git-root-relative paths (`{content_prefix}/memory/knowledge/foo.md`)
       - absolute paths under the content root
     """
-    norm = _norm(file_path).strip("/")
-    prefix = content_prefix.strip("/")
-    if prefix and norm.startswith(prefix + "/"):
-        norm = norm[len(prefix) + 1 :]
-    for root in _ACCESS_ROOTS:
-        if norm == root or norm.startswith(root + "/"):
-            return root
+    return schema_access_namespace(_norm(file_path), content_prefix)
+
+
+def _read_target_path(call: _ToolCall) -> str | None:
+    """Return the governed file path read by a trace tool call, if any.
+
+    Name checks are retained for compatibility with existing trace events; this
+    helper is the single semantic boundary for read-like operations.
+    """
+    if call.name == "read_file":
+        arg_path = call.args.get("path") or call.args.get("file_path")
+        return str(arg_path) if arg_path else None
+    if call.name == "memory_review":
+        arg_path = call.args.get("path")
+        if not arg_path:
+            return None
+        return _normalize_memory_review_path(str(arg_path))
     return None
+
+
+def _normalize_memory_review_path(path: str) -> str:
+    norm = _norm(path).strip().strip("/")
+    while norm.startswith("./"):
+        norm = norm[2:]
+    if norm.startswith("memory/"):
+        return norm
+    return f"memory/{norm}"
 
 
 def _normalize_for_access(file_path: str, content_prefix: str = "core") -> str:

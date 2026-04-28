@@ -662,9 +662,10 @@ working notes.
 `work: status` takes over the operational-state portion of the session
 bootstrap. Previously, `start_session()` loaded `memory/working/CURRENT.md`
 and `memory/working/USER.md` as part of `_BOOTSTRAP_FILES`. With the
-workspace separated, `start_session()` shrinks to a minimal primer (session
-ID, repo metadata, memory namespace listing). `work: status` loads CURRENT.md
-and optional project state for orientation. `memory: context` loads
+workspace separated, `start_session()` now loads only task-independent memory
+primer files (`HOME.md`, `users/SUMMARY.md`, `activity/SUMMARY.md`) plus
+active-plan and previous-session hints when available. `work: status` loads
+CURRENT.md and optional project state for orientation. `memory: context` loads
 knowledge, user profile, and recent sessions for reference material. The
 agent calls both at session start, but they're independent operations against
 different stores — agent-initiated and decomposed rather than monolithic and

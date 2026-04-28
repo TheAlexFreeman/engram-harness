@@ -22,6 +22,7 @@ from harness.config import (
     ToolProfile,
     build_session,
     config_from_args,
+    serialize_session_config,
 )
 from harness.report import print_usage
 from harness.runner import run_batch, run_interactive, run_trace_bridge_if_enabled
@@ -577,9 +578,21 @@ def main() -> None:
     paused_result = None
     try:
         if args.interactive:
-            usage = run_interactive(args, components)
-            bridge_status = run_trace_bridge_if_enabled(components)
-            print_usage(usage, components)
+            def _on_interactive_pause(result, task_text: str) -> None:
+                nonlocal paused_result
+                paused_result = result
+                _handle_paused_session(
+                    components,
+                    session_id=session_id,
+                    task=task_text or "(interactive)",
+                    result=result,
+                    store=store,
+                )
+
+            usage = run_interactive(args, components, on_pause=_on_interactive_pause)
+            if paused_result is None:
+                bridge_status = run_trace_bridge_if_enabled(components)
+                print_usage(usage, components)
         else:
             batch_result = run_batch(args, components)
             usage = batch_result.usage
@@ -687,6 +700,7 @@ def _handle_paused_session(
         memory_state=serialize_memory_state(engram) if engram is not None else {},
         pause=pause.pause_info,
         checkpoint_at=datetime.now().isoformat(timespec="seconds"),
+        extra={"session_config": serialize_session_config(components.config)},
     )
     write_checkpoint(cp_path, payload)
 

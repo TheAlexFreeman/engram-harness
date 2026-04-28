@@ -1,16 +1,17 @@
 """EngramMemory — a MemoryBackend that persists to an Engram git-backed memory repo.
 
 Implements the contract from `harness.memory.MemoryBackend` against an Engram
-repository. Uses the format-layer surface
-(`engram_mcp.agent_memory_mcp.core`) for path policy and frontmatter, plus a
-`GitRepo` for staging and commits. Semantic recall is opportunistic: when
-`sentence-transformers` is available the bundled `EmbeddingIndex` is used,
-otherwise we fall back to a keyword grep over the same scopes.
+repository. Uses the harness-owned format layer in `harness._engram_fs` for
+path policy, frontmatter, indexes, and git staging/commits. Semantic recall is
+opportunistic: when `sentence-transformers` is available the bundled
+`EmbeddingIndex` is used; otherwise recall still works through BM25 and keyword
+fallbacks over the same scopes.
 
 Design points (see ROADMAP.md §1):
-- Compact returning-session bootstrap: HOME → user portrait → activity summary
-  → working scratchpads. Token budget is a soft target — the backend does not
-  truncate aggressively; it just stops drilling once it has enough surface.
+- Compact returning-session bootstrap: HOME → user portrait → activity summary,
+  plus workspace active-plan and previous-session hints when available. Token
+  budget is a soft target — the backend does not truncate aggressively; it just
+  stops drilling once it has enough surface.
 - Records during a session are buffered and flushed at end_session as a
   structured session record under `memory/activity/YYYY/MM/DD/act-NNN/`.
 - Errors raised with `kind="error"` are also written into the session record so
@@ -28,6 +29,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+from harness.engram_schema import PROMPT_RECALL_NAMESPACES, SEARCH_SCOPES
 from harness.memory import Memory
 
 if TYPE_CHECKING:
@@ -53,15 +55,10 @@ _BOOTSTRAP_FILES = (
     "memory/activity/SUMMARY.md",
 )
 
-# Search scopes for recall (matches engram's DEFAULT_SCOPES).
-_SEARCH_SCOPES = (
-    "memory/knowledge",
-    "memory/skills",
-    "memory/users",
-    "memory/working",
-    "memory/activity",
-)
-_RECALL_NAMESPACES = frozenset({"knowledge", "skills", "activity", "users"})
+# Search scopes include memory/working for standalone-Engram compatibility;
+# prompt-visible recall scopes intentionally expose only governed namespaces.
+_SEARCH_SCOPES = SEARCH_SCOPES
+_RECALL_NAMESPACES = PROMPT_RECALL_NAMESPACES
 
 # Soft cap on individual file body returned in start_session output. Files
 # below this fit raw; larger files get a head-only excerpt.
@@ -163,6 +160,23 @@ class _TraceEvent:
     event: str
     reason: str = ""
     detail: str = ""
+
+
+@dataclass(frozen=True)
+class MemorySessionSnapshot:
+    """Stable read model for trace-bridge/checkpoint consumers."""
+
+    content_root: Path
+    content_prefix: str
+    session_id: str
+    session_dir_rel: str
+    task: str | None
+    session_summary: str
+    session_reflection: str
+    buffered_records: list[_BufferedRecord]
+    recall_events: list[_RecallEvent]
+    recall_candidate_events: list[_RecallCandidateEvent]
+    trace_events: list[_TraceEvent]
 
 
 # Soft per-need character budgets for `memory: context` by tier.
@@ -311,9 +325,9 @@ class EngramMemory:
         What the bootstrap still loads:
 
         - Header: session id, repo root, task (for orientation only).
-        - ``_BOOTSTRAP_FILES``: HOME, user portrait, activity rollup, and
-          the working/USER + working/CURRENT scratchpads. These are
-          task-independent primer material — always useful, cheap, stable.
+        - ``_BOOTSTRAP_FILES``: HOME, user portrait, and activity rollup.
+          These are task-independent primer material — always useful, cheap,
+          stable.
         - Active plan briefing (operational state — not knowledge).
         - Previous-session continuity hint when a recent prior session
           for this workspace exists in the SessionStore-backed index.
@@ -650,38 +664,28 @@ class EngramMemory:
             "",
         ]
 
-        if self._records:
-            body_lines.append("## Notable events")
-            body_lines.append("")
-            for rec in self._records:
-                ts = rec.timestamp.isoformat(timespec="seconds")
-                body_lines.append(f"- `{ts}` [{rec.kind}] {rec.content}")
-            body_lines.append("")
+        from harness.session_artifacts import (
+            buffered_records_section,
+            recall_events_section,
+            trace_events_section,
+        )
 
-        if self._recall_events:
-            body_lines.append("## Recall log")
-            body_lines.append("")
-            for ev in self._recall_events:
-                ts = ev.timestamp.isoformat(timespec="seconds")
-                body_lines.append(
-                    f"- `{ts}` query={ev.query!r} → {ev.file_path} "
-                    f"(trust={ev.trust or '?'} score={ev.score:.3f})"
-                )
-            body_lines.append("")
-
-        if self._trace_events:
-            body_lines.append("## Trace annotations")
-            body_lines.append("")
-            for ev in self._trace_events:
-                ts = ev.timestamp.isoformat(timespec="seconds")
-                tail = []
-                if ev.reason:
-                    tail.append(f"reason={ev.reason!r}")
-                if ev.detail:
-                    tail.append(f"detail={ev.detail!r}")
-                suffix = f" — {' '.join(tail)}" if tail else ""
-                body_lines.append(f"- `{ts}` [{ev.event}]{suffix}")
-            body_lines.append("")
+        body_lines.extend(buffered_records_section(self._records))
+        body_lines.extend(
+            recall_events_section(
+                self._recall_events,
+                heading="Recall log",
+                max_events=None,
+                compact=False,
+            )
+        )
+        body_lines.extend(
+            trace_events_section(
+                self._trace_events,
+                heading="Trace annotations",
+                compact=False,
+            )
+        )
 
         body = "\n".join(body_lines)
 
@@ -910,6 +914,22 @@ class EngramMemory:
     @property
     def trace_events(self) -> list[_TraceEvent]:
         return list(self._trace_events)
+
+    def session_snapshot(self) -> MemorySessionSnapshot:
+        """Return an immutable snapshot of session state for artifact writers."""
+        return MemorySessionSnapshot(
+            content_root=self.content_root,
+            content_prefix=self.content_prefix,
+            session_id=self.session_id,
+            session_dir_rel=self.session_dir_rel,
+            task=self.task,
+            session_summary=self.session_summary,
+            session_reflection=self.session_reflection,
+            buffered_records=self.buffered_records,
+            recall_events=self.recall_events,
+            recall_candidate_events=self.recall_candidate_events,
+            trace_events=self.trace_events,
+        )
 
     def _tag_last_recall_phase(self, n: int, phase: str) -> None:
         """Tag the last *n* recall events with *phase* ('manifest' or 'fetch')."""

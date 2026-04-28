@@ -24,9 +24,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from harness.config import (
+    RunPolicy,
     SessionComponents,
     SessionConfig,
     build_session,
+    serialize_session_config,
     trace_to_engram_enabled,
 )
 from harness.loop import (
@@ -85,7 +87,9 @@ def _done_payload(session: "ManagedSession") -> dict[str, object]:
         "status": session.status,
         "final_text": session.final_text,
         "turns_used": session.turns_used,
-        "max_turns_reached": session.result.max_turns_reached if session.result else False,
+        "max_turns_reached": (
+            bool(getattr(session.result, "max_turns_reached", False)) if session.result else False
+        ),
         "usage": session.usage.as_trace_dict(),
     }
 
@@ -287,6 +291,10 @@ def _emit(session: ManagedSession, event: SSEEvent) -> None:
 
 def _run_session(session: ManagedSession) -> None:
     """Run a single-shot session in a background thread."""
+    policy = RunPolicy.from_config(
+        session.config,
+        pause_handle=getattr(session.components, "pause_handle", None),
+    )
     try:
         result = run(
             session.task,
@@ -294,33 +302,16 @@ def _run_session(session: ManagedSession) -> None:
             session.components.tools,
             session.components.memory,
             session.components.tracer,
-            max_turns=session.config.max_turns,
-            max_parallel_tools=session.config.max_parallel_tools,
             stream_sink=session.components.stream_sink,
-            repeat_guard_threshold=session.config.repeat_guard_threshold,
-            repeat_guard_terminate_at=session.config.repeat_guard_terminate_at,
-            repeat_guard_exempt_tools=session.config.repeat_guard_exempt_tools,
-            tool_pattern_guard_threshold=session.config.tool_pattern_guard_threshold,
-            tool_pattern_guard_terminate_at=session.config.tool_pattern_guard_terminate_at,
-            tool_pattern_guard_window=session.config.tool_pattern_guard_window,
-            error_recall_threshold=session.config.error_recall_threshold,
             stop_event=session.stop_event,
             skip_end_session_commit=_bridge_enabled(session),
-            max_cost_usd=getattr(session.config, "max_cost_usd", None),
-            max_tool_calls=getattr(session.config, "max_tool_calls", None),
-            compaction_input_token_threshold=getattr(
-                session.config, "compaction_input_token_threshold", None
-            ),
-            full_compaction_input_token_threshold=getattr(
-                session.config, "full_compaction_input_token_threshold", None
-            ),
-            pause_handle=session.components.pause_handle,
+            **policy.run_kwargs(),
         )
         session.result = result
         session.final_text = result.final_text
         session.usage = result.usage
         session.turns_used = result.turns_used
-        if result.paused:
+        if getattr(result, "paused", None):
             session.status = "paused"
             _persist_paused_checkpoint(session, result)
         else:
@@ -370,6 +361,10 @@ def _run_interactive_session(session: ManagedSession) -> None:
 
         cap_cost = getattr(config, "max_cost_usd", None)
         cap_tools = getattr(config, "max_tool_calls", None)
+        base_policy = RunPolicy.from_config(
+            config,
+            pause_handle=getattr(session.components, "pause_handle", None),
+        )
         session_cost_usd = 0.0
         session_tool_calls = 0
 
@@ -393,25 +388,12 @@ def _run_interactive_session(session: ManagedSession) -> None:
                 tools,
                 memory,
                 tracer,
-                max_turns=config.max_turns,
-                max_parallel_tools=config.max_parallel_tools,
                 stream_sink=stream_sink,
-                repeat_guard_threshold=config.repeat_guard_threshold,
-                repeat_guard_terminate_at=config.repeat_guard_terminate_at,
-                repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
-                tool_pattern_guard_threshold=config.tool_pattern_guard_threshold,
-                tool_pattern_guard_terminate_at=config.tool_pattern_guard_terminate_at,
-                tool_pattern_guard_window=config.tool_pattern_guard_window,
-                error_recall_threshold=config.error_recall_threshold,
                 stop_event=session.stop_event,
-                max_cost_usd=rem_c,
-                max_tool_calls=rem_t,
-                compaction_input_token_threshold=getattr(
-                    config, "compaction_input_token_threshold", None
-                ),
-                full_compaction_input_token_threshold=getattr(
-                    config, "full_compaction_input_token_threshold", None
-                ),
+                **base_policy.for_remaining_budget(
+                    max_cost_usd=rem_c,
+                    max_tool_calls=rem_t,
+                ).idle_kwargs(),
             )
 
         result = _interactive_idle_result()
@@ -420,6 +402,21 @@ def _run_interactive_session(session: ManagedSession) -> None:
         session.usage = session.usage + result.usage
         session.turn_number += 1
         session.final_text = result.final_text
+        session.result = result
+        if getattr(result, "paused", None):
+            session.status = "paused"
+            session.turns_used = session.turn_number
+            _persist_paused_checkpoint(session, result)
+            _emit(
+                session,
+                SSEEvent(
+                    channel="control",
+                    event="done",
+                    data=_done_payload(session),
+                    ts=_now(),
+                ),
+            )
+            return
 
         _emit(
             session,
@@ -454,6 +451,21 @@ def _run_interactive_session(session: ManagedSession) -> None:
             session.usage = session.usage + result.usage
             session.turn_number += 1
             session.final_text = result.final_text
+            session.result = result
+            if getattr(result, "paused", None):
+                session.status = "paused"
+                session.turns_used = session.turn_number
+                _persist_paused_checkpoint(session, result)
+                _emit(
+                    session,
+                    SSEEvent(
+                        channel="control",
+                        event="done",
+                        data=_done_payload(session),
+                        ts=_now(),
+                    ),
+                )
+                return
 
             _emit(
                 session,
@@ -532,7 +544,9 @@ def _store_complete_session(session: ManagedSession) -> None:
         usage=session.usage,
         tool_call_log=session.tool_call_log,
         final_text=session.final_text,
-        max_turns_reached=(session.result.max_turns_reached if session.result else False),
+        max_turns_reached=(
+            bool(getattr(session.result, "max_turns_reached", False)) if session.result else False
+        ),
         engram_memory=getattr(session.components, "engram_memory", None),
         bridge_status=session.bridge_status,
         bridge_error=session.bridge_error,
@@ -565,6 +579,7 @@ def _persist_paused_checkpoint(session: ManagedSession, result) -> None:
         memory_state=serialize_memory_state(engram) if engram is not None else {},
         pause=pause.pause_info,
         checkpoint_at=_now(),
+        extra={"session_config": serialize_session_config(session.config)},
     )
     try:
         write_checkpoint(cp_path, payload)

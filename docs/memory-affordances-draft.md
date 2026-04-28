@@ -17,15 +17,13 @@
 > - **B4 added `pause_for_user`** ([tools/pause.py](harness/tools/pause.py))
 >   — agent-driven session pause; user resumes via `harness resume <id>`.
 >   Currently registered as a memory-family tool (CAP_PAUSE capability,
->   present only for non-read-only profiles). Note that `pause_for_user`
->   is **not yet documented in `prompt_templates/memory.md`** — the agent
->   sees it via the native tool-list (with its own description) but the
->   prompt section doesn't yet teach when to call it. Adding a `### memory:
->   pause` block alongside the existing operations is a small follow-up.
+>   present only for non-read-only profiles). It is documented in
+>   `harness/prompt_templates/memory.md` with guidance on when a pause is
+>   appropriate and how to phrase the question.
 > - ACCESS helpfulness scoring is shipped — the trace bridge derives
->   helpfulness from downstream tool use (read→edit, recall→success).
->   Strengthening this signal further is open as A6 follow-on work
->   (helpfulness-weighted re-ranking).
+>   helpfulness from downstream tool use (read/review→edit, recall→success).
+>   Helpfulness-weighted recall re-ranking is also shipped and uses those
+>   ACCESS rows as the feedback signal.
 > - The bootstrap-shrink open question remains: whether `start_session`
 >   should drop further files in favor of agent-initiated `memory_context`
 >   / `work_status`. Still unresolved.

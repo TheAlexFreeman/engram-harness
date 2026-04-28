@@ -47,6 +47,7 @@ from harness._engram_fs.trust_decay import (
     thresholds_to_yaml,
 )
 from harness.cli_helpers import build_engram_git_repo, resolve_content_root
+from harness.engram_schema import LIFECYCLE_NAMESPACES
 
 _log = logging.getLogger(__name__)
 
@@ -54,11 +55,7 @@ _log = logging.getLogger(__name__)
 # files are append-only auto-generated session records — they don't have the
 # kind of stable identity that promote/demote applies to. Mirrors A4's
 # DEFAULT_NAMESPACES choice for the same reason.
-DEFAULT_NAMESPACES: tuple[str, ...] = (
-    "memory/knowledge",
-    "memory/skills",
-    "memory/users",
-)
+DEFAULT_NAMESPACES: tuple[str, ...] = LIFECYCLE_NAMESPACES
 
 _LIFECYCLE_FILENAME = "_lifecycle.jsonl"
 _PROMOTE_FILENAME = "_promote_candidates.md"
