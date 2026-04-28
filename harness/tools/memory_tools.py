@@ -40,6 +40,8 @@ _MAX_REVIEW_CHARS = 16_000
 _MAX_CONTEXT_CHARS = 48_000
 _MAX_REMEMBER_CHARS = 8_000
 _ALLOWED_REMEMBER_KINDS = ("note", "reflection", "error")
+_MAX_SUPERSEDE_CONTENT_CHARS = 32_000
+_MAX_SUPERSEDE_REASON_CHARS = 240
 _ALLOWED_BUDGETS = ("S", "M", "L")
 _ALLOWED_SCOPES = ("knowledge", "skills", "activity", "users")
 
@@ -150,6 +152,16 @@ class MemoryRecall:
                 "type": "string",
                 "description": "Deprecated alias for `scope`.",
             },
+            "include_superseded": {
+                "type": "boolean",
+                "description": (
+                    "Include files marked as superseded or outside their "
+                    "validity window (frontmatter `superseded_by`, "
+                    "`valid_to` < today, or `valid_from` > today). "
+                    "Default false — the active surface presents only "
+                    "current-truth facts. Set true for audit/forensic tasks."
+                ),
+            },
         },
         "required": ["query"],
     }
@@ -170,8 +182,11 @@ class MemoryRecall:
         k = max(_MIN_K, min(k, _MAX_K))
 
         scope = _normalize_recall_scope(args.get("scope") or args.get("namespace"))
+        include_superseded = bool(args.get("include_superseded", False))
 
-        results = self._memory.recall(query, k=k, namespace=scope)
+        results = self._memory.recall(
+            query, k=k, namespace=scope, include_superseded=include_superseded
+        )
 
         try:
             idx = int(args.get("result_index", 0))
@@ -244,6 +259,127 @@ class MemoryRemember:
         return (
             f"Buffered [{kind}] for end-of-session commit: {preview}\n"
             f"(total buffered records: {len(self._memory.buffered_records)})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# memory: supersede (A2)
+# ---------------------------------------------------------------------------
+
+
+class MemorySupersede:
+    """``memory_supersede`` — invalidate an old memory file with a replacement.
+
+    The bi-temporal "don't delete; supersede" pattern. The old file's
+    ``valid_to`` is set to today and ``superseded_by`` points to the new
+    file's relative path; the body is left untouched so the historical
+    record stays intact and the agent can still inspect it via
+    ``memory_recall(..., include_superseded=True)``. The new file gets
+    ``supersedes`` set so the relationship is traceable from either
+    direction. Both files are committed in a single transaction.
+    """
+
+    name = "memory_supersede"
+    mutates = True
+    capabilities = frozenset({CAP_MEMORY_WRITE})
+    description = (
+        "Replace an outdated memory file with a corrected one. The old "
+        "file is preserved in git history but marked as superseded so "
+        "default recall hides it. Use this when you discover a memory "
+        "fact that contradicts current truth — do NOT delete the old "
+        "file. `old_path` is relative to memory/; `new_path` is also "
+        "relative to memory/ and must not already exist. `content` is "
+        "the new file's body (markdown). `reason` is a short note (≤240 "
+        "chars) explaining why supersession was needed; it lands in "
+        "frontmatter and the commit message for audit."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "old_path": {
+                "type": "string",
+                "description": (
+                    "Existing memory file to invalidate, relative to memory/. "
+                    "Example: 'knowledge/python-version.md'."
+                ),
+            },
+            "new_path": {
+                "type": "string",
+                "description": (
+                    "Where the replacement should be written, relative to "
+                    "memory/. Must not exist yet. Example: "
+                    "'knowledge/python-version-2026.md'."
+                ),
+            },
+            "content": {
+                "type": "string",
+                "description": (
+                    "Body of the new file, markdown. The harness writes "
+                    "frontmatter (source, trust, created, valid_from, "
+                    "supersedes) automatically — do NOT include a YAML "
+                    "frontmatter block here."
+                ),
+            },
+            "reason": {
+                "type": "string",
+                "description": (
+                    "Short justification for the supersession (≤240 chars). "
+                    "Lands in both files' frontmatter and the commit message."
+                ),
+            },
+            "trust": {
+                "type": "string",
+                "description": (
+                    "Trust level for the new file: 'low', 'medium', or 'high'. "
+                    "Default 'medium'. 'high' requires user-stated origin and "
+                    "is normally rejected by frontmatter validation."
+                ),
+                "enum": ["low", "medium", "high"],
+            },
+        },
+        "required": ["old_path", "new_path", "content"],
+    }
+
+    def __init__(self, memory: "EngramMemory"):
+        self._memory = memory
+
+    def run(self, args: dict) -> str:
+        old_path = (args.get("old_path") or "").strip()
+        new_path = (args.get("new_path") or "").strip()
+        content = args.get("content") or ""
+        reason = (args.get("reason") or "").strip()
+        trust = (args.get("trust") or "medium").strip().lower()
+        if not old_path:
+            raise ValueError("old_path must be a non-empty string")
+        if not new_path:
+            raise ValueError("new_path must be a non-empty string")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("content must be a non-empty string")
+        if len(content) > _MAX_SUPERSEDE_CONTENT_CHARS:
+            raise ValueError(
+                f"content too long ({len(content)} chars > "
+                f"{_MAX_SUPERSEDE_CONTENT_CHARS}); split or store the full text "
+                "elsewhere and reference it from the new memory file"
+            )
+        if len(reason) > _MAX_SUPERSEDE_REASON_CHARS:
+            reason = reason[:_MAX_SUPERSEDE_REASON_CHARS]
+        if trust not in ("low", "medium", "high"):
+            raise ValueError("trust must be one of: low, medium, high")
+
+        old_abs, new_abs = self._memory.supersede_file(
+            old_rel=old_path,
+            new_rel=new_path,
+            new_body=content,
+            reason=reason,
+            new_trust=trust,
+        )
+        return (
+            f"Superseded {old_abs.name} -> {new_abs.name}.\n"
+            f"  old (now hidden from recall): {old_path}\n"
+            f"  new ({trust} trust): {new_path}\n"
+            + (f"  reason: {reason}\n" if reason else "")
+            + "Default `memory_recall` no longer surfaces the old file. "
+            "Use `include_superseded=true` if you need to audit the prior version."
         )
 
 
@@ -874,10 +1010,11 @@ def _lifecycle_row_line(row) -> str:
 
 
 __all__ = [
+    "MemoryContext",
+    "MemoryLifecycleReview",
     "MemoryRecall",
     "MemoryRemember",
     "MemoryReview",
-    "MemoryContext",
-    "MemoryLifecycleReview",
+    "MemorySupersede",
     "MemoryTrace",
 ]
