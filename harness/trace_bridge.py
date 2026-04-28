@@ -128,6 +128,29 @@ def run_trace_bridge(
             ``gen_ai.request.model`` attributes. Optional; falls through to
             empty when callers don't have it.
     """
+    # B4 safety net: if a checkpoint file sits next to the trace, the session
+    # is paused and the trace is mid-flight. Refuse to write artifacts —
+    # they'd reflect a partial session and confuse the eventual resume.
+    # The CLI / server callers already gate on this, so under normal flow
+    # this branch never trips. Returns a no-op result with empty artifacts.
+    checkpoint_sibling = trace_path.parent / "checkpoint.json"
+    if checkpoint_sibling.is_file():
+        _log.warning(
+            "trace bridge: session at %s is paused (checkpoint.json present); "
+            "skipping artifact write",
+            trace_path.parent,
+        )
+        session_dir = trace_path.parent
+        return TraceBridgeResult(
+            session_dir=session_dir,
+            summary_path=session_dir / "summary.md",
+            reflection_path=session_dir / "reflection.md",
+            spans_path=session_dir / "spans.jsonl",
+            access_entries=0,
+            commit_sha=None,
+            artifacts=[],
+        )
+
     events = list(_read_events(trace_path))
     stats = _aggregate_stats(events)
 

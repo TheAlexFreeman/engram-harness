@@ -50,6 +50,11 @@ class SessionRecord:
     bridge_error: str | None = None
     active_plan_project: str | None = None
     active_plan_id: str | None = None
+    # B4 pause/resume — populated when ``pause_for_user`` halts the session.
+    # ``status`` is ``"paused"`` when these are non-null; ``mark_resumed`` clears
+    # both back to None.
+    pause_checkpoint: str | None = None
+    paused_at: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         d = {
@@ -79,6 +84,8 @@ class SessionRecord:
             "bridge_error": self.bridge_error,
             "active_plan_project": self.active_plan_project,
             "active_plan_id": self.active_plan_id,
+            "pause_checkpoint": self.pause_checkpoint,
+            "paused_at": self.paused_at,
         }
         return d
 
@@ -117,6 +124,8 @@ class SessionRecord:
             bridge_error=row.get("bridge_error"),
             active_plan_project=row.get("active_plan_project"),
             active_plan_id=row.get("active_plan_id"),
+            pause_checkpoint=row.get("pause_checkpoint"),
+            paused_at=row.get("paused_at"),
         )
 
 
@@ -176,6 +185,8 @@ class SessionStore:
             ("bridge_error", "TEXT"),
             ("active_plan_project", "TEXT"),
             ("active_plan_id", "TEXT"),
+            ("pause_checkpoint", "TEXT"),
+            ("paused_at", "TEXT"),
         ]
         for name, decl in additive:
             if name not in existing:
@@ -286,6 +297,52 @@ class SessionStore:
                     "UPDATE sessions_fts SET final_text = ? WHERE session_id = ?",
                     (final_text, session_id),
                 )
+            self._conn.commit()
+
+    def mark_paused(
+        self,
+        session_id: str,
+        *,
+        checkpoint_path: str,
+        paused_at: str,
+    ) -> None:
+        """Flag a session as paused (B4). Status flips to ``"paused"``;
+        ``pause_checkpoint`` records where the on-disk state lives so
+        ``harness resume`` can find it.
+        """
+        with self._write_lock:
+            self._conn.execute(
+                """
+                UPDATE sessions SET
+                    status = 'paused',
+                    pause_checkpoint = :checkpoint_path,
+                    paused_at = :paused_at
+                WHERE session_id = :session_id
+                """,
+                {
+                    "session_id": session_id,
+                    "checkpoint_path": checkpoint_path,
+                    "paused_at": paused_at,
+                },
+            )
+            self._conn.commit()
+
+    def mark_resumed(self, session_id: str) -> None:
+        """Flip a paused session back to ``"running"`` and clear the pause
+        sidecar fields. The eventual ``complete_session`` call from the
+        resumed loop will set the final status.
+        """
+        with self._write_lock:
+            self._conn.execute(
+                """
+                UPDATE sessions SET
+                    status = 'running',
+                    pause_checkpoint = NULL,
+                    paused_at = NULL
+                WHERE session_id = :session_id
+                """,
+                {"session_id": session_id},
+            )
             self._conn.commit()
 
     def get_session(self, session_id: str) -> SessionRecord | None:

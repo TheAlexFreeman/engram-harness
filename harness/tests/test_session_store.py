@@ -418,3 +418,73 @@ def test_concurrent_writes(tmp_path):
     results = store.list_sessions()
     assert len(results) == 10
     store.close()
+
+
+# ---------------------------------------------------------------------------
+# B4 pause / resume
+# ---------------------------------------------------------------------------
+
+
+def test_mark_paused_sets_status_and_checkpoint(store):
+    rec = _make_record()
+    store.insert_session(rec)
+    store.mark_paused(
+        rec.session_id,
+        checkpoint_path="/abs/path/checkpoint.json",
+        paused_at="2026-04-27T20:00:00",
+    )
+    fetched = store.get_session(rec.session_id)
+    assert fetched is not None
+    assert fetched.status == "paused"
+    assert fetched.pause_checkpoint == "/abs/path/checkpoint.json"
+    assert fetched.paused_at == "2026-04-27T20:00:00"
+
+
+def test_mark_resumed_clears_pause_fields_and_status(store):
+    rec = _make_record()
+    store.insert_session(rec)
+    store.mark_paused(
+        rec.session_id,
+        checkpoint_path="/cp.json",
+        paused_at="2026-04-27T20:00:00",
+    )
+    store.mark_resumed(rec.session_id)
+    fetched = store.get_session(rec.session_id)
+    assert fetched is not None
+    assert fetched.status == "running"
+    assert fetched.pause_checkpoint is None
+    assert fetched.paused_at is None
+
+
+def test_list_sessions_can_filter_paused(store):
+    rec_a = _make_record("ses_a")
+    rec_b = _make_record("ses_b")
+    store.insert_session(rec_a)
+    store.insert_session(rec_b)
+    store.mark_paused(
+        "ses_a",
+        checkpoint_path="/cp.json",
+        paused_at="2026-04-27T20:00:00",
+    )
+    paused = store.list_sessions(status="paused")
+    assert [r.session_id for r in paused] == ["ses_a"]
+
+
+def test_paused_record_survives_existing_db_migration(tmp_path):
+    """Re-opening an existing DB still gets the new columns via the additive
+    migration path."""
+    db_path = tmp_path / "old.db"
+    first = SessionStore(db_path)
+    first.insert_session(_make_record())
+    first.close()
+
+    second = SessionStore(db_path)
+    second.mark_paused(
+        "ses_001",
+        checkpoint_path="/cp.json",
+        paused_at="2026-04-27T20:00:00",
+    )
+    fetched = second.get_session("ses_001")
+    second.close()
+    assert fetched is not None
+    assert fetched.pause_checkpoint == "/cp.json"

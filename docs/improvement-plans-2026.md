@@ -415,7 +415,7 @@ error-prone.
 **Risks:** sandbox escape (mitigated by choice of executor);
 debugging UX (need clear error reporting).
 
-#### B4. Durable interrupt + checkpoint-and-resume
+#### B4. Durable interrupt + checkpoint-and-resume — **shipped (v1)**
 
 **Why.** LangGraph's `interrupt()` + `Command(resume=...)` pattern is
 the reference design for human-in-the-loop. Pause mid-loop, persist
@@ -423,27 +423,54 @@ state, surface a question to a human, resume on a different machine
 days later. Our SessionStore indexes sessions but doesn't checkpoint
 mid-loop state.
 
-**Proposed shape.**
-1. New tool `pause_for_user(question, context)` — emits a tracer event,
-   persists `messages + memory.session_state` to
-   `<session>/checkpoint.json`, terminates the loop with a special
-   exit status.
-2. New CLI `harness resume <session_id>` — loads the checkpoint,
-   prompts the user for input, resumes the loop.
-3. Trace bridge skips when status == "paused"; runs when the resumed
-   session finishes.
+**Shape (as built).**
+1. ✅ `pause_for_user(question, context?)` tool —
+   [tools/pause.py](harness/tools/pause.py). Sets a flag on a shared
+   `PauseHandle` instance the loop owns. Returns a placeholder
+   `tool_result` so the API alternation rule survives the pause.
+2. ✅ `<session_dir>/checkpoint.json` — JSON-portable snapshot of
+   `messages` + `Usage` + loop counters + `EngramMemory` buffered events
+   + pause metadata. Schema and round-trip helpers live in
+   [checkpoint.py](harness/checkpoint.py). Atomic write-then-rename so a
+   crash mid-write doesn't clobber a previous good checkpoint.
+3. ✅ Loop pause boundary: after each tool batch's results are appended
+   to `messages`, before the next `mode.complete()`. The loop returns
+   `RunResult(paused=True, pause=..., pause_loop_state=..., messages=...)`;
+   the caller serializes the checkpoint and skips the trace bridge.
+4. ✅ `harness resume <session_id>` CLI —
+   [cmd_resume.py](harness/cmd_resume.py). Validates the session is
+   paused, locates the checkpoint, prompts for the user's reply
+   (interactive stdin or `--reply <text>`), mutates the placeholder
+   `tool_result` content via `tool_use_id`, restores `EngramMemory`
+   buffered events, re-enters the loop with `ResumeState`, and runs
+   the trace bridge once the resumed session ends naturally. Multi-pause
+   sessions supported (a resumed session can pause again).
+5. ✅ New `paused` SessionStore status + `pause_checkpoint` /
+   `paused_at` columns + `mark_paused()` / `mark_resumed()` methods.
+6. ✅ `harness status` surfaces paused sessions with checkpoint path
+   and pause-question preview.
+7. ✅ `CAP_PAUSE` capability so tool profiles can opt out
+   (`read_only` profile never sees the pause tool).
 
-**Files:** new `harness/checkpoint.py`, hooks in `harness/loop.py`,
-new `harness/cmd_resume.py`.
+**Out of v1 (deferred, per the plan):**
+- Cross-machine portability (path-relative checkpoints + relocate flag)
+- Workspace-plan integration (paused session ↔ paused plan phase)
+- SIGINT-driven involuntary checkpoint via signal handler
+- `harness resume <id> --abort` to cancel a paused session
+- Concurrent-resume protection (file lock on checkpoint.json)
+- Web UI surfacing in `cmd_serve`
 
-**Complexity:** medium. ~2 PRs (checkpoint + resume CLI; integration
-with workspace plans).
+**Files (as shipped):** new `harness/checkpoint.py`, new
+`harness/cmd_resume.py`, new `harness/tools/pause.py`; modifications in
+`harness/loop.py`, `harness/cli.py`, `harness/server.py`,
+`harness/config.py`, `harness/session_store.py`,
+`harness/cmd_status.py`, `harness/trace_bridge.py`,
+`harness/tools/__init__.py`, `harness/engram_memory.py` (resume
+session-id support).
 
-**Dependencies:** none.
-
-**Risks:** state serialization is non-trivial — `messages` references
-provider-specific objects (Anthropic `Message`). Solution: serialize
-via the existing `as_assistant_message` adapter.
+**Status:** same-machine, same-workspace only. Cross-machine resume is
+a deliberate follow-up — the checkpoint records absolute paths, and the
+CLI validates them before resuming.
 
 #### B5. Result-aware loop detection (replace input-fingerprint version)
 

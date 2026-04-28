@@ -14,6 +14,9 @@ CAP_MEMORY_WRITE = "memory_write"
 CAP_WORK_READ = "work_read"
 CAP_WORK_WRITE = "work_write"
 CAP_SUBAGENT = "subagent"
+# B4: pause-and-resume primitive. Held separately from CAP_MEMORY_WRITE so
+# read-only tool profiles can opt out cleanly without disabling memory writes.
+CAP_PAUSE = "pause"
 
 
 @dataclass

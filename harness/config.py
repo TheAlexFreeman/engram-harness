@@ -92,6 +92,11 @@ class SessionComponents:
     stream_sink: Any  # StreamSink
     trace_path: Path
     config: SessionConfig
+    # B4: shared state object the loop and the pause_for_user tool both
+    # consult to coordinate session pauses. Always present (the tool itself
+    # is registered only when the active profile includes CAP_PAUSE), but
+    # benign no-op when the agent never calls pause_for_user.
+    pause_handle: Any = None  # harness.tools.pause.PauseHandle
 
 
 def _harness_project_root() -> Path:
@@ -220,8 +225,21 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
 
 def _build_memory(
     config: SessionConfig,
+    *,
+    resume_session_id: str | None = None,
+    pause_handle: Any = None,
 ) -> tuple[Any, Any, list[Any]]:
-    """Build memory backend from config. Returns (backend, engram_or_none, extra_tools)."""
+    """Build memory backend from config. Returns (backend, engram_or_none, extra_tools).
+
+    ``resume_session_id`` (B4): when supplied, the EngramMemory is constructed
+    with that session_id (and skips fresh activity-dir reservation if the
+    session dir already exists). Used by ``harness resume`` to continue an
+    existing session in place rather than forking a new one.
+
+    ``pause_handle`` (B4): when supplied AND the active profile includes
+    CAP_PAUSE, the ``pause_for_user`` tool is registered alongside the other
+    write tools. Read-only profiles never see it.
+    """
     if config.memory_backend == "file":
         from harness.memory import FileMemory
 
@@ -295,6 +313,7 @@ def _build_memory(
             workspace_dir=workspace_root,
             previous_session_provider=previous_session_provider,
             reserve_session_dir=reserve_session_dir,
+            session_id=resume_session_id,
         )
     except Exception as exc:  # noqa: BLE001
         print(
@@ -340,6 +359,13 @@ def _build_memory(
     ]
     if not read_only:
         memory_tools.extend([MemoryRemember(engram), MemoryTrace(engram)])
+        # B4: pause/resume primitive. Only mounted when both a handle is
+        # provided and the profile is non-read-only. The handle lives on
+        # SessionComponents so the loop can poll it after each tool batch.
+        if pause_handle is not None:
+            from harness.tools.pause import PauseForUser
+
+            memory_tools.append(PauseForUser(pause_handle))
     work_tools = [
         WorkStatus(workspace),
         WorkThread(workspace, engram=engram),
@@ -436,8 +462,22 @@ def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any
     raise AssertionError("unreachable")
 
 
-def _derive_trace_path(config: SessionConfig, engram_memory: Any) -> Path:
-    """Derive the trace file path from config and optional engram session."""
+def _derive_trace_path(
+    config: SessionConfig,
+    engram_memory: Any,
+    *,
+    resume_trace_path: Path | None = None,
+) -> Path:
+    """Derive the trace file path from config and optional engram session.
+
+    ``resume_trace_path`` (B4): when supplied, that exact path is used and
+    the file is left in place (no truncation). The resumed loop appends to
+    the existing trace so the JSONL stays continuous across the pause.
+    """
+    if resume_trace_path is not None:
+        path = Path(resume_trace_path).resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
     is_grok = any(k in config.model.lower() for k in ["grok", "xai", "x.ai"])
     actions_suffix = "grok" if is_grok else config.mode
     if trace_to_engram_enabled(config, engram_memory):
@@ -486,6 +526,8 @@ def build_session(
     extra_trace_sinks: list[Any] | None = None,
     stream_sink_override: Any | None = None,
     scope: Any | None = None,
+    resume_session_id: str | None = None,
+    resume_trace_path: Path | None = None,
 ) -> SessionComponents:
     """Construct all session objects from config.
 
@@ -507,7 +549,18 @@ def build_session(
         memory is active, its mounted memory root is set before the mode sees
         tool descriptions.
     """
-    memory, engram_memory, extra_tools = _build_memory(config)
+    # Build the pause handle up-front so it can be passed into both the
+    # tool registry (via _build_memory → PauseForUser(handle)) and stashed on
+    # SessionComponents for the loop to poll.
+    from harness.tools.pause import PauseHandle
+
+    pause_handle = PauseHandle()
+
+    memory, engram_memory, extra_tools = _build_memory(
+        config,
+        resume_session_id=resume_session_id,
+        pause_handle=pause_handle,
+    )
 
     if tools is None:
         tools = {}
@@ -520,7 +573,11 @@ def build_session(
         tools = {**tools, **{t.name: t for t in extra_tools}}
 
     mode = _build_mode(config, tools, engram_memory)
-    trace_path = _derive_trace_path(config, engram_memory)
+    trace_path = _derive_trace_path(
+        config,
+        engram_memory,
+        resume_trace_path=resume_trace_path,
+    )
     tracer = _build_tracer(config, trace_path, extra_sinks=extra_trace_sinks)
     stream_sink = _build_stream_sink(config, override=stream_sink_override)
 
@@ -543,6 +600,7 @@ def build_session(
         stream_sink=stream_sink,
         trace_path=trace_path,
         config=config,
+        pause_handle=pause_handle,
     )
 
 
