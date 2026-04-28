@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os as _os
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -49,6 +50,91 @@ class Tool(Protocol):
     untrusted_output: bool
 
     def run(self, args: dict) -> str: ...
+
+
+# --- Per-tool-result output budget (B2 layer 1) --------------------------
+#
+# Single-tool noise (a long bash log, a verbose web fetch, a deeply nested
+# JSON dump, a Python traceback hundreds of lines deep) is one of the most
+# common ways context gets blown out on long sessions. This is a cheap
+# safety net at the dispatch boundary: any tool result over the budget
+# gets head/tail truncated with a marker stating how many chars were
+# elided.
+#
+# The budget is intentionally generous (~6k tokens at the typical 4-chars-
+# per-token ratio): individual tools already have their own truncation
+# (memory_review caps at 16k, memory_recall at 12k, read_file does its
+# own paging). This is the upper-bound safety net for callers that don't
+# self-cap.
+#
+# Override via the ``HARNESS_TOOL_OUTPUT_BUDGET`` env var; set to ``0`` to
+# disable truncation entirely.
+try:
+    _TOOL_OUTPUT_BUDGET_CHARS = int(_os.environ.get("HARNESS_TOOL_OUTPUT_BUDGET", "24000"))
+except ValueError:
+    _TOOL_OUTPUT_BUDGET_CHARS = 24_000
+
+
+def _truncation_marker(tool_name: str, overflow: int, total_len: int) -> str:
+    """Verbose message inserted between head and tail when there is room."""
+    return (
+        f"\n\n[harness] tool output truncated — "
+        f"{overflow} of {total_len} chars elided. "
+        f"Retry {tool_name!r} with a narrower scope (offset/limit, grep filter, head -n) "
+        f"or use a file-producing tool to inspect the full output.\n\n"
+    )
+
+
+def _truncation_marker_compact(tool_name: str, overflow: int, total_len: int) -> str:
+    """Shorter marker when the verbose form would leave almost no room for body."""
+    return (
+        f"\n[harness] tool output truncated — {overflow} of {total_len} chars elided "
+        f"({tool_name!r}).\n"
+    )
+
+
+def _pick_marker(tool_name: str, overflow: int, n: int, budget: int) -> str:
+    """Pick a marker variant, reserving space so head/tail can each hold multiple chars."""
+    # At least this many chars left for head+tail combined; avoids a 1-char head
+    # when the full marker barely fits (e.g. budget 200 vs ~198-char verbose).
+    min_split_room = 8
+    verbose = _truncation_marker(tool_name, overflow, n)
+    if len(verbose) + min_split_room <= budget:
+        return verbose
+    compact = _truncation_marker_compact(tool_name, overflow, n)
+    if len(compact) + min_split_room <= budget:
+        return compact
+    minimal = f"\n[harness] truncated — {overflow} of {n} chars ({tool_name!r}).\n"
+    if len(minimal) + min_split_room <= budget:
+        return minimal
+    # Degenerate: marker dominates the budget — return as much marker as fits.
+    return verbose[:budget]
+
+
+def _truncate_tool_output(tool_name: str, content: str) -> str:
+    """Head/tail truncate a tool result that exceeds the per-tool budget.
+
+    Below the budget the content is returned unchanged. At or above it,
+    the result becomes ``<head><marker><tail>`` where head and tail split
+    the space left after the marker so the returned string length never
+    exceeds ``budget``. The marker states the nominal overflow
+    (``len(content) - budget``) so the model can choose to retry with a
+    narrower call. Disabled when the budget is set to zero.
+    """
+    budget = _TOOL_OUTPUT_BUDGET_CHARS
+    if budget <= 0 or len(content) <= budget:
+        return content
+    n = len(content)
+    overflow = n - budget
+    marker = _pick_marker(tool_name, overflow, n, budget)
+    room = budget - len(marker)
+    if room <= 0:
+        return marker[:budget] if len(marker) > budget else marker
+    left = room // 2
+    right = room - left
+    head = content[:left]
+    tail = content[-right:] if right > 0 else ""
+    return head + marker + tail
 
 
 # --- Untrusted-output marker (D1 layer 1) ---------------------------------
@@ -104,6 +190,11 @@ def execute(call: ToolCall, registry: dict[str, Tool]) -> ToolResult:
     returned content is wrapped with ``<untrusted_tool_output>`` markers
     so the model can distinguish it from harness-trusted text — even
     when the tool returns an error.
+
+    Tool output is then head/tail truncated if it exceeds the per-tool
+    budget (B2 layer 1) — a cheap context-protection safety net for
+    tools that don't self-cap. The truncation runs *after* untrusted
+    wrapping so the marker stays visible.
     """
     tool = registry.get(call.name)
     if tool is None:
@@ -129,6 +220,7 @@ def execute(call: ToolCall, registry: dict[str, Tool]) -> ToolResult:
         content = tool.run(call.args)
         if untrusted:
             content = _wrap_untrusted(call.name, content)
+        content = _truncate_tool_output(call.name, content)
         return ToolResult(call=call, content=content, is_error=False)
     except Exception as e:
         import traceback
@@ -136,4 +228,5 @@ def execute(call: ToolCall, registry: dict[str, Tool]) -> ToolResult:
         content = f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}"
         if untrusted:
             content = _wrap_untrusted(call.name, content)
+        content = _truncate_tool_output(call.name, content)
         return ToolResult(call=call, content=content, is_error=True)
