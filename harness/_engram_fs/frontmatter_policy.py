@@ -194,10 +194,21 @@ def validate_bitemporal_fields(
                 f"{context} {key} must be an ISO date string or date; got {type(raw).__name__}"
             )
         if isinstance(raw, str) and raw.strip():
+            s = raw.strip()
             try:
-                date.fromisoformat(raw.strip()[:10])
-            except ValueError as exc:
-                raise ValidationError(f"{context} {key} {raw!r} is not a valid ISO date") from exc
+                parsed = date.fromisoformat(s)
+            except ValueError:
+                try:
+                    parsed = datetime.fromisoformat(s).date()
+                except ValueError as exc:
+                    raise ValidationError(
+                        f"{context} {key} {raw!r} is not a valid ISO date"
+                    ) from exc
+            else:
+                # Reject `"2026-06-01junk"` — ``fromisoformat`` parses only the prefix on some inputs.
+                iso = parsed.isoformat()
+                if not (s == iso or s.startswith(iso + "T")):
+                    raise ValidationError(f"{context} {key} {raw!r} is not a valid ISO date")
 
     valid_from = _coerce_iso_date(frontmatter.get("valid_from"))
     valid_to = _coerce_iso_date(frontmatter.get("valid_to"))

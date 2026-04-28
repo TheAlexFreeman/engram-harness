@@ -21,6 +21,7 @@ Covers:
 from __future__ import annotations
 
 import subprocess
+import types
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -104,6 +105,15 @@ def test_validate_passes_on_well_formed():
 def test_validate_rejects_malformed_date():
     with pytest.raises(ValidationError, match="not a valid ISO date"):
         validate_bitemporal_fields({"valid_to": "yesterday"})
+
+
+def test_validate_rejects_date_with_trailing_garbage():
+    with pytest.raises(ValidationError, match="not a valid ISO date"):
+        validate_bitemporal_fields({"valid_to": "2026-06-01oops"})
+
+
+def test_validate_accepts_datetime_strings():
+    validate_bitemporal_fields({"valid_to": "2026-06-01T12:00:00"})
 
 
 def test_validate_rejects_inverted_window():
@@ -250,6 +260,53 @@ def test_recall_filters_expired_valid_to(repo: Path):
     results = mem.recall("celery", k=5)
     paths = [r.content.split("]")[0].lstrip("[") for r in results]
     assert all("celery.md" not in p for p in paths)
+
+
+def test_recall_refills_after_superseded_head_when_bm25_has_more_candidates(
+    repo: Path, monkeypatch
+):
+    """First ``rerank_pool`` BM25 hits may all be superseded; recall should scan deeper ranks."""
+    monkeypatch.setenv("HARNESS_HELPFULNESS_RERANK", "0")
+
+    km = repo / "core" / "memory" / "knowledge"
+    stem = "---\nsource: agent-generated\ntrust: medium\n---\n\n# Doc\n\ncelery\n"
+    for i in range(15):
+        (km / f"rank{i}.md").write_text(stem, encoding="utf-8")
+
+    mem = EngramMemory(repo, embed=False)
+
+    def _fake_bm25(self, query: str, *, k: int, scopes):  # noqa: ARG001
+        out = []
+        for i in range(15):
+            fp = f"memory/knowledge/rank{i}.md"
+            out.append(
+                {
+                    "file_path": fp,
+                    "heading": None,
+                    "content": "celery snippet",
+                    "score": float(100 - i),
+                    "trust": "medium",
+                }
+            )
+        return out
+
+    monkeypatch.setattr(mem, "_bm25_recall", types.MethodType(_fake_bm25, mem))
+
+    for i in range(10):
+        abs_p = km / f"rank{i}.md"
+        fm, body = read_with_frontmatter(abs_p)
+        fm["superseded_by"] = "memory/knowledge/rank-next.md"
+        write_with_frontmatter(abs_p, fm, body)
+
+    results = mem.recall("celery", k=5)
+    paths = [r.content.split("]")[0].lstrip("[") for r in results]
+    assert paths == [
+        "memory/knowledge/rank10.md",
+        "memory/knowledge/rank11.md",
+        "memory/knowledge/rank12.md",
+        "memory/knowledge/rank13.md",
+        "memory/knowledge/rank14.md",
+    ]
 
 
 # ---------------------------------------------------------------------------

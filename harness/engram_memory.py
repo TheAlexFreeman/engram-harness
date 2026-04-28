@@ -405,8 +405,51 @@ class EngramMemory:
         # surviving hits keep their relative order. Filter is a peek at
         # frontmatter; we cap the work by reading only the candidates
         # that survived earlier passes.
+        #
+        # Refill from deeper fusion ranks when filtration drops too many of
+        # the ``rerank_pool`` slice — otherwise ``memory_recall`` can return
+        # fewer than ``k`` hits despite valid replacements ranking lower.
         if not include_superseded and hits:
-            hits = [h for h in hits if not _is_path_superseded(self.content_root / h["file_path"])]
+            refill_source: list[dict[str, Any]] | None = None
+            if not keyword_hits:
+                if sem_hits and bm25_hits:
+                    refill_source = reciprocal_rank_fusion([sem_hits, bm25_hits])
+                elif sem_hits:
+                    refill_source = sem_hits
+                elif bm25_hits:
+                    refill_source = bm25_hits
+
+            def _filter_active(pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                return [
+                    h for h in pool if not _is_path_superseded(self.content_root / h["file_path"])
+                ]
+
+            hits = _filter_active(hits)
+            if refill_source is not None and len(hits) < k:
+                seen_paths = {h["file_path"] for h in hits}
+                for h in refill_source:
+                    if len(hits) >= k:
+                        break
+                    fp = h["file_path"]
+                    if fp in seen_paths:
+                        continue
+                    if _is_path_superseded(self.content_root / fp):
+                        continue
+                    seen_paths.add(fp)
+                    hits.append(h)
+
+            # Refills skipped the helpfulness rerank pass above — blend scores for
+            # newly appended hits only, then re-sort so ordering stays coherent.
+            if helpfulness_rerank_enabled() and hits:
+                hi = self._get_helpfulness_index()
+                for hit in hits:
+                    if "rrf_score_pre_rerank" in hit:
+                        continue
+                    fp = hit.get("file_path", "")
+                    base = float(hit.get("score", 0.0))
+                    hit["rrf_score_pre_rerank"] = base
+                    hit["score"] = hi.reweight(base, fp)
+                hits.sort(key=lambda h: float(h.get("score", 0.0)), reverse=True)
 
         hits = hits[:k]
         returned_paths = {h["file_path"] for h in hits}
