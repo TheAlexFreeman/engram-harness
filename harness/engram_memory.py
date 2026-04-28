@@ -252,6 +252,13 @@ class EngramMemory:
             self.session_id = self._allocate_session_id(reserve=reserve_session_dir)
         else:
             self.session_id = session_id
+            # B4 resume: when an explicit session_id is supplied AND its
+            # activity directory already exists from a prior date, adopt that
+            # date so reads/writes line up with the original location instead
+            # of forking into a today-stamped sibling.
+            adopted = self._infer_existing_session_date_parts(session_id)
+            if adopted is not None:
+                self._session_date_parts = adopted
             if reserve_session_dir:
                 (self.content_root / self._session_dir_rel()).mkdir(parents=True, exist_ok=True)
         self.task: str | None = None
@@ -778,6 +785,29 @@ class EngramMemory:
 
     def _session_dir_rel(self) -> str:
         return f"memory/activity/{self._session_path_fragment()}/{self.session_id}"
+
+    def _infer_existing_session_date_parts(self, session_id: str) -> tuple[str, str, str] | None:
+        """Find an existing ``memory/activity/YYYY/MM/DD/<session_id>`` dir
+        and return its date parts. Returns ``None`` if no matching directory
+        exists yet (fresh session with caller-supplied id). Used to honour
+        the original session date on B4 resume so the trace + summary
+        stay co-located with the rest of the session's artifacts.
+        """
+        activity_root = self.content_root / "memory" / "activity"
+        if not activity_root.is_dir():
+            return None
+        for year_dir in activity_root.iterdir():
+            if not year_dir.is_dir() or len(year_dir.name) != 4:
+                continue
+            for month_dir in year_dir.iterdir():
+                if not month_dir.is_dir() or len(month_dir.name) != 2:
+                    continue
+                for day_dir in month_dir.iterdir():
+                    if not day_dir.is_dir() or len(day_dir.name) != 2:
+                        continue
+                    if (day_dir / session_id).is_dir():
+                        return (year_dir.name, month_dir.name, day_dir.name)
+        return None
 
     def _active_plan_briefing(self, max_chars: int = 2000) -> str:
         """Return a brief briefing for the most recently active workspace plan, if any.

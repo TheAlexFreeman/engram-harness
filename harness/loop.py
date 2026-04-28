@@ -254,6 +254,20 @@ class RunResult:
     budget_reason: str | None = None
     # Harness tool calls executed in this ``run_until_idle`` invocation (for session budgets)
     tool_calls_used: int = 0
+    # B4: set when ``pause_for_user`` halted the session. ``pause`` carries the
+    # PauseInfo (question + tool_use_id + asked_at) so the caller can build the
+    # checkpoint without re-deriving it from the trace.
+    paused: bool = False
+    pause: Any = (
+        None  # harness.checkpoint.PauseInfo when paused; kept untyped to avoid an import cycle.
+    )
+    # B4: the loop counters at pause time, ready to fold into the checkpoint by
+    # the caller. Untyped here for the same reason.
+    pause_loop_state: Any = None
+    # B4: live reference to the conversation messages list at pause time. The
+    # caller serializes this into the checkpoint. Always set on a paused
+    # result; ``None`` otherwise (no point keeping a dangling reference).
+    messages: list[dict] | None = None
 
 
 def session_remaining_cost_usd(cap: float | None, consumed_session_usd: float) -> float | None:
@@ -282,8 +296,17 @@ def _execute_tool_batch(
     *,
     max_parallel_tools: int,
     tracer: TraceSink,
+    pause_handle: Any = None,
 ) -> list[ToolResult]:
-    """Execute a model-emitted tool batch with deterministic mutation semantics."""
+    """Execute a model-emitted tool batch with deterministic mutation semantics.
+
+    ``pause_handle`` (a ``harness.tools.pause.PauseHandle``-shaped object) is
+    threaded through so the dispatcher can stamp ``current_tool_use_id`` onto
+    the handle right before each tool runs. This lets the pause tool record
+    its own ``tool_use_id`` without needing access to ``ToolCall`` shapes.
+    Only the sequential-mutating path consults the handle — pause_for_user is
+    mutating, so any batch containing it goes through that path.
+    """
     has_mutation = any(tool_mutates(tools.get(call.name)) for call in tool_calls)
     if has_mutation:
         tracer.event(
@@ -292,7 +315,14 @@ def _execute_tool_batch(
             max_parallel=1,
             strategy="sequential_mutating",
         )
-        return [execute(c, tools) for c in tool_calls]
+        results: list[ToolResult] = []
+        for c in tool_calls:
+            if pause_handle is not None:
+                pause_handle.current_tool_use_id = c.id
+            results.append(execute(c, tools))
+        if pause_handle is not None:
+            pause_handle.current_tool_use_id = None
+        return results
     if max_parallel_tools <= 1 or len(tool_calls) == 1:
         strategy = "sequential_read_only" if len(tool_calls) > 1 else "single"
         tracer.event(
@@ -337,6 +367,9 @@ def run_until_idle(
     stop_event: threading.Event | None = None,
     max_cost_usd: float | None = None,
     max_tool_calls: int | None = None,
+    pause_handle: Any = None,
+    resume_counters: Any = None,
+    resume_usage: Usage | None = None,
 ) -> RunResult:
     """Run model/tool turns until the assistant responds without tool calls or
     ``max_turns`` is hit.
@@ -345,22 +378,42 @@ def run_until_idle(
     ``end_session`` or emit ``session_start`` / ``session_end``. The last
     message in ``messages`` must already be the latest user turn (or initial
     bootstrap) expected by the model.
+
+    ``pause_handle`` (B4): if a ``PauseHandle`` is passed, the dispatcher
+    threads ``current_tool_use_id`` to the handle before each mutating tool
+    runs. After every tool batch, the loop checks ``handle.requested`` and
+    exits with ``RunResult(paused=True, ...)`` if the agent has called
+    ``pause_for_user``. The caller is responsible for writing the checkpoint
+    file and updating SessionStore status.
+
+    ``resume_counters`` / ``resume_usage`` (B4 resume): when supplied, the
+    loop seeds its per-turn counters and total usage from a prior
+    checkpointed session instead of starting fresh. Caller is responsible
+    for restoring ``messages`` content (including the mutated pause reply)
+    and ``EngramMemory`` buffered events before invoking us.
     """
     if pricing is None:
         pricing = load_pricing()
 
-    total = Usage.zero()
+    total = Usage.zero() if resume_usage is None else resume_usage
 
-    prev_batch_sig: tuple[tuple[str, str, str], ...] | None = None
-    repeat_streak = 0
+    if resume_counters is None:
+        prev_batch_sig: tuple[tuple[str, str, str], ...] | None = None
+        repeat_streak = 0
+        tool_error_streaks: dict[str, int] = {}
+        tool_seq = 0
+        output_limit_continuations = 0
+        total_tool_calls = 0
+    else:
+        prev_batch_sig = resume_counters.prev_batch_sig
+        repeat_streak = resume_counters.repeat_streak
+        tool_error_streaks = dict(resume_counters.tool_error_streaks)
+        tool_seq = resume_counters.tool_seq
+        output_limit_continuations = resume_counters.output_limit_continuations
+        total_tool_calls = resume_counters.total_tool_calls
     nudge_fired_for_streak = False
     nudge_text = repeat_guard_message or _DEFAULT_REPEAT_GUARD_MESSAGE
     exempt_tools = set(repeat_guard_exempt_tools or ())
-    tool_seq = 0
-    # Per-tool consecutive-error counts; reset to 0 on a successful call.
-    tool_error_streaks: dict[str, int] = {}
-    output_limit_continuations = 0
-    total_tool_calls = 0
     pattern_guard = _ToolPatternGuardState(
         threshold=tool_pattern_guard_threshold,
         terminate_at=tool_pattern_guard_terminate_at,
@@ -559,6 +612,7 @@ def run_until_idle(
             tools,
             max_parallel_tools=max_parallel_tools,
             tracer=tracer,
+            pause_handle=pause_handle,
         )
 
         for i, result in enumerate(results):
@@ -585,6 +639,39 @@ def run_until_idle(
             messages.extend(tool_results_msg)
         else:
             messages.append(tool_results_msg)
+
+        # B4: pause check. The pause tool already ran (it's mutating, so it
+        # ran in the sequential path) and stamped the handle. The conversation
+        # is consistent through the placeholder tool_result; exit cleanly so
+        # the caller can serialize the checkpoint and skip the trace bridge.
+        if pause_handle is not None and pause_handle.requested:
+            tracer.event(
+                "pause_requested",
+                turn=turn,
+                tool_use_id=pause_handle.request.tool_use_id if pause_handle.request else "",
+            )
+            from harness.checkpoint import LoopCounters as _LC
+
+            pause_info = pause_handle.to_pause_info()
+            counters = _LC(
+                prev_batch_sig=prev_batch_sig,
+                repeat_streak=repeat_streak,
+                tool_error_streaks=dict(tool_error_streaks),
+                tool_seq=tool_seq,
+                output_limit_continuations=output_limit_continuations,
+                total_tool_calls=total_tool_calls,
+            )
+            pause_handle.reset()
+            return RunResult(
+                final_text="(paused — awaiting user reply)",
+                usage=total,
+                turns_used=turn + 1,
+                paused=True,
+                pause=pause_info,
+                pause_loop_state=counters,
+                messages=messages,
+                tool_calls_used=total_tool_calls,
+            )
 
         # Adaptive recall: when a tool has failed repeatedly and memory_recall is
         # available, inject a nudge prompting the agent to query prior context.
@@ -833,12 +920,43 @@ def run(
     reflect: bool = True,
     max_cost_usd: float | None = None,
     max_tool_calls: int | None = None,
+    pause_handle: Any = None,
+    resume_state: Any = None,
 ) -> RunResult:
+    """Top-level session driver.
+
+    Fresh sessions: bootstraps via ``memory.start_session(task)`` + builds
+    initial messages, runs the loop, runs reflection, ends the session.
+
+    Resume (B4): when ``resume_state`` is supplied (a
+    ``harness.checkpoint.ResumeState``), we skip bootstrap entirely. The
+    caller is responsible for having (a) constructed an ``EngramMemory``
+    with the original session_id, (b) restored its buffered events, and
+    (c) embedded the user's pause reply into ``resume_state.messages``.
+
+    Pauses (B4): if ``pause_handle.requested`` after a tool batch, the
+    inner loop returns ``RunResult(paused=True, ...)`` and we skip both
+    the reflection turn and ``memory.end_session()``. The caller writes
+    the checkpoint and updates SessionStore status.
+    """
     if pricing is None:
         pricing = load_pricing()
-    prior = memory.start_session(task)
-    messages = mode.initial_messages(task=task, prior=prior, tools=tools)
-    tracer.event("session_start", task=task)
+
+    if resume_state is not None:
+        # Share the list with the caller so post-run mutations (a re-pause
+        # appending another tool_results message) stay visible after run()
+        # returns. The caller is responsible for treating resume_state.messages
+        # as authoritative once we hand control back.
+        messages = resume_state.messages
+        tracer.event("session_resume", task=task)
+        resume_counters = resume_state.counters
+        resume_usage = resume_state.usage
+    else:
+        prior = memory.start_session(task)
+        messages = mode.initial_messages(task=task, prior=prior, tools=tools)
+        tracer.event("session_start", task=task)
+        resume_counters = None
+        resume_usage = None
 
     result = run_until_idle(
         messages,
@@ -861,7 +979,21 @@ def run(
         stop_event=stop_event,
         max_cost_usd=max_cost_usd,
         max_tool_calls=max_tool_calls,
+        pause_handle=pause_handle,
+        resume_counters=resume_counters,
+        resume_usage=resume_usage,
     )
+
+    # Pause exit: skip reflection + skip memory.end_session(). The caller
+    # is responsible for the SessionStore status flip and checkpoint write,
+    # and trace_bridge.run_trace_bridge() must NOT run until resume completes.
+    if result.paused:
+        tracer.event(
+            "session_paused",
+            turns=result.turns_used,
+            tool_use_id=result.pause.tool_use_id if result.pause is not None else "",
+        )
+        return result
 
     # Reflection turn (cost folded into result.usage so the session total
     # stays honest). Skipped when disabled, when the run was cut short by

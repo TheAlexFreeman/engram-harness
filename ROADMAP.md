@@ -4,6 +4,16 @@ A merged repository combining the **Engram** memory system with the **Harness**
 agent loop. The harness serves as Engram's session-management frontend; Engram
 provides the harness with durable, cross-session memory and activity history.
 
+> **Status (2026-04-27).** The original Phases 0–3 of this roadmap are fully
+> shipped, and Phases 4–7 are largely superseded by the contemporary
+> work-stream documented in [docs/improvement-plans-2026.md](docs/improvement-plans-2026.md).
+> That document is the **active** sequencing for ongoing harness development
+> — this file remains as the motivation/principles reference and a record of
+> the original phase plan with shipped state annotated. See the [Phases](#phases)
+> section below for the per-phase status, and the improvement-plans doc for
+> the live ROI-ranked queue (A1, A3, A4, A5, A6, B1, B4, B5, C1, C2, C3, C4
+> all shipped; A2, B2, B3, D1, D2, E1 open).
+
 ---
 
 ## Motivation
@@ -287,69 +297,55 @@ is where harness sessions read and write user memory.
 
 ## Phases
 
-### Phase 0 — Repo Merge & Smoke Test
+### Phase 0 — Repo Merge & Smoke Test — **shipped**
 
 **Goal:** Single repo, both projects importable, existing tests pass.
 
-- [ ] Create `engram-harness/` with both project trees
-- [ ] Unified `pyproject.toml`:
-  - `engram_mcp` namespace (existing, from `engram/core/tools/`)
-  - `harness` namespace (existing)
-  - Top-level CLI wiring
-- [ ] Import path verification: format layer (`engram_mcp.agent_memory_mcp.core`)
-      imports alongside harness (`harness.loop`) without conflict
-- [ ] Both test suites pass: `harness/tests/` + `engram/core/tools/tests/`
-- [ ] Single `.env` for API keys (Anthropic, xAI, search backends, `MEMORY_REPO_ROOT`)
-- [ ] Git history: `git subtree add` to preserve commit history from both projects
+- [x] Create `engram-harness/` with both project trees
+- [x] Unified `pyproject.toml`. The `engram_mcp` namespace was eventually
+      dropped from this repo — the harness owns its own format-layer
+      copy at `harness/_engram_fs/`. The standalone Engram repo retains
+      the MCP server.
+- [x] Both test suites pass — superseded: only the harness suite ships
+      from this repo now.
+- [x] Single `.env` for API keys (Anthropic, xAI, search backends).
+- [x] Git history preserved via `git subtree add`.
 
-**Exit criteria:** `pip install -e ".[dev]"` installs everything; `pytest` green;
-both Engram's MCP server and the harness CLI launch independently.
+**Exit criteria met:** `pip install -e ".[dev]"` installs everything; `pytest`
+runs the harness suite green on both Linux and Windows.
 
 ---
 
-### Phase 1 — EngramMemory Backend
+### Phase 1 — EngramMemory Backend — **shipped**
 
 **Goal:** `harness --memory=engram` uses Engram for session context and
 persistence, respecting context budgets and provenance rules.
 
-Implements the designs documented in
-`engram/core/memory/working/projects/agent-harness/notes/engram-integration-analysis.md`.
+- [x] `harness/engram_memory.py`: `EngramMemory` class implementing
+      `MemoryBackend`. Uses the harness's own format-layer copy at
+      `harness/_engram_fs/` (the original plan referenced
+      `engram_mcp.agent_memory_mcp.core`; that dependency was removed).
+- [x] `start_session(task)`: compact returning path (HOME → user
+      portrait → activity summary), semantic search for task-relevant
+      prior context, soft ~7k-token budget, `act-NNN` session id under
+      `memory/activity/YYYY/MM/DD/`.
+- [x] `recall(query, k)`: semantic primary + keyword fallback, with
+      trust metadata. A1 (hybrid retrieval) later added BM25 and
+      reciprocal-rank fusion.
+- [x] `record(content, kind)`: buffered records flushed at end_session.
+- [x] `end_session(summary)`: session summary committed with
+      `source: agent-generated`, `trust: medium`.
+- [x] CLI flags `--memory engram --memory-repo /path` with FileMemory
+      fallback and auto-detect of `./engram/`.
+- [x] Path-policy enforcement on every write.
 
-- [ ] `harness/engram_memory.py`: `EngramMemory` class implementing `MemoryBackend`
-  - Uses the **format layer** (`engram_mcp.agent_memory_mcp.core`) for all
-    file operations — frontmatter parsing, git commits, path policy validation
-  - Does not depend on the MCP runtime; the MCP server remains a separate concern
-- [ ] `start_session(task)`:
-  - Follows Engram's compact returning path: HOME.md → user portrait → activity
-    summary → task-relevant scratchpads
-  - Runs `memory_semantic_search(task)` for task-relevant prior context
-  - Respects the ~3,000–7,000 token budget for returning sessions
-  - Generates session ID: `act-NNN` prefix, namespaced to
-    `memory/activity/YYYY/MM/DD/act-NNN`
-- [ ] `recall(query, k)`:
-  - `memory_semantic_search` (primary, when `sentence-transformers` available)
-  - `memory_search` (keyword fallback)
-  - Returns trust metadata alongside content for caller awareness
-- [ ] `record(content, kind)`:
-  - Errors → `memory_record_trace` (structured spans for observability)
-  - Notes → `memory_append_scratchpad` (ephemeral working memory, ungoverned)
-- [ ] `end_session(summary)`:
-  - `memory_record_session` with session ID, summary, and key topics
-  - Commits with provenance: `source: agent-generated`, `trust: medium`
-- [ ] CLI flags: `--memory engram --memory-repo /path/to/repo`
-  - Defaults to `./engram/` if present
-  - Falls back to `FileMemory` with a warning if repo missing or corrupt
-- [ ] All writes respect path policy (no writes to protected paths, no
-      instruction-bearing content outside `skills/` or `governance/`)
-
-**Exit criteria:** A harness session seeds context from Engram's compact returning
-path, records errors as trace spans, writes a session summary with proper
-frontmatter to `activity/`, and the git log shows the commit with source
-attribution.
+**Exit criteria met:** sessions bootstrap from the compact returning
+path, errors are recorded, summaries land in `activity/`, and git log
+shows commits with source attribution.
 
 ---
 
-### Phase 2 — Memory Tool Surface
+### Phase 2 — Memory Tool Surface — **shipped**
 
 **Goal:** The agent has a coherent set of memory affordances — recall,
 remember, review, context, trace — presented as first-class operations in
@@ -363,29 +359,30 @@ underscore names (`memory_recall`, `memory_remember`, `memory_review`,
 `memory: <op>(...)` prefix syntax for readability.
 
 - [x] `harness/tools/memory_tools.py`: five tool classes backing the
-      affordances, each calling into `EngramMemory`
-- [x] Register the suite in `build_session()` when `--memory=engram`
+      affordances, each calling into `EngramMemory`. Now six — A5 added
+      `memory_lifecycle_review`.
+- [x] Register the suite in `build_session()` when `--memory=engram`.
 - [x] System prompt `## Memory` section (opt-in via
-      `system_prompt_native(with_memory_tools=True)`)
+      `system_prompt_native(with_memory_tools=True)`).
 - [x] Session-scoped cache for `memory_context` keyed on
       `(sorted(needs), purpose, budget)`; wholesale invalidation on
-      `memory_remember`
-- [x] Trust-weighted recall presentation: high-trust results cited
-      freely; low-trust results presented with provenance caveat
-- [ ] ACCESS.jsonl logging: each recall invocation produces ACCESS
-      entries for every result returned — with helpfulness scored after
-      the session based on whether the agent subsequently used the
-      result. (The backend already logs recall events; the trace bridge
-      already consumes them. This ticket covers strengthening the
-      helpfulness signal from agent follow-through.)
+      `memory_remember`.
+- [x] Trust-weighted recall presentation.
+- [x] ACCESS.jsonl logging — the trace bridge writes ACCESS entries
+      for every recall result; helpfulness is derived from
+      downstream-tool-use evidence (read→edit, read→cite, etc.) using
+      the constants in `harness/trace_bridge.py`. A6 (retrieval
+      observability) later added candidate-set logging on top.
 
-**Exit criteria:** Agent calls `memory_recall` / `memory_context` /
-`memory_review` mid-session, gets trust-annotated results, and
-ACCESS.jsonl gains entries that feed the aggregation pipeline.
+**Exit criteria met:** ACCESS.jsonl entries are written every session
+and feed both the aggregation pipeline and A4/A5 (consolidate, decay
+sweep). A1 (hybrid retrieval) and A6 (recall observability) further
+strengthened this surface — both shipped per
+[improvement-plans-2026.md](docs/improvement-plans-2026.md).
 
 ---
 
-### Phase 2b — Workspace Tool Surface
+### Phase 2b — Workspace Tool Surface — **shipped (open items deferred)**
 
 **Goal:** The agent has a mutable operational workspace that sits between
 ephemeral scratch and durable memory, with a coherent set of affordances
@@ -461,236 +458,64 @@ reflections — all without direct file writes into `workspace/`.
 
 ---
 
-### Phase 3 — Trace Bridge (post-run)
+### Phase 3 — Trace Bridge (post-run) — **shipped**
 
 **Goal:** Harness JSONL traces become comprehensive Engram activity records,
 feeding the data that self-organizing features have been missing.
 
-This is the core integration. The trace bridge translates the harness's raw
-event stream into Engram's native formats — markdown session records with
-frontmatter, ACCESS.jsonl entries with helpfulness scores, and structured trace
-spans — all committed to git as inspectable, diffable, reversible artifacts.
+- [x] `harness/trace_bridge.py`: post-run pipeline invoked after `run()`
+      completes; produces summary, reflection, ACCESS entries, span
+      JSONL, session-rollup sidecars, and link-graph edges.
+- [x] **Session record** → `summary.md` with the documented frontmatter.
+- [x] **ACCESS.jsonl entries** with derived helpfulness — constants in
+      `harness/trace_bridge.py` (HELPFULNESS_READ_THEN_EDIT etc.).
+- [x] **Trace spans** → per-session JSONL, OTel GenAI conformant
+      (C1 shipped). Exporter at `harness/otel_export.py`.
+- [x] **Session reflection** auto-generated, with optional
+      LLM-authored body (PR #19's reflection turn).
+- [x] **Frontmatter metrics block** on session record.
+- [x] Deduplication via `_sidecar_dedupe_entries`.
+- [x] `--trace-to-engram` CLI flag (default on with `--memory=engram`).
+- [x] Instruction containment enforced — records describe, never
+      prescribe.
 
-- [ ] `harness/trace_bridge.py`: post-run pipeline invoked after `run()` completes
-  - Reads the session's JSONL trace file
-  - Produces the following Engram artifacts:
-
-- [ ] **Session record** → `core/memory/activity/YYYY/MM/DD/act-NNN/summary.md`
-  - Frontmatter: `source: agent-generated`, `trust: medium`, `created`, `session_id`
-  - Body: task description, duration, turn count, total cost, tool call summary
-    (counts by tool, error rate), key outcomes
-  - Compact enough to be useful as a retrieval target (~100–400 words, per
-    Engram's chat summary size limits)
-
-- [ ] **ACCESS.jsonl entries** → appended to relevant namespace `ACCESS.jsonl` files
-  - Every `ReadFile` tool call on files within the memory repo generates an entry
-  - Helpfulness derived from downstream outcome:
-    - File read → successful edit of same file: helpfulness 0.7–0.9
-    - File read → cited in model response: helpfulness 0.5–0.7
-    - File read → never referenced again: helpfulness 0.1–0.2
-    - Memory recall → preceded successful tool sequence: helpfulness 0.6–0.8
-  - Entries include `session_id`, `task`, `date`, `note` per Engram's schema
-
-- [ ] **Trace spans** → `core/memory/activity/YYYY/MM/DD/act-NNN/act-NNN.traces.jsonl`
-  - One span per tool call: `span_type: "tool_call"`, `name`, `status`, `duration_ms`,
-    `metadata` (args summary, cost attribution)
-  - Follows Engram's existing `TRACES.jsonl` schema (span_id, session_id,
-    timestamp, span_type, name, status, duration_ms, metadata, cost)
-
-- [ ] **Session reflection** (auto-generated) →
-      `core/memory/activity/YYYY/MM/DD/act-NNN/reflection.md`
-  - Per Engram's curation-policy format: memory retrieved, memory influence,
-    outcome quality, gaps noticed
-  - Derived from trace data: which recalls happened, what the agent did after,
-    whether errors occurred where memory might have helped
-
-- [ ] **Frontmatter metrics block** on session record:
-  - `tool_calls`, `errors`, `total_duration_ms`, `total_cost_usd`, `retrievals`
-  - Matches Engram's existing session metric schema
-
-- [ ] Deduplication: reuse the sidecar's `_sidecar_dedupe_entries` logic to
-      prevent double-recording if the sidecar also processed the same session
-
-- [ ] CLI: `--trace-to-engram` (default on when `--memory=engram`)
-
-- [ ] All generated content respects instruction containment: session records
-      and reflections *describe* — they never *prescribe*
-
-**Design note (post-run first, real-time later):** The trace bridge runs after
-the session completes, reading the JSONL file. This is simpler, more reliable,
-and produces better helpfulness scores (since outcomes are known). A real-time
-`EngramTraceSink` is a future extension for crash-resilience, deferred until the
-post-run path is proven.
-
-**Exit criteria:** After a harness session, the Engram repo contains a markdown
-session record with proper frontmatter, ACCESS.jsonl entries with derived
-helpfulness scores, trace spans in the session's JSONL file, and a structured
-reflection — all committed to git with provenance. The content is queryable via
-`memory_semantic_search` in subsequent sessions.
+**Beyond the original spec, the trace bridge also writes:**
+- Per-namespace `_session-rollups.jsonl` (PR #16 — feeds drift's
+  helpfulness window via C4)
+- `LINKS.jsonl` co-retrieval edges (A3)
+- Recall candidate logs (`recall_candidates.jsonl`, A6)
+- B4-aware: refuses to write artifacts when a sibling
+  `checkpoint.json` indicates the session is paused mid-flight.
 
 ---
 
-### Phase 4 — Aggregation Powered by Real Data
+### Phases 4–7 — Superseded by improvement-plans-2026
 
-**Goal:** Engram's self-organizing features activate reliably, driven by
-trace-derived ACCESS data.
+The original Phases 4 (aggregation), 5 (skill emergence), 6 (retrieval
+optimization), and 7 (multi-session plans) are largely subsumed by the
+contemporary work-stream documented in
+[docs/improvement-plans-2026.md](docs/improvement-plans-2026.md). That
+document was written in April 2026 after a survey of Letta, mem0, Cognee,
+Graphiti, A-Mem, LangGraph LangMem, Claude Agent SDK, smolagents, OpenAI
+Agents SDK, DSPy, Inspect AI, Phoenix, OpenLLMetry, and the recent
+benchmark literature. It re-sequenced the remaining work around contemporary
+mechanisms (hybrid retrieval, link graphs, eval-driven optimization,
+durable interrupt) instead of the original heuristic-driven plan, and is
+the **active** development plan for ongoing harness work.
 
-With Phase 3 providing comprehensive ACCESS.jsonl entries, the aggregation
-pipeline finally reaches its trigger threshold (15+ entries per namespace)
-through normal usage rather than requiring manual logging. This phase validates
-that Engram's existing aggregation code produces useful outcomes with real data.
+**Original Phase ↔ improvement-plan mapping:**
 
-- [ ] Aggregation triggers fire naturally from harness session volume
-- [ ] SUMMARY.md files auto-update with usage patterns derived from actual agent
-      behavior — retrieval frequency, helpfulness distribution, active topics
-- [ ] Knowledge amplification activates:
-  - High-value files (5+ retrievals, mean helpfulness ≥ 0.7) flagged for
-    enrichment: cross-references to co-retrieved files, "proven useful for"
-    annotations, strengthened SUMMARY.md placement
-  - Low-value files (3+ retrievals, mean helpfulness ≤ 0.3) flagged for
-    investigation: misleading title? stale content? wrong namespace?
-- [ ] Co-retrieval clusters detected: files from different namespaces consistently
-      accessed together across 3+ sessions constitute an emergent cluster
-  - Clusters recorded in SUMMARY.md files with descriptive names
-  - Taxonomy fit evaluated — restructuring proposed if the folder structure no
-    longer matches actual usage patterns
-- [ ] Progressive compression activates for activity namespace:
-  - Individual session records persist at leaf level
-  - Monthly SUMMARY.md compresses to themes, recurring tasks, notable outcomes
-  - Yearly SUMMARY.md compresses to trajectories and turning points
-  - Compression driven by access recency and helpfulness, not just age
+| Original Phase | Status | Replacement |
+|---|---|---|
+| Phase 4 — Aggregation from real data | **partially shipped** | A4 (sleep-time consolidate, PR #32), A5 (decay sweep, PR #35), A3 (link graph, PR #31) |
+| Phase 5 — Skill emergence from task clusters | open | E1 (DSPy/GEPA prompt optimization) — deferred until C2 has ≥20 scored sessions |
+| Phase 6 — Retrieval optimization | **partially shipped** | A1 (hybrid BM25 + semantic + RRF), A6 (recall candidate observability), in-loop adaptive recall (already wired). Helpfulness-weighted re-ranking is the remaining piece. |
+| Phase 7 — Multi-session plans with auto-resume | **partially shipped** | B4 (durable interrupt + checkpoint-and-resume, PR #37). Workspace plan integration (paused session ↔ paused plan phase) is the explicit follow-up to B4. |
 
-- [ ] Maturity-stage awareness: aggregation parameters adapt to the active stage
-  - Exploration: generous capture, loose thresholds, aggressive clustering
-  - Consolidation: selective capture, tight thresholds, only strong clusters
-
-**Exit criteria:** After 10+ harness sessions, at least one namespace's
-SUMMARY.md has been auto-updated with usage patterns, at least one file has been
-flagged for enrichment or retirement, and at least one co-retrieval cluster has
-been identified and named.
-
----
-
-### Phase 5 — Skill Emergence from Task Clusters
-
-**Goal:** The system proposes new agent skills by observing patterns in session
-traces — the first genuinely self-organizing feature that produces new
-capability from raw usage data.
-
-This builds on Engram's existing co-retrieval cluster detection (Phase 4) and
-extends it to tool-call sequences: if the agent repeatedly performs the same
-multi-step pattern across sessions, that pattern is a candidate skill.
-
-- [ ] **Task clustering**: analyze session records and trace spans for recurring
-      task shapes
-  - Same tool sequences (ReadFile → EditFile → GitCommit) across sessions
-  - Similar semantic queries producing similar successful outcomes
-  - Co-retrieval clusters that always precede the same tool patterns
-  - Cluster threshold: ≥3 sessions with structurally similar patterns (per
-    Engram's active `cluster co-retrieval threshold`)
-- [ ] **Skill proposal pipeline**:
-  - Generate skill specification: name, description, trigger conditions,
-    tool sequence template, expected postconditions
-  - Write proposal to `core/memory/skills/_proposed/` with frontmatter:
-    `source: agent-generated`, `trust: low`, evidence sessions listed
-  - This is **protected-tier** content — requires explicit user approval
-    before promotion to active skills (per Engram's change-control model)
-  - Proposal includes a human-readable explanation of what task cluster it
-    addresses and why (transparency principle)
-- [ ] **Skill as reusable plan**: proposed skills structured as Engram plan
-      templates — a skill is a parameterized plan with preconditions, phases,
-      postconditions, and a trigger description
-- [ ] **Feedback loop post-promotion**:
-  - Track whether promoted skills are actually invoked
-  - Track success rate when invoked
-  - Skills that aren't adopted within a maturity-appropriate window get flagged
-    for review
-  - Skills that fail repeatedly get demoted
-  - This feeds the same ACCESS.jsonl → aggregation → SUMMARY.md cycle as
-    all other content
-
-**Exit criteria:** After 20+ sessions, the system has proposed at least one
-skill based on observed patterns, with clear evidence (session IDs, tool-call
-similarity metrics), and the proposal is visible in `skills/_proposed/` awaiting
-user review.
-
----
-
-### Phase 6 — Retrieval Optimization
-
-**Goal:** Memory retrieval self-tunes based on helpfulness evidence, making
-`start_session()` and `recall()` progressively better.
-
-- [ ] **Helpfulness-weighted re-ranking**: retrieval results re-ranked by
-      historical helpfulness in similar task contexts
-  - A file that scored 0.9 helpfulness for "Django migration" tasks ranks higher
-    next time the task mentions migrations
-  - Uses ACCESS.jsonl `task` field to match context similarity
-- [ ] **Context budget optimization**: `start_session()` allocates its ~7,000
-      token budget proportional to past usefulness
-  - Projects with high-helpfulness memory get more detailed context
-  - Stale projects with low recent helpfulness get summary-only
-  - Implements the "summaries before deep reads" principle dynamically
-- [ ] **Retrieval path analysis**: log which search strategy (semantic vs
-      keyword, which namespace, what query phrasing) produced which helpfulness
-      scores
-  - Identify systematically underperforming retrieval patterns
-  - Feed findings into SUMMARY.md updates (improve discoverability of hidden gems)
-- [ ] **Adaptive recall**: harness detects when the agent is stuck (3+ repeated
-      errors on same tool, long turns without tool calls) and auto-triggers
-      `recall_memory` with a diagnostic query
-  - Derived from trace patterns: error clustering signals knowledge gaps
-  - Respects context budget — doesn't bloat the context if recall results
-    are unlikely to help (based on prior helpfulness for similar error patterns)
-
-**Exit criteria:** Retrieval precision measurably improves over time: mean
-helpfulness scores trend upward session-over-session within the same task
-domains, tracked via ACCESS analytics.
-
----
-
-### Phase 7 — Multi-Session Plans with Automatic Resume
-
-**Goal:** Long-running tasks span multiple harness sessions seamlessly, using
-Engram's plan infrastructure.
-
-Engram already has a mature plan system: phases with postconditions, failure
-history with verification results, execution budgets, approval gates, run state
-persistence, and single-call briefing assembly. The harness makes this
-operational by wiring plan tools into the agent loop.
-
-- [ ] `harness/tools/plan_tools.py`: expose plan tools to the agent
-  - `create_plan` — create a structured multi-phase plan
-  - `resume_plan` — load run state, validate against plan, assemble restart context
-  - `complete_phase` — evaluate postconditions, seal with commit SHA if passing
-  - `record_failure` — log failure with diagnostic verification results
-- [ ] **Automatic plan detection**: `start_session()` checks for active plans
-      relevant to the current task
-  - If found, injects plan briefing into context via `memory_plan_briefing`
-    (single-call: phase payload, source excerpts, failure history, recent traces,
-    approval state, budget status)
-  - Respects context budget: briefing metadata declares its own token cost
-- [ ] **Phase-level checkpointing**: session can end cleanly after completing a
-      phase; next session resumes at the next phase
-  - Run state persisted as JSON alongside plan YAML (auto-saved on every action)
-  - Intermediate outputs, error context, and resumption hints preserved
-- [ ] **Budget-aware sessions**: plans with `max_sessions` or `deadline` metadata
-      influence session behavior
-  - Advisory budgets surface warnings; enforced budgets prevent new phase starts
-- [ ] **Cross-session failure recovery**: if a phase failed in a previous session,
-      next session gets failure history and verification results automatically
-  - Failure history informs retry strategy without re-reading the plan file
-  - After 3+ attempts, plan briefing includes `suggest_revision` flag
-
-- [ ] **Trace integration**: plan execution generates trace spans
-  - `start`, `complete`, `record_failure` actions emit `plan_action` spans
-  - Parent-child span relationships link plan actions to their constituent
-    tool calls
-  - Trace bridge (Phase 3) includes plan context in session records
-
-**Exit criteria:** A multi-phase plan is created, partially executed across 2+
-sessions, resumed with full context via `memory_plan_resume`, and completed with
-the git log showing phase-level commits linking sessions to plan progress.
+The improvement-plans-2026 document tracks the live status of every
+remaining theme. As of 2026-04-27, A2 (bi-temporal facts), B2 (tiered
+context compaction), B3 (code-as-action), D1 (prompt-injection defense),
+D2 (async approval), and E1 are open.
 
 ---
 

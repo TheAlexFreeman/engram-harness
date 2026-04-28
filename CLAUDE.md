@@ -14,10 +14,17 @@ seam lives in `harness/engram_memory.py`, `harness/workspace.py`, and
 ## Where to start
 
 **Working on the agent loop, tools, or CLI.** Entry point: `harness/cli.py`. Run
-loop: `harness/loop.py`. Model adapters (Claude native, Grok): `harness/modes/`.
-Agent-callable tools: `harness/tools/`. Cost accounting: `harness/pricing.py` +
-`harness/pricing.json`. Tracing: `harness/trace.py`. The phased integration plan
-is in `ROADMAP.md`.
+loop: `harness/loop.py`. Model adapters (Claude native, Grok, recording, replay):
+`harness/modes/`. Agent-callable tools: `harness/tools/`. Cost accounting:
+`harness/pricing.py` + `harness/pricing.json`. Tracing: `harness/trace.py`.
+Subcommand modules: `harness/cmd_consolidate.py` (A4 sleep-time SUMMARY refresh),
+`harness/cmd_decay.py` (A5 promote/demote candidates), `harness/cmd_drift.py` (C4
+rolling-window quality alerts), `harness/cmd_eval.py` (C2 eval harness),
+`harness/cmd_replay.py` (C3 deterministic replay), `harness/cmd_recall_debug.py`
+(A6 candidate-set inspection), `harness/cmd_resume.py` (B4 paused-session resume),
+`harness/cmd_status.py` (active plans + paused sessions). `ROADMAP.md` has the
+original phase plan with shipped state annotated; **`docs/improvement-plans-2026.md`
+is the active development plan** with per-theme status.
 
 **Working on memory.** The actual memory data — HOME.md, knowledge, skills,
 activity, users, working — lives under `engram/core/memory/` and is what the
@@ -29,18 +36,25 @@ from this project; what the harness needs it owns at `harness/_engram_fs/`.
 
 **Working on the integration seam.** `harness/engram_memory.py` implements the
 `MemoryBackend` protocol against an Engram repo (compact returning-session
-bootstrap, semantic or keyword recall, buffered records flushed at
-`end_session`). It accepts an optional `workspace_dir` so the bootstrap can
-surface an active-plan briefing for the workspace at the project root.
-`harness/workspace.py` owns the `workspace/` directory and exposes the
-`work:` affordance backend. `harness/trace_bridge.py` turns a post-run JSONL
-trace into activity records, reflection notes, ACCESS entries (memory only —
-the workspace is intentionally ungoverned), and trace spans, then commits
-them. `harness/tools/memory_tools.py` exposes `memory_recall`,
-`memory_context`, and the rest of the agent-callable memory tools when
-`--memory=engram` is selected; `harness/tools/recall.py` is only a legacy
-compatibility alias. `harness/config.py::_harness_project_root` is the
-canonical anchor for finding `workspace/` (and the bundled `engram/`).
+bootstrap, semantic or keyword recall via hybrid BM25 + RRF fusion, buffered
+records flushed at `end_session`). It accepts an optional `workspace_dir` so
+the bootstrap can surface an active-plan briefing for the workspace at the
+project root, and an optional `session_id` so `harness resume` can continue an
+existing session in place (B4). `harness/workspace.py` owns the `workspace/`
+directory and exposes the `work:` affordance backend. `harness/trace_bridge.py`
+turns a post-run JSONL trace into activity records, reflection notes, ACCESS
+entries (memory only — the workspace is intentionally ungoverned), trace spans,
+per-namespace `_session-rollups.jsonl`, and `LINKS.jsonl` co-retrieval edges,
+then commits them. `harness/checkpoint.py` (B4) serializes a paused session's
+in-flight state — messages, usage, loop counters, EngramMemory buffered events
+— to `<session>/checkpoint.json` and back, with `tool_use_id`-keyed reply
+mutation for resume. `harness/tools/memory_tools.py` exposes the seven
+agent-callable memory tools — `memory_recall`, `memory_review`, `memory_remember`,
+`memory_context`, `memory_trace`, `memory_lifecycle_review` (A5), and
+`pause_for_user` (B4) — when `--memory=engram` is selected;
+`harness/tools/recall.py` is only a legacy compatibility alias.
+`harness/config.py::_harness_project_root` is the canonical anchor for finding
+`workspace/` (and the bundled `engram/`).
 
 ## Harness-owned format primitives
 
@@ -66,6 +80,11 @@ pip install -e ".[dev]"                                      # editable install,
 pytest                                                       # runs harness/tests/
 harness "<task>" --workspace ~/proj                          # file-memory session (FileMemory fallback)
 harness "<task>" --workspace ~/proj --memory engram          # Engram-backed session (auto-detects ./engram)
+harness resume <session_id>                                  # resume a paused session (B4)
+harness consolidate --really-run                             # sleep-time SUMMARY.md refresh (A4)
+harness decay-sweep --really-run                             # promote/demote candidate sweep (A5)
+harness drift                                                # rolling-window quality alerts (C4)
+harness status                                               # active plans + paused sessions
 ```
 
 The root `conftest.py` shims `tomllib` onto `tomli` for Python 3.10 sandboxes.

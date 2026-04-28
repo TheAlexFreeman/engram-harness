@@ -1,8 +1,35 @@
 # System Prompt Improvements — Implementation Plan
 
-**Origin:** Session 2026-04-25 affordance surface analysis  
-**Status:** draft  
+**Origin:** Session 2026-04-25 affordance surface analysis
+**Status:** **shipped (2026-04-27).** All six proposals (P1–P6) have landed.
 **Target file:** `harness/prompts.py` (primary); `harness/modes/` (secondary)
+
+> ### Shipped state
+>
+> - **P1 — Compress workspace section:** done. The `_WORK_SECTION` template
+>   lives at [harness/prompt_templates/workspace.md](harness/prompt_templates/workspace.md)
+>   and the per-op intros are tightened.
+> - **P2 — Lazy Plans addendum:** done. `_PLANS_ADDENDUM` is loaded from
+>   [harness/prompt_templates/plans_addendum.md](harness/prompt_templates/plans_addendum.md);
+>   `system_prompt_native()` accepts `with_plan_context` and
+>   `harness/config.py::_has_active_plan_context` detects in-progress plans
+>   from workspace run-state JSON.
+> - **P3 — Critical rules block:** done.
+>   [harness/prompt_templates/critical_rules.md](harness/prompt_templates/critical_rules.md)
+>   sits between identity and the full rules list.
+> - **P4 — Required trace events:** done in the memory section copy.
+> - **P5 — Light/memory-only/full mode flags:** done.
+>   `system_prompt_native(with_memory_tools, with_work_tools, with_plan_context,
+>   memory_writes, work_writes)` is the public API. Read-only variants
+>   (`memory_read_only.md`, `workspace_read_only.md`) were added on top of the
+>   original plan.
+> - **P6 — Template files:** done. All seven sections live as `.md` files in
+>   `harness/prompt_templates/` and are loaded via
+>   `importlib.resources.files("harness.prompt_templates")`.
+>
+> This document is preserved as the historical record of the design pass.
+> Future prompt changes should edit the templates directly and update
+> the rationale here only when introducing new sections.
 
 ---
 

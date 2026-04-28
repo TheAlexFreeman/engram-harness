@@ -13,6 +13,7 @@ from harness.cmd_drift import main as _drift_main
 from harness.cmd_eval import main as _eval_main
 from harness.cmd_recall_debug import main as _recall_debug_main
 from harness.cmd_replay import main as _replay_main
+from harness.cmd_resume import main as _resume_main
 from harness.cmd_serve import main as _serve_main
 from harness.cmd_status import (
     main as _status_main,
@@ -438,6 +439,10 @@ def main() -> None:
         _replay_main()
         return
 
+    if len(sys.argv) > 1 and sys.argv[1] == "resume":
+        _resume_main()
+        return
+
     args = _parse_args()
 
     if not args.interactive and (args.task is None or not str(args.task).strip()):
@@ -479,6 +484,7 @@ def main() -> None:
     status = "completed"
     usage = None
     bridge_status = None
+    paused_result = None
     try:
         if args.interactive:
             usage = run_interactive(args, components)
@@ -490,16 +496,32 @@ def main() -> None:
             final_text = batch_result.final_text
             turns_used = batch_result.turns_used
             max_turns_reached = batch_result.max_turns_reached
-            bridge_status = run_trace_bridge_if_enabled(components)
-            print("\n" + "=" * 60)
-            print(batch_result.final_text)
-            print("=" * 60)
-            print_usage(batch_result.usage, components)
+            if batch_result.paused:
+                paused_result = batch_result
+                _handle_paused_session(
+                    components,
+                    session_id=session_id,
+                    task=str(args.task),
+                    result=batch_result,
+                    store=store,
+                )
+            else:
+                bridge_status = run_trace_bridge_if_enabled(components)
+                print("\n" + "=" * 60)
+                print(batch_result.final_text)
+                print("=" * 60)
+                print_usage(batch_result.usage, components)
     except BaseException:
         status = "error"
         raise
     finally:
-        if store is not None and usage is not None:
+        if paused_result is not None:
+            # Pause path: SessionStore was already updated to 'paused' inside
+            # _handle_paused_session. Don't run record_completed_session — that
+            # would clobber the paused status with 'completed'.
+            if store is not None:
+                store.close()
+        elif store is not None and usage is not None:
             record_completed_session(
                 store,
                 session_id=session_id,
@@ -522,6 +544,77 @@ def main() -> None:
         close_memory = getattr(components.engram_memory, "close", None)
         if close_memory is not None:
             close_memory()
+
+
+def _handle_paused_session(
+    components,
+    *,
+    session_id: str,
+    task: str,
+    result,
+    store,
+) -> None:
+    """Write the checkpoint, flip SessionStore status to 'paused', and print
+    the resume hint. Must NOT run trace_bridge — the trace is mid-flight and
+    finishes on resume."""
+    from harness.checkpoint import (
+        CHECKPOINT_FILENAME,
+        serialize_checkpoint,
+        serialize_memory_state,
+        write_checkpoint,
+    )
+
+    engram = components.engram_memory
+    if engram is None:
+        # No Engram backend → no place to write the checkpoint co-located
+        # with the trace. Surface clearly rather than silently dropping.
+        print(
+            "[warning] pause_for_user fired but Engram memory is not active. "
+            "Checkpoint will be written next to the trace file instead.",
+            file=sys.stderr,
+        )
+        cp_path = components.trace_path.parent / CHECKPOINT_FILENAME
+        memory_repo = ""
+    else:
+        cp_path = components.trace_path.parent / CHECKPOINT_FILENAME
+        memory_repo = str(engram.repo_root)
+
+    pause_info = result.pause
+    counters = result.pause_loop_state
+    payload = serialize_checkpoint(
+        session_id=session_id,
+        task=task,
+        model=components.config.model,
+        mode=components.config.mode,
+        workspace=str(components.config.workspace),
+        memory_repo=memory_repo,
+        trace_path=str(components.trace_path),
+        # The loop surfaces its live ``messages`` reference on RunResult when
+        # paused. Serialize it directly — the resume side will mutate the
+        # placeholder tool_result content in this exact list shape.
+        messages=result.messages or [],
+        usage=result.usage,
+        loop_state=counters,
+        memory_state=serialize_memory_state(engram) if engram is not None else {},
+        pause=pause_info,
+        checkpoint_at=datetime.now().isoformat(timespec="seconds"),
+    )
+    write_checkpoint(cp_path, payload)
+
+    if store is not None:
+        store.mark_paused(
+            session_id,
+            checkpoint_path=str(cp_path),
+            paused_at=payload["checkpoint_at"],
+        )
+
+    print("\n" + "=" * 60)
+    print(f"[paused] {pause_info.question}")
+    if pause_info.context:
+        print(f"\n  context: {pause_info.context}")
+    print(f"\nResume with:  harness resume {session_id}")
+    print("           or:  harness resume {0} --reply '<your reply>'".format(session_id))
+    print("=" * 60)
 
 
 def _insert_cli_session_row(store, session_id, args, config, components):

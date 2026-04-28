@@ -28,23 +28,20 @@ sequencing is the recommendation that matters most.
 provenance/versioning layer, the integration seam (PRs #15–#19) between
 the harness loop, the workspace, and Engram memory.
 
-**Contemporary practice has moved past us in five places:** subagents as
-a context-isolation primitive; hybrid (semantic + keyword + reranker)
-retrieval; bi-temporal facts with explicit invalidation; eval harness as
-a CI-native artifact; durable interrupt/resume.
+**Status as of 2026-04-27.** Of the contemporary-practice gaps this
+document identified at the start of April 2026, the following have shipped:
+A1 (hybrid retrieval), A3 (link graph), A4 (sleep-time consolidate), A5
+(promotion/decay lifecycle), A6 (recall observability), B1 (subagents),
+B4 (durable interrupt + resume), B5 (result-aware loop detection), C1 (OTel
+GenAI conformance), C2 (eval harness skeleton), C3 (replay mode), C4 (drift
+detection). System-prompt template extraction (system-prompt-improvements-plan.md)
+also shipped end-to-end. 12 of 19 themes complete.
 
-**Top three things to do next** (highest ROI, lowest design risk):
-1. **Subagent / sidechain primitive** — biggest single context-management
-   lever. ~1–2 PRs.
-2. **Hybrid retrieval** (BM25 + semantic + cheap reranker) — pure-semantic
-   is a known failure mode in every recent benchmark. ~2 PRs.
-3. **Eval harness on existing trace data** — Terminal-Bench's thesis is
-   industry consensus: at the current model frontier, harness quality
-   dominates. We have the trace substrate; we lack a dataset/scorer
-   loop. ~2 PRs.
-
-Then: bi-temporal trust + invalidation, OTel GenAI conformance, code-as-action
-tool, durable interrupts, sleep-time consolidation. Detail follows.
+**What's left** (open at the time of this update): A2 (bi-temporal facts +
+invalidation), B2 (tiered context compaction), B3 (code-as-action tool),
+D1 (two-layer prompt-injection defense), D2 (async human-in-the-loop), E1
+(DSPy/GEPA prompt optimization). Per-theme detail and updated sequencing
+follow.
 
 ---
 
@@ -415,7 +412,7 @@ error-prone.
 **Risks:** sandbox escape (mitigated by choice of executor);
 debugging UX (need clear error reporting).
 
-#### B4. Durable interrupt + checkpoint-and-resume
+#### B4. Durable interrupt + checkpoint-and-resume — **shipped (v1)**
 
 **Why.** LangGraph's `interrupt()` + `Command(resume=...)` pattern is
 the reference design for human-in-the-loop. Pause mid-loop, persist
@@ -423,27 +420,54 @@ state, surface a question to a human, resume on a different machine
 days later. Our SessionStore indexes sessions but doesn't checkpoint
 mid-loop state.
 
-**Proposed shape.**
-1. New tool `pause_for_user(question, context)` — emits a tracer event,
-   persists `messages + memory.session_state` to
-   `<session>/checkpoint.json`, terminates the loop with a special
-   exit status.
-2. New CLI `harness resume <session_id>` — loads the checkpoint,
-   prompts the user for input, resumes the loop.
-3. Trace bridge skips when status == "paused"; runs when the resumed
-   session finishes.
+**Shape (as built).**
+1. ✅ `pause_for_user(question, context?)` tool —
+   [tools/pause.py](harness/tools/pause.py). Sets a flag on a shared
+   `PauseHandle` instance the loop owns. Returns a placeholder
+   `tool_result` so the API alternation rule survives the pause.
+2. ✅ `<session_dir>/checkpoint.json` — JSON-portable snapshot of
+   `messages` + `Usage` + loop counters + `EngramMemory` buffered events
+   + pause metadata. Schema and round-trip helpers live in
+   [checkpoint.py](harness/checkpoint.py). Atomic write-then-rename so a
+   crash mid-write doesn't clobber a previous good checkpoint.
+3. ✅ Loop pause boundary: after each tool batch's results are appended
+   to `messages`, before the next `mode.complete()`. The loop returns
+   `RunResult(paused=True, pause=..., pause_loop_state=..., messages=...)`;
+   the caller serializes the checkpoint and skips the trace bridge.
+4. ✅ `harness resume <session_id>` CLI —
+   [cmd_resume.py](harness/cmd_resume.py). Validates the session is
+   paused, locates the checkpoint, prompts for the user's reply
+   (interactive stdin or `--reply <text>`), mutates the placeholder
+   `tool_result` content via `tool_use_id`, restores `EngramMemory`
+   buffered events, re-enters the loop with `ResumeState`, and runs
+   the trace bridge once the resumed session ends naturally. Multi-pause
+   sessions supported (a resumed session can pause again).
+5. ✅ New `paused` SessionStore status + `pause_checkpoint` /
+   `paused_at` columns + `mark_paused()` / `mark_resumed()` methods.
+6. ✅ `harness status` surfaces paused sessions with checkpoint path
+   and pause-question preview.
+7. ✅ `CAP_PAUSE` capability so tool profiles can opt out
+   (`read_only` profile never sees the pause tool).
 
-**Files:** new `harness/checkpoint.py`, hooks in `harness/loop.py`,
-new `harness/cmd_resume.py`.
+**Out of v1 (deferred, per the plan):**
+- Cross-machine portability (path-relative checkpoints + relocate flag)
+- Workspace-plan integration (paused session ↔ paused plan phase)
+- SIGINT-driven involuntary checkpoint via signal handler
+- `harness resume <id> --abort` to cancel a paused session
+- Concurrent-resume protection (file lock on checkpoint.json)
+- Web UI surfacing in `cmd_serve`
 
-**Complexity:** medium. ~2 PRs (checkpoint + resume CLI; integration
-with workspace plans).
+**Files (as shipped):** new `harness/checkpoint.py`, new
+`harness/cmd_resume.py`, new `harness/tools/pause.py`; modifications in
+`harness/loop.py`, `harness/cli.py`, `harness/server.py`,
+`harness/config.py`, `harness/session_store.py`,
+`harness/cmd_status.py`, `harness/trace_bridge.py`,
+`harness/tools/__init__.py`, `harness/engram_memory.py` (resume
+session-id support).
 
-**Dependencies:** none.
-
-**Risks:** state serialization is non-trivial — `messages` references
-provider-specific objects (Anthropic `Message`). Solution: serialize
-via the existing `as_assistant_message` adapter.
+**Status:** same-machine, same-workspace only. Cross-machine resume is
+a deliberate follow-up — the checkpoint records absolute paths, and the
+CLI validates them before resuming.
 
 #### B5. Result-aware loop detection (replace input-fingerprint version)
 
@@ -691,56 +715,49 @@ of scored trajectory data.
 
 ## Sequencing recommendation
 
-Two parallel tracks. Each item on a track depends on the prior items;
-items on different tracks are independent.
+> **Update 2026-04-27:** the original phased sequence below has played
+> out: Phase 0 (C1, B5) shipped, Phase 1 (B1, A1, C2) shipped, Phase 2
+> (A6, A3, C3, B4) shipped, plus most of Phase 3 (A4, A5, C4) and the
+> ancillary system-prompt template extraction. The remaining open
+> items below are ordered by current ROI assessment.
 
-**Track 1 — Loop infrastructure (3–4 months at modest pace)**
+**Original phased sequence (preserved for context):**
 
-```
-B1 subagents       →  B5 result-aware loop detection  →  B2 compaction
-   ↓                                                       (3 PRs)
-B4 durable interrupt  →  D2 async approval (built atop B4)
-```
+| Phase | Items | Status |
+|---|---|---|
+| Phase 0 (no-regrets) | C1, B5 | shipped |
+| Phase 1 (~2 months) | B1, A1, C2 | shipped |
+| Phase 2 (~3 months) | A6, A3, C3, B4 | shipped |
+| Phase 3 (later) | A4, A5, A2, B2, B3, C4, D1, D2, E1 | A4, A5, C4 shipped; A2, B2, B3, D1, D2, E1 open |
 
-**Track 2 — Memory + observability (3–4 months at modest pace)**
+**Recommended next sequence for the remaining six items:**
 
-```
-A1 hybrid retrieval  →  A6 retrieval observability  →  A3 link graph
-                                                          ↓
-C1 OTel GenAI conformance  →  C2 eval harness  →  C3 replay mode
-                                                       ↓
-                                             A4 sleep-time consolidation
-                                                       ↓
-                                             A5 promotion/decay
-                                                       ↓
-                                             A2 bi-temporal facts
-                                                       ↓
-                                             E1 DSPy optimization
-```
-
-**Phase 0 (immediate, no-regrets):** C1 (OTel GenAI conformance) and
-B5 (result-aware loop detection). Both small, both unlock
-follow-ons cheaply. C1 makes traces ingestible by every other
-observability tool we'd ever consider; B5 fixes a real false-positive
-in production.
-
-**Phase 1 (next ~2 months):** B1 (subagents), A1 (hybrid retrieval), C2
-(eval harness). The big three. After these land, the harness becomes
-substantially more capable on long tasks (B1), substantially more
-accurate at retrieval (A1), and substantially safer to refactor (C2).
-
-**Phase 2 (~3 months in):** A6 (retrieval observability), A3 (link
-graph), C3 (replay), B4 (interrupts). The "we can debug this now"
-generation.
-
-**Phase 3 (later):** A4 (sleep-time consolidation), A5 (decay), A2
-(bi-temporal), B2 (compaction), B3 (code-as-action), C4 (drift), D1
-(injection defense), D2 (async approval), E1 (optimization). Ordered
-roughly by ROI but each is its own conversation.
-
-**B3 (code-as-action) ranking note.** If you find yourself doing a lot
-of data-shaping subtasks, promote B3 into Phase 1 — the step-reduction
-gain is real.
+1. **B2 (tiered context compaction)** — second-highest ROI for long
+   sessions, complements B1 (subagents). Without it, long sessions
+   still blow context. Three layers; ship layer 1 (per-tool output
+   budget) first.
+2. **A5 follow-on: helpfulness-weighted re-ranking** — folds A6's
+   candidate logs back into A1's hybrid retrieval. Closes the feedback
+   loop between "we observe what got used" (A6) and "we rank by what
+   gets used" (the missing piece). Smaller than a new theme; could
+   ship as a 1-PR enhancement to engram_memory.recall.
+3. **D1 (two-layer prompt-injection defense)** — relevant whenever
+   `web_fetch` / external `read_file` outputs land in context. Layer 1
+   (untrusted-output markers) is already partially implemented; layer 2
+   (classifier) is the new piece.
+4. **A2 (bi-temporal facts + invalidation)** — biggest conceptual
+   upgrade per the original assessment, but invasive. Defer until C2
+   has produced enough scored sessions to measure whether
+   `valid_from`/`valid_to` actually improves recall (vs. just adding
+   metadata churn).
+5. **D2 (async human-in-the-loop)** — pairs with B4 (already shipped).
+   With pause/resume in place, the jump to async approval channels
+   (Slack / webhook) is small.
+6. **B3 (code-as-action)** — promote when a session's actual workload
+   shows lots of inline data-shaping (CSV parsing, JSON transforms).
+   Until then, the bash + python tools cover it.
+7. **E1 (DSPy/GEPA optimization)** — defer until ≥20 scored sessions
+   exist via C2. Heaviest dependency among the remaining items.
 
 ---
 

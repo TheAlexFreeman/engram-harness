@@ -78,6 +78,19 @@ def _print_active_plans(workspace_dir: Path) -> None:
         )
 
 
+def _read_pause_question(checkpoint_path: str | None) -> str:
+    """Best-effort fetch of the pause question from a checkpoint file."""
+    if not checkpoint_path:
+        return ""
+    try:
+        from harness.checkpoint import read_checkpoint
+
+        cp = read_checkpoint(Path(checkpoint_path))
+        return cp.pause.question
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _print_recent_sessions(db_path: Path, limit: int) -> None:
     try:
         from harness.session_store import SessionStore
@@ -100,6 +113,17 @@ def _print_recent_sessions(db_path: Path, limit: int) -> None:
             print(f"  {ts}  {sid}  {status:<10}  {cost}  {task_preview!r}")
     else:
         print("Recent sessions: none recorded")
+
+    paused = store.list_sessions(status="paused", limit=10)
+    if paused:
+        print(f"\nPaused sessions ({len(paused)}):  resume with `harness resume <session_id>`")
+        for r in paused:
+            sid = r.session_id or "?"
+            paused_at = (r.paused_at or "?")[:19]
+            cp = r.pause_checkpoint or "—"
+            question = _read_pause_question(cp)
+            preview = (question or r.task or "")[:60]
+            print(f"  {paused_at}  {sid}  {preview!r}")
 
     print(
         f"\nStats: {stats.get('total_sessions', 0)} sessions  "

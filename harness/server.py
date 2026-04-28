@@ -308,12 +308,17 @@ def _run_session(session: ManagedSession) -> None:
             skip_end_session_commit=_bridge_enabled(session),
             max_cost_usd=getattr(session.config, "max_cost_usd", None),
             max_tool_calls=getattr(session.config, "max_tool_calls", None),
+            pause_handle=session.components.pause_handle,
         )
         session.result = result
         session.final_text = result.final_text
         session.usage = result.usage
         session.turns_used = result.turns_used
-        session.status = "stopped" if session.stop_event.is_set() else "completed"
+        if result.paused:
+            session.status = "paused"
+            _persist_paused_checkpoint(session, result)
+        else:
+            session.status = "stopped" if session.stop_event.is_set() else "completed"
         _emit(
             session,
             SSEEvent(
@@ -495,9 +500,16 @@ def _run_interactive_session(session: ManagedSession) -> None:
 
 
 def _store_complete_session(session: ManagedSession) -> None:
-    """Persist final session state to SQLite, if the store is initialized."""
+    """Persist final session state to SQLite, if the store is initialized.
+
+    Skipped when the session is paused — ``_persist_paused_checkpoint`` has
+    already flipped the row to status='paused' via ``mark_paused``, and the
+    final completion will be recorded by the eventual ``harness resume`` run.
+    """
     store = _get_store()
     if store is None:
+        return
+    if session.status == "paused":
         return
     record_completed_session(
         store,
@@ -515,6 +527,47 @@ def _store_complete_session(session: ManagedSession) -> None:
     )
 
 
+def _persist_paused_checkpoint(session: ManagedSession, result) -> None:
+    """B4: write the checkpoint + flip SessionStore to 'paused'."""
+    from harness.checkpoint import (
+        CHECKPOINT_FILENAME,
+        serialize_checkpoint,
+        serialize_memory_state,
+        write_checkpoint,
+    )
+
+    engram = session.components.engram_memory
+    cp_path = session.components.trace_path.parent / CHECKPOINT_FILENAME
+    payload = serialize_checkpoint(
+        session_id=session.id,
+        task=session.task,
+        model=session.config.model,
+        mode=session.config.mode,
+        workspace=str(session.config.workspace),
+        memory_repo=str(engram.repo_root) if engram is not None else "",
+        trace_path=str(session.components.trace_path),
+        messages=result.messages or [],
+        usage=result.usage,
+        loop_state=result.pause_loop_state,
+        memory_state=serialize_memory_state(engram) if engram is not None else {},
+        pause=result.pause,
+        checkpoint_at=_now(),
+    )
+    try:
+        write_checkpoint(cp_path, payload)
+    except OSError as exc:
+        session.bridge_error = f"checkpoint write failed: {exc}"
+        return
+
+    store = _get_store()
+    if store is not None:
+        store.mark_paused(
+            session.id,
+            checkpoint_path=str(cp_path),
+            paused_at=payload["checkpoint_at"],
+        )
+
+
 # Re-export so existing imports / tests keep working with the moved helper.
 def _engram_session_metadata(
     session: ManagedSession,
@@ -530,6 +583,12 @@ def _bridge_enabled(session: ManagedSession) -> bool:
 def _maybe_run_trace_bridge(session: ManagedSession) -> None:
     if not (_bridge_enabled(session) and session.components.engram_memory is not None):
         session.bridge_status = "skipped"
+        return
+    # B4: when the session paused mid-flight, the trace is still incomplete.
+    # The eventual `harness resume` run will be what triggers the trace
+    # bridge over the now-finished JSONL.
+    if session.result is not None and getattr(session.result, "paused", False):
+        session.bridge_status = "deferred_paused"
         return
     try:
         from harness.trace_bridge import run_trace_bridge
