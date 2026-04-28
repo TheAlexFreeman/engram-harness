@@ -348,7 +348,7 @@ nested spans.
 **Risks:** infinite recursion (fix: depth bound); cost blowup (fix:
 budget tracking propagates to subagents).
 
-#### B2. Tiered context compaction (in-loop, not just session-end)
+#### B2. Tiered context compaction (in-loop, not just session-end) — **Layer 1 + Layer 2 shipped, Layer 3 deferred**
 
 **Why.** Claude Code's compaction pipeline is multi-stage: per-tool
 output budget cap → trim old turns → microcompact → semantic compact

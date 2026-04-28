@@ -308,6 +308,9 @@ def _run_session(session: ManagedSession) -> None:
             skip_end_session_commit=_bridge_enabled(session),
             max_cost_usd=getattr(session.config, "max_cost_usd", None),
             max_tool_calls=getattr(session.config, "max_tool_calls", None),
+            compaction_input_token_threshold=getattr(
+                session.config, "compaction_input_token_threshold", None
+            ),
             pause_handle=session.components.pause_handle,
         )
         session.result = result
@@ -400,6 +403,9 @@ def _run_interactive_session(session: ManagedSession) -> None:
                 stop_event=session.stop_event,
                 max_cost_usd=rem_c,
                 max_tool_calls=rem_t,
+                compaction_input_token_threshold=getattr(
+                    config, "compaction_input_token_threshold", None
+                ),
             )
 
         result = _interactive_idle_result()
@@ -852,6 +858,7 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         tool_pattern_guard_terminate_at=req.tool_pattern_guard_terminate_at,
         tool_pattern_guard_window=req.tool_pattern_guard_window,
         error_recall_threshold=req.error_recall_threshold,
+        compaction_input_token_threshold=req.compaction_input_token_threshold,
         stream=req.stream,
         trace_live=req.trace_live,
         trace_to_engram=req.trace_to_engram,
