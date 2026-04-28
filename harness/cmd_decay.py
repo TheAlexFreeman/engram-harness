@@ -46,6 +46,7 @@ from harness._engram_fs.trust_decay import (
     render_lifecycle_jsonl,
     thresholds_to_yaml,
 )
+from harness.cli_helpers import build_engram_git_repo, resolve_content_root
 
 _log = logging.getLogger(__name__)
 
@@ -89,61 +90,6 @@ class SweepResult:
     @property
     def total_demote(self) -> int:
         return sum(o.demote_count for o in self.outcomes)
-
-
-# ---------------------------------------------------------------------------
-# Resolution helpers (mirror cmd_consolidate)
-# ---------------------------------------------------------------------------
-
-
-def _resolve_content_root(memory_repo: str | None) -> Path | None:
-    from harness.engram_memory import _resolve_content_root, detect_engram_repo
-
-    if memory_repo:
-        repo_root = Path(memory_repo).expanduser().resolve()
-    else:
-        repo_root = detect_engram_repo(Path.cwd())
-    if repo_root is None:
-        return None
-    try:
-        _, content_root = _resolve_content_root(repo_root, None)
-        return content_root
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _build_git_repo(content_root: Path):
-    """Open a ``GitRepo`` for the repo containing ``content_root``.
-
-    Uses the same ``content_prefix`` mapping as ``EngramMemory`` (via
-    ``_git_relative_prefix``) so ``git add`` paths match git-root-relative
-    paths (e.g. ``core/memory/...`` under a standard layout). Returns
-    ``None`` when git isn't available or initialized — the caller treats that
-    as "write only, don't commit."
-    """
-    try:
-        import subprocess
-
-        from harness._engram_fs import GitRepo
-        from harness.engram_memory import _git_relative_prefix
-
-        prefix = _git_relative_prefix(content_root)
-        cwd = content_root if content_root.is_dir() else content_root.parent
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            stdin=subprocess.DEVNULL,
-        )
-        if result.returncode != 0:
-            raise ValueError(result.stderr or "git rev-parse failed")
-        git_root = Path(result.stdout.strip()).resolve()
-        return GitRepo(git_root, content_prefix=prefix)
-    except Exception as exc:  # noqa: BLE001
-        _log.warning("git not available, decay sweep will write only: %s", exc)
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -528,7 +474,7 @@ def main() -> None:
         sys.exit(2)
 
     memory_repo = args.memory_repo or os.getenv("HARNESS_MEMORY_REPO")
-    content_root = _resolve_content_root(memory_repo)
+    content_root = resolve_content_root(memory_repo)
     if content_root is None:
         print(
             "harness decay-sweep: no Engram repo found. "
@@ -556,7 +502,7 @@ def main() -> None:
         _print_dry_run(result, today)
         sys.exit(0)
 
-    git_repo = _build_git_repo(content_root)
+    git_repo = build_engram_git_repo(content_root)
     result = sweep(
         content_root,
         namespaces=namespaces,

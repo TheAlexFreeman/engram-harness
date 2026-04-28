@@ -39,6 +39,7 @@ from harness.analytics import (
     render_drift_alerts_md,
     render_drift_report,
 )
+from harness.cli_helpers import resolve_content_root
 
 _log = logging.getLogger(__name__)
 _DRIFT_ALERTS_FILENAME = "_drift_alerts.md"
@@ -66,23 +67,6 @@ def _load_drift_session_records(
             break
         offset += page_size
     return all_rows
-
-
-def _resolve_content_root(memory_repo: str | None) -> Path | None:
-    """Locate the Engram content root. Mirrors cmd_consolidate / cmd_decay."""
-    from harness.engram_memory import _resolve_content_root, detect_engram_repo
-
-    if memory_repo:
-        repo_root = Path(memory_repo).expanduser().resolve()
-    else:
-        repo_root = detect_engram_repo(Path.cwd())
-    if repo_root is None:
-        return None
-    try:
-        _, content_root = _resolve_content_root(repo_root, None)
-        return content_root
-    except Exception:  # noqa: BLE001
-        return None
 
 
 def _write_or_clear_alerts_artifact(report: DriftReport, alerts_path: Path) -> str | None:
@@ -263,7 +247,7 @@ def main() -> None:
     records = _load_drift_session_records(store, workspace=workspace_filter, page_size=2_000)
     store.close()
 
-    content_root = _resolve_content_root(args.memory_repo)
+    content_root = resolve_content_root(args.memory_repo)
 
     report = compute_drift_report(
         records,
