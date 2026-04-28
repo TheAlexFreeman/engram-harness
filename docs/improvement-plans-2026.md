@@ -245,34 +245,44 @@ reflection turn is the in-session counterpart that this complements.
 **Risks:** scope creep — easy to want this to do "everything." Limit
 v1 to one analyzer (e.g. SUMMARY.md updates from per-session rollups).
 
-#### A5. Promotion/decay lifecycle
+#### A5. Promotion/decay lifecycle — **shipped (advisory v1)**
 
 **Why.** Modern systems combine usage-based scoring (we have helpfulness
 via PR #16 rollups) with **freshness decay** (half-life on trust) and
 **explicit forgetting** policies (Cognee `Forget`, mem0 supersede).
 Our `trust` frontmatter is static after write; nothing decays.
 
-**Proposed shape.**
-1. Add `last_access` and `access_count` derived fields (computed from
-   ACCESS.jsonl, written into a sidecar, *not* the original file's
-   frontmatter — keeps git churn down).
-2. A "trust effective" view: `effective_trust = base_trust × decay(last_access)`.
-3. Periodic decay sweep (could ride on A4's consolidation pass): files
-   below an `effective_trust` threshold get added to `_demote_candidates.md`
-   for human review; files above a threshold get added to `_promote_candidates.md`.
-4. Never auto-edit user-stated content (`source: user-stated` is exempt
-   from decay).
+**Shape (as built).**
+1. ✅ Per-file `last_access` / `access_count` / `mean_helpfulness` derived
+   from ACCESS.jsonl, cached in a per-namespace `_lifecycle.jsonl` sidecar
+   (gitignored — recomputable view, no churn). Original frontmatter is never
+   mutated by the sweep.
+2. ✅ `effective_trust = trust_score(base) × decay(days_since_last_access)`,
+   exponential half-life (default 90 days). Lives in
+   [trust_decay.py](harness/_engram_fs/trust_decay.py).
+3. ✅ `harness decay-sweep` CLI ([cmd_decay.py](harness/cmd_decay.py))
+   walks the namespaces, partitions into promote/demote candidates,
+   writes advisory `_promote_candidates.md` and `_demote_candidates.md`
+   at namespace roots (committed in one go via the existing GitRepo
+   path). Standalone command — does not piggyback on `harness consolidate`.
+4. ✅ `source: user-stated` files exempt at the view level. New
+   [is_user_stated()](harness/_engram_fs/frontmatter_policy.py) helper for
+   reuse by future features (A2 supersede, etc.).
 
-**Files:** new `harness/_engram_fs/trust_decay.py`, hooks in
-`harness/trace_bridge.py`, new tool
-`memory_lifecycle_review` in `harness/tools/memory_tools.py`.
+Tool surface: `memory_lifecycle_review` reads the cached sidecar (or
+computes on demand) so the agent can surface candidates mid-session.
 
-**Complexity:** medium. ~1–2 PRs.
+**Deliberately deferred to a follow-up PR.** Auto-promote / auto-demote
+(rewriting `trust:` in frontmatter) is **out of v1**. Defaults are
+conservative (promote needs effective ≥ 0.5, ≥5 accesses, ≥0.7 mean
+helpfulness; demote needs effective ≤ 0.2, ≥3 accesses, ≤0.3 mean
+helpfulness; all six numbers are CLI flags). Tune from real data before
+considering enforcement.
 
-**Dependencies:** none. Plays well with A4.
-
-**Risks:** decay parameters need tuning. Start advisory-only (no
-auto-demote); promote to enforcement after 1–2 months of data.
+**Files:** new `harness/_engram_fs/trust_decay.py`, new
+`harness/cmd_decay.py`, new tool `memory_lifecycle_review` in
+`harness/tools/memory_tools.py`. No `harness/trace_bridge.py` hooks were
+needed — the sweep recomputes from ACCESS.jsonl on each run.
 
 #### A6. Retrieval observability — the candidate set, not just the access
 

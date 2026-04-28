@@ -230,6 +230,7 @@ def _build_memory(
     from harness.engram_memory import EngramMemory, detect_engram_repo
     from harness.tools.memory_tools import (
         MemoryContext,
+        MemoryLifecycleReview,
         MemoryRecall,
         MemoryRemember,
         MemoryReview,
@@ -333,6 +334,9 @@ def _build_memory(
         # `project: <name>` and have the project's goal + open questions
         # folded into the re-ranking purpose automatically.
         MemoryContext(engram, workspace=workspace),
+        # Read-only A5 surface — surfaces promote/demote candidates from the
+        # latest decay sweep (or computes them on demand if the cache is missing).
+        MemoryLifecycleReview(engram),
     ]
     if not read_only:
         memory_tools.extend([MemoryRemember(engram), MemoryTrace(engram)])

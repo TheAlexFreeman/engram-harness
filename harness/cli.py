@@ -8,6 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from harness.cmd_consolidate import main as _consolidate_main
+from harness.cmd_decay import main as _decay_main
 from harness.cmd_drift import main as _drift_main
 from harness.cmd_eval import main as _eval_main
 from harness.cmd_recall_debug import main as _recall_debug_main
@@ -419,6 +420,10 @@ def main() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] == "consolidate":
         _consolidate_main()
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "decay-sweep":
+        _decay_main()
         return
 
     if len(sys.argv) > 1 and sys.argv[1] == "eval":

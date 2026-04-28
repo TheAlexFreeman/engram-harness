@@ -7,14 +7,17 @@ exposed when the harness runs with ``--memory=engram``.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+from harness._engram_fs.trust_decay import CandidateThresholds, thresholds_to_yaml
 from harness.engram_memory import EngramMemory, _normalize_memory_path
 from harness.tests.test_engram_memory import _make_engram_repo
 from harness.tools.memory_tools import (
     MemoryContext,
+    MemoryLifecycleReview,
     MemoryRecall,
     MemoryRemember,
     MemoryReview,
@@ -540,3 +543,28 @@ def test_trace_events_land_in_session_summary(tmp_path: Path) -> None:
     assert "Trace annotations" in text
     assert "[assumption]" in text
     assert "cache TTL is 5 minutes" in text
+
+
+def test_lifecycle_review_uses_threshold_yaml_when_present(engram: EngramMemory) -> None:
+    """Match ``memory_lifecycle_review`` partitioning to sweep-sidecar thresholds."""
+    from harness._engram_fs.trust_decay import LIFECYCLE_THRESHOLDS_FILENAME
+
+    ns_root = engram.content_root / "memory" / "knowledge"
+    row = {
+        "file": "lifecycle_row.md",
+        "base_trust": "medium",
+        "source": "agent-generated",
+        "last_access": "2026-04-27",
+        "access_count": 10,
+        "mean_helpfulness": 0.85,
+        "effective_trust": 0.55,
+    }
+    (ns_root / "_lifecycle.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+    tight = CandidateThresholds(promote_min_effective=0.99)
+    (ns_root / LIFECYCLE_THRESHOLDS_FILENAME).write_text(
+        thresholds_to_yaml(tight), encoding="utf-8"
+    )
+
+    tool = MemoryLifecycleReview(engram)
+    out = tool.run({"kind": "promote", "namespace": "memory/knowledge", "limit": 10})
+    assert "## Promote candidates (0 shown" in out

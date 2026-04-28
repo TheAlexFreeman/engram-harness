@@ -616,10 +616,268 @@ class MemoryTrace:
         return f"trace[{event}] recorded (session total: {len(self._memory.trace_events)})"
 
 
+# ---------------------------------------------------------------------------
+# memory: lifecycle_review (A5)
+# ---------------------------------------------------------------------------
+
+
+_LIFECYCLE_DEFAULT_NAMESPACES = ("memory/knowledge", "memory/skills", "memory/users")
+_LIFECYCLE_DEFAULT_LIMIT = 10
+_LIFECYCLE_MAX_LIMIT = 50
+_LIFECYCLE_KINDS = ("promote", "demote", "both")
+
+
+class MemoryLifecycleReview:
+    """``memory_lifecycle_review`` — surface promote/demote candidates from the latest
+    sweep.
+
+    Read-only. Prefers the cached ``_lifecycle.jsonl`` sidecar written by
+    ``harness decay-sweep``; if absent, computes the view on demand from
+    ACCESS.jsonl plus frontmatter. Honors the ``source: user-stated``
+    exemption (those files never appear in the view).
+
+    The output is intentionally terse — the agent should treat the candidate
+    list as a hint to investigate, not as authoritative state. Only the sweep
+    CLI writes the canonical advisory markdown.
+    """
+
+    name = "memory_lifecycle_review"
+    mutates = False
+    capabilities = frozenset({CAP_MEMORY_READ})
+    untrusted_output = False
+    description = (
+        "List the current promotion / demotion candidates from the trust-decay "
+        "lifecycle sweep. Each row shows the file path, base trust, last access, "
+        "access count, mean helpfulness, and computed effective_trust. "
+        "Use this to decide which memory files to refresh, demote, or retire. "
+        "Advisory only — no frontmatter is mutated by this tool. "
+        "`source: user-stated` files are exempt and never appear."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "namespace": {
+                "type": "string",
+                "description": (
+                    "Restrict to one namespace path under memory/. Examples: "
+                    "'memory/knowledge', 'memory/skills', 'memory/users'. "
+                    "Omit to scan all three."
+                ),
+            },
+            "kind": {
+                "type": "string",
+                "description": (
+                    "Which side of the partition to return: 'promote', 'demote', "
+                    "or 'both' (default)."
+                ),
+            },
+            "limit": {
+                "type": "integer",
+                "description": (
+                    f"Maximum rows to return per side ({1}–{_LIFECYCLE_MAX_LIMIT}). "
+                    f"Default {_LIFECYCLE_DEFAULT_LIMIT}."
+                ),
+            },
+        },
+    }
+
+    def __init__(self, memory: "EngramMemory"):
+        self._memory = memory
+
+    def run(self, args: dict) -> str:
+        from datetime import date
+
+        from harness._engram_fs.trust_decay import (
+            LIFECYCLE_THRESHOLDS_FILENAME,
+            CandidateThresholds,
+            FileLifecycle,
+            compute_lifecycle_view,
+            partition_candidates,
+            thresholds_from_yaml,
+        )
+
+        kind = (args.get("kind") or "both").strip().lower()
+        if kind not in _LIFECYCLE_KINDS:
+            allowed = ", ".join(_LIFECYCLE_KINDS)
+            raise ValueError(f"kind must be one of: {allowed}; got {kind!r}")
+
+        limit_raw = args.get("limit", _LIFECYCLE_DEFAULT_LIMIT)
+        try:
+            limit = int(limit_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("limit must be an integer") from exc
+        limit = max(1, min(limit, _LIFECYCLE_MAX_LIMIT))
+
+        ns_arg = args.get("namespace")
+        if ns_arg is not None:
+            if not isinstance(ns_arg, str) or not ns_arg.strip():
+                raise ValueError("namespace must be a non-empty string")
+            namespaces: tuple[str, ...] = (ns_arg.strip(),)
+        else:
+            namespaces = _LIFECYCLE_DEFAULT_NAMESPACES
+
+        content_root = self._memory.content_root
+        today = date.today()
+
+        promote: list[FileLifecycle] = []
+        demote: list[FileLifecycle] = []
+        scanned: list[str] = []
+        cache_misses: list[str] = []
+
+        for ns in namespaces:
+            ns_root = (content_root / ns).resolve()
+            if not ns_root.is_dir():
+                continue
+            try:
+                ns_root.relative_to(content_root.resolve())
+            except ValueError:
+                continue
+            scanned.append(ns)
+
+            cached = ns_root / "_lifecycle.jsonl"
+            view: list[FileLifecycle] = []
+            if cached.is_file():
+                view = list(_load_lifecycle_cache(cached))
+            else:
+                cache_misses.append(ns)
+                view = compute_lifecycle_view(ns_root, today, namespace_rel=ns)
+
+            thresholds_path = ns_root / LIFECYCLE_THRESHOLDS_FILENAME
+            thresholds = CandidateThresholds()
+            if thresholds_path.is_file():
+                try:
+                    raw_yaml = thresholds_path.read_text(encoding="utf-8")
+                except OSError:
+                    raw_yaml = ""
+                parsed = thresholds_from_yaml(raw_yaml)
+                if parsed is not None:
+                    thresholds = parsed
+
+            partition = partition_candidates(view, thresholds=thresholds)
+            promote.extend(partition.promote)
+            demote.extend(partition.demote)
+
+        # Apply final ordering (per-side global, not per-namespace).
+        promote.sort(key=lambda r: r.effective_trust, reverse=True)
+        demote.sort(key=lambda r: r.effective_trust)
+
+        return _format_lifecycle_review(
+            promote=promote[:limit] if kind in {"promote", "both"} else [],
+            demote=demote[:limit] if kind in {"demote", "both"} else [],
+            scanned=scanned,
+            cache_misses=cache_misses,
+            limit=limit,
+            kind=kind,
+        )
+
+
+def _load_lifecycle_cache(path):
+    """Read a ``_lifecycle.jsonl`` cache and yield reconstructed FileLifecycle rows.
+
+    Tolerates malformed lines silently — same posture as
+    ``link_graph.read_edges``. A cache that's been corrupted shouldn't make
+    the agent's tool call fail; the worst outcome is "fewer rows than expected"
+    which the agent can re-run the sweep to fix.
+    """
+    import json
+    from datetime import date
+
+    from harness._engram_fs.trust_decay import FileLifecycle
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        try:
+            last_access_raw = row.get("last_access")
+            last_access = (
+                date.fromisoformat(last_access_raw[:10])
+                if isinstance(last_access_raw, str)
+                else None
+            )
+            yield FileLifecycle(
+                rel_path=str(row["file"]),
+                base_trust=str(row["base_trust"]),
+                source=str(row.get("source", "unknown")),
+                last_access=last_access,
+                access_count=int(row.get("access_count", 0)),
+                mean_helpfulness=float(row.get("mean_helpfulness", 0.0)),
+                effective_trust=float(row.get("effective_trust", 0.0)),
+            )
+        except (KeyError, ValueError, TypeError):
+            continue
+
+
+def _format_lifecycle_review(
+    *,
+    promote: list,
+    demote: list,
+    scanned: list[str],
+    cache_misses: list[str],
+    limit: int,
+    kind: str,
+) -> str:
+    if not scanned:
+        return "(no namespaces scanned — pass `namespace` or run from inside an Engram repo)\n"
+
+    lines: list[str] = []
+    header = f"# Memory lifecycle — {kind} candidates"
+    lines.append(header)
+    lines.append("")
+    lines.append(f"_Scanned: {', '.join(scanned)}_")
+    if cache_misses:
+        lines.append(
+            "_No cached `_lifecycle.jsonl` for: "
+            + ", ".join(cache_misses)
+            + " — computed on demand. Run `harness decay-sweep` to refresh._"
+        )
+    lines.append("")
+
+    if kind in {"promote", "both"}:
+        lines.append(f"## Promote candidates ({len(promote)} shown, limit {limit})")
+        if not promote:
+            lines.append("_None._")
+        else:
+            for row in promote:
+                lines.append(_lifecycle_row_line(row))
+        lines.append("")
+
+    if kind in {"demote", "both"}:
+        lines.append(f"## Demote candidates ({len(demote)} shown, limit {limit})")
+        if not demote:
+            lines.append("_None._")
+        else:
+            for row in demote:
+                lines.append(_lifecycle_row_line(row))
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _lifecycle_row_line(row) -> str:
+    last = row.last_access.isoformat() if row.last_access else "—"
+    return (
+        f"- `{row.rel_path}` — base={row.base_trust}, "
+        f"last_access={last}, accesses={row.access_count}, "
+        f"mean_help={row.mean_helpfulness:.2f}, "
+        f"effective={row.effective_trust:.2f}"
+    )
+
+
 __all__ = [
     "MemoryRecall",
     "MemoryRemember",
     "MemoryReview",
     "MemoryContext",
+    "MemoryLifecycleReview",
     "MemoryTrace",
 ]
