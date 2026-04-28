@@ -222,7 +222,8 @@ def _build_pair_chunk(
         return chunk
     head = chunk[: cap - 200]
     tail = chunk[-150:]
-    return f"{head}\n[... {len(chunk) - cap} chars elided ...]\n{tail}"
+    elided = len(chunk) - len(head) - len(tail)
+    return f"{head}\n[... {elided} chars elided ...]\n{tail}"
 
 
 def _replace_tool_result_content(user_msg: dict[str, Any]) -> int:
@@ -365,21 +366,22 @@ def maybe_compact(
         pricing = load_pricing()
     usage = compute_cost(raw_usage, pricing)
 
-    pairs_compacted = 0
+    results_replaced = 0
     last_compacted_user_idx = -1
     for _, u in fresh_pairs:
-        pairs_compacted += _replace_tool_result_content(messages[u])
+        results_replaced += _replace_tool_result_content(messages[u])
         last_compacted_user_idx = u
 
     insert_at = last_compacted_user_idx + 1
     messages.insert(insert_at, _summary_message(summary_text))
 
-    chars_after = _measure_chars(messages, [u for _, u in fresh_pairs] + [insert_at])
+    compacted_indices = [idx for pair in fresh_pairs for idx in pair]
+    chars_after = _measure_chars(messages, compacted_indices + [insert_at])
 
     tracer.event(
         "compaction_complete",
         pairs=len(fresh_pairs),
-        results_replaced=pairs_compacted,
+        results_replaced=results_replaced,
         summary_chars=len(summary_text),
         chars_before=chars_before,
         chars_after=chars_after,
