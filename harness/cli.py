@@ -579,8 +579,7 @@ def _handle_paused_session(
         cp_path = components.trace_path.parent / CHECKPOINT_FILENAME
         memory_repo = str(engram.repo_root)
 
-    pause_info = result.pause
-    counters = result.pause_loop_state
+    pause = result.paused
     payload = serialize_checkpoint(
         session_id=session_id,
         task=task,
@@ -589,14 +588,14 @@ def _handle_paused_session(
         workspace=str(components.config.workspace),
         memory_repo=memory_repo,
         trace_path=str(components.trace_path),
-        # The loop surfaces its live ``messages`` reference on RunResult when
-        # paused. Serialize it directly — the resume side will mutate the
-        # placeholder tool_result content in this exact list shape.
-        messages=result.messages or [],
+        # The PauseOutcome carries a live ``messages`` reference; serialize
+        # it directly — the resume side will mutate the placeholder
+        # tool_result content in this exact list shape.
+        messages=pause.messages,
         usage=result.usage,
-        loop_state=counters,
+        loop_state=pause.loop_state,
         memory_state=serialize_memory_state(engram) if engram is not None else {},
-        pause=pause_info,
+        pause=pause.pause_info,
         checkpoint_at=datetime.now().isoformat(timespec="seconds"),
     )
     write_checkpoint(cp_path, payload)
@@ -609,9 +608,9 @@ def _handle_paused_session(
         )
 
     print("\n" + "=" * 60)
-    print(f"[paused] {pause_info.question}")
-    if pause_info.context:
-        print(f"\n  context: {pause_info.context}")
+    print(f"[paused] {pause.pause_info.question}")
+    if pause.pause_info.context:
+        print(f"\n  context: {pause.pause_info.context}")
     print(f"\nResume with:  harness resume {session_id}")
     print("           or:  harness resume {0} --reply '<your reply>'".format(session_id))
     print("=" * 60)

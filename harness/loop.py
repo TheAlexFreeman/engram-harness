@@ -254,20 +254,13 @@ class RunResult:
     budget_reason: str | None = None
     # Harness tool calls executed in this ``run_until_idle`` invocation (for session budgets)
     tool_calls_used: int = 0
-    # B4: set when ``pause_for_user`` halted the session. ``pause`` carries the
-    # PauseInfo (question + tool_use_id + asked_at) so the caller can build the
-    # checkpoint without re-deriving it from the trace.
-    paused: bool = False
-    pause: Any = (
-        None  # harness.checkpoint.PauseInfo when paused; kept untyped to avoid an import cycle.
-    )
-    # B4: the loop counters at pause time, ready to fold into the checkpoint by
-    # the caller. Untyped here for the same reason.
-    pause_loop_state: Any = None
-    # B4: live reference to the conversation messages list at pause time. The
-    # caller serializes this into the checkpoint. Always set on a paused
-    # result; ``None`` otherwise (no point keeping a dangling reference).
-    messages: list[dict] | None = None
+    # B4: set to a ``PauseOutcome`` when ``pause_for_user`` halted the
+    # session, carrying the PauseInfo, captured loop counters, and a live
+    # reference to the conversation messages list — everything the caller
+    # needs to write the checkpoint and skip the trace bridge. ``None``
+    # for any other termination cause. Truthy iff paused, so the
+    # historical ``if result.paused:`` check still works.
+    paused: Any = None  # harness.checkpoint.PauseOutcome | None — untyped to avoid an import cycle.
 
 
 def session_remaining_cost_usd(cap: float | None, consumed_session_usd: float) -> float | None:
@@ -651,6 +644,7 @@ def run_until_idle(
                 tool_use_id=pause_handle.request.tool_use_id if pause_handle.request else "",
             )
             from harness.checkpoint import LoopCounters as _LC
+            from harness.checkpoint import PauseOutcome as _PO
 
             pause_info = pause_handle.to_pause_info()
             counters = _LC(
@@ -666,10 +660,11 @@ def run_until_idle(
                 final_text="(paused — awaiting user reply)",
                 usage=total,
                 turns_used=turn + 1,
-                paused=True,
-                pause=pause_info,
-                pause_loop_state=counters,
-                messages=messages,
+                paused=_PO(
+                    pause_info=pause_info,
+                    loop_state=counters,
+                    messages=messages,
+                ),
                 tool_calls_used=total_tool_calls,
             )
 
@@ -991,7 +986,7 @@ def run(
         tracer.event(
             "session_paused",
             turns=result.turns_used,
-            tool_use_id=result.pause.tool_use_id if result.pause is not None else "",
+            tool_use_id=result.paused.pause_info.tool_use_id,
         )
         return result
 

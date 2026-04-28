@@ -538,6 +538,7 @@ def _persist_paused_checkpoint(session: ManagedSession, result) -> None:
 
     engram = session.components.engram_memory
     cp_path = session.components.trace_path.parent / CHECKPOINT_FILENAME
+    pause = result.paused
     payload = serialize_checkpoint(
         session_id=session.id,
         task=session.task,
@@ -546,11 +547,11 @@ def _persist_paused_checkpoint(session: ManagedSession, result) -> None:
         workspace=str(session.config.workspace),
         memory_repo=str(engram.repo_root) if engram is not None else "",
         trace_path=str(session.components.trace_path),
-        messages=result.messages or [],
+        messages=pause.messages,
         usage=result.usage,
-        loop_state=result.pause_loop_state,
+        loop_state=pause.loop_state,
         memory_state=serialize_memory_state(engram) if engram is not None else {},
-        pause=result.pause,
+        pause=pause.pause_info,
         checkpoint_at=_now(),
     )
     try:

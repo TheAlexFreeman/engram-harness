@@ -23,7 +23,6 @@ from pathlib import Path
 
 from harness.checkpoint import (
     Checkpoint,
-    LoopCounters,
     ResumeState,
     mutate_pause_reply,
     read_checkpoint,
@@ -140,17 +139,7 @@ def _re_pause(
         write_checkpoint,
     )
 
-    pause_info = result.pause
-    counters = result.pause_loop_state
-    if not isinstance(counters, LoopCounters):
-        counters = LoopCounters(  # defensive — should always be set on a paused result
-            prev_batch_sig=None,
-            repeat_streak=0,
-            tool_error_streaks={},
-            tool_seq=0,
-            output_limit_continuations=0,
-            total_tool_calls=result.tool_calls_used,
-        )
+    pause = result.paused
     cp_path = Path(checkpoint.trace_path).parent / CHECKPOINT_FILENAME
     payload = serialize_checkpoint(
         session_id=checkpoint.session_id,
@@ -162,9 +151,9 @@ def _re_pause(
         trace_path=checkpoint.trace_path,
         messages=resume_state.messages,
         usage=result.usage,
-        loop_state=counters,
+        loop_state=pause.loop_state,
         memory_state=serialize_memory_state(components.engram_memory),
-        pause=pause_info,
+        pause=pause.pause_info,
         checkpoint_at=datetime.now().isoformat(timespec="seconds"),
     )
     write_checkpoint(cp_path, payload)
@@ -176,9 +165,9 @@ def _re_pause(
             paused_at=payload["checkpoint_at"],
         )
 
-    print(f"\n[paused again] {pause_info.question}", file=sys.stderr)
-    if pause_info.context:
-        print(f"\n  context: {pause_info.context}", file=sys.stderr)
+    print(f"\n[paused again] {pause.pause_info.question}", file=sys.stderr)
+    if pause.pause_info.context:
+        print(f"\n  context: {pause.pause_info.context}", file=sys.stderr)
     print(
         f"\nResume with: harness resume {checkpoint.session_id}",
         file=sys.stderr,
