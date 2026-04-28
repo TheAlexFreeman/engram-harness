@@ -214,17 +214,24 @@ def _generate_request_id() -> str:
 def _parse_webhook_payload(payload: Any) -> ApprovalDecision | None:
     """Convert a parsed JSON payload to a decision, or ``None`` if pending.
 
-    Returns ``None`` when the response carries no ``approved`` field —
-    used for the 202 "still pending" pattern.
+    Returns ``None`` only when ``payload`` is a dict **without** an
+    ``approved`` key (202 / poll "still pending").
+
+    Non-dict payloads (invalid JSON bodies surfaced as strings, arrays,
+    etc.) become an errored decision so operators see a parse failure
+    instead of polling until timeout.
     """
-    if not isinstance(payload, dict):
-        return None
-    if "approved" not in payload:
-        return None
-    return ApprovalDecision(
-        approved=bool(payload.get("approved")),
-        reason=str(payload.get("reason", "") or ""),
-    )
+    if isinstance(payload, dict):
+        if "approved" not in payload:
+            return None
+        return ApprovalDecision(
+            approved=bool(payload.get("approved")),
+            reason=str(payload.get("reason", "") or ""),
+        )
+    preview = repr(payload)
+    if len(preview) > 200:
+        preview = preview[:197] + "..."
+    return ApprovalDecision(error=f"invalid webhook payload (expected JSON object): {preview}")
 
 
 def _default_http_request(
@@ -232,8 +239,9 @@ def _default_http_request(
 ) -> tuple[int, Any]:
     """Tiny stdlib HTTP client for the webhook channel.
 
-    Returns ``(status_code, parsed_json)``. JSON errors propagate as
-    a non-dict payload (the caller treats that as "no decision yet").
+    Returns ``(status_code, parsed_json_or_body)``. JSON decode errors
+    propagate as the raw response body string; :func:`_parse_webhook_payload`
+    turns non-object payloads into an errored decision.
     Lazy-imported so that shipping the channel doesn't require any
     optional HTTP dependency.
     """

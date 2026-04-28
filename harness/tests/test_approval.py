@@ -26,6 +26,7 @@ from __future__ import annotations
 import io
 import json
 
+import harness.tools as tools_mod
 from harness.safety.approval import (
     ApprovalDecision,
     ApprovalRequest,
@@ -282,6 +283,26 @@ def test_execute_short_circuits_on_channel_error():
 
 
 @_reset
+def test_execute_decline_truncates_long_message():
+    """Decline results use the same output budget as normal tool output."""
+    prev = tools_mod._TOOL_OUTPUT_BUDGET_CHARS
+    try:
+        tools_mod._TOOL_OUTPUT_BUDGET_CHARS = 120
+        long_err = "x" * 5000
+        set_approval_channel(
+            _StubChannel(ApprovalDecision(approved=False, error=long_err)),
+            gated_tools=["demo"],
+        )
+        tool = _DemoTool()
+        result = execute(ToolCall(name="demo", args={}, id="x"), {"demo": tool})
+        assert len(result.content) <= 120
+        assert "[harness] tool output truncated" in result.content
+        assert tool.calls == []
+    finally:
+        tools_mod._TOOL_OUTPUT_BUDGET_CHARS = prev
+
+
+@_reset
 def test_execute_with_class_attribute_gating_only():
     set_approval_channel(_StubChannel(ApprovalDecision(approved=True)))
     # gated_tools is empty; gating is via class attribute on _GatedTool.
@@ -363,6 +384,20 @@ def test_webhook_channel_post_failure_returns_error_decision():
     assert decision.approved is False
     assert decision.error is not None
     assert "DNS failure" in decision.error
+
+
+def test_webhook_channel_non_dict_post_body_is_error_not_pending():
+    """Invalid/garbled JSON that surfaces as a string should not poll until timeout."""
+
+    def fake_request(method, url, *, body, timeout):
+        assert method == "POST"
+        return 200, "not-json"
+
+    channel = WebhookApprovalChannel(url="https://example.test/q", request_fn=fake_request)
+    decision = channel.request(ApprovalRequest(tool_name="t"))
+    assert decision.error is not None
+    assert "invalid webhook payload" in decision.error.lower()
+    assert "not-json" in decision.error
 
 
 # ---------------------------------------------------------------------------

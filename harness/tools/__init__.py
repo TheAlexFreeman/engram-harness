@@ -301,15 +301,17 @@ def execute(call: ToolCall, registry: dict[str, Tool]) -> ToolResult:
             is_error=True,
         )
     # D2: human-in-the-loop approval gate. Runs *before* tool.run() so
-    # a denial short-circuits without touching local state. Untrusted-
-    # output wrapping and per-tool truncation still run on the
-    # synthetic decline message so the model sees a stable shape.
+    # a denial short-circuits without touching local state. The synthetic
+    # decline message uses the same per-tool output truncation budget as
+    # normal results (long reasons/channel errors cannot blow context).
+    # Untrusted-output wrapping does not apply — the harness authored the text.
     approval_decision = _maybe_check_approval(call, tool)
     if approval_decision is not None and not approval_decision.approved:
         reason = (approval_decision.reason or "approval declined").strip()
         if approval_decision.error:
             reason = f"{reason} (channel error: {approval_decision.error})"
         decline_msg = f"[harness] {call.name} not executed — {reason}"
+        decline_msg = _truncate_tool_output(call.name, decline_msg)
         return ToolResult(call=call, content=decline_msg, is_error=False)
 
     untrusted = _is_untrusted(tool)
@@ -342,6 +344,7 @@ def _maybe_check_approval(call: ToolCall, tool: Tool | None):
         return None
     try:
         from harness.safety.approval import check_approval
-    except Exception:  # noqa: BLE001
+    except ImportError:
+        # Feature absent — session runs without an approval backend.
         return None
     return check_approval(call.name, tool, call.args)
