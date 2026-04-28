@@ -18,6 +18,7 @@ Covers:
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -284,6 +285,50 @@ def test_set_none_disables_dispatch_hook():
     tool = _UntrustedTool("plain")
     result = execute(ToolCall(name="demo_untrusted", args={}, id="x"), {"demo_untrusted": tool})
     assert "WARNING" not in result.content
+
+
+def test_classifier_state_is_per_os_thread():
+    """Concurrent sessions must not share one global classifier/callback."""
+    stub_a = _StubClassifier(InjectionVerdict(suspicious=False, confidence=0.05))
+    stub_b = _StubClassifier(InjectionVerdict(suspicious=False, confidence=0.05))
+    barrier = threading.Barrier(2)
+    err: list[BaseException] = []
+
+    def run_a() -> None:
+        try:
+            set_injection_classifier(stub_a)
+            barrier.wait()
+            execute(
+                ToolCall(name="demo_untrusted", args={}, id="a"),
+                {"demo_untrusted": _UntrustedTool()},
+            )
+        except BaseException as e:  # noqa: BLE001
+            err.append(e)
+        finally:
+            set_injection_classifier(None)
+
+    def run_b() -> None:
+        try:
+            set_injection_classifier(stub_b)
+            barrier.wait()
+            execute(
+                ToolCall(name="demo_untrusted", args={}, id="b"),
+                {"demo_untrusted": _UntrustedTool()},
+            )
+        except BaseException as e:  # noqa: BLE001
+            err.append(e)
+        finally:
+            set_injection_classifier(None)
+
+    ta = threading.Thread(target=run_a)
+    tb = threading.Thread(target=run_b)
+    ta.start()
+    tb.start()
+    ta.join()
+    tb.join()
+    assert not err
+    assert len(stub_a.calls) == 1
+    assert len(stub_b.calls) == 1
 
 
 # ---------------------------------------------------------------------------

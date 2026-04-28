@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os as _os
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
@@ -168,9 +169,22 @@ _UNTRUSTED_SUFFIX = "\n</untrusted_tool_output>"
 # fires after each classification — wired by the session builder to the
 # session tracer so verdicts become trace events without ``execute``
 # needing tracer access.
-_INJECTION_CLASSIFIER: Any | None = None
-_INJECTION_CLASSIFIER_THRESHOLD: float = 0.6
-_ON_CLASSIFY_CALLBACK: Callable[[str, Any], None] | None = None
+#
+# State is thread-local so concurrent API sessions (each on its own
+# thread) do not clobber each other's threshold, callback, or classifier.
+_INJECTION_TLS = threading.local()
+
+
+def _injection_state() -> dict[str, Any]:
+    st = getattr(_INJECTION_TLS, "state", None)
+    if st is None:
+        st = {
+            "classifier": None,
+            "threshold": 0.6,
+            "on_classify": None,
+        }
+        _INJECTION_TLS.state = st
+    return st
 
 
 def set_injection_classifier(
@@ -185,15 +199,18 @@ def set_injection_classifier(
     dispatch site prepends a warning to the wrapped tool output. The
     ``on_classify`` callback receives ``(tool_name, verdict)`` after
     every classification, intended for the session tracer.
+
+    Installs on the **current OS thread**; background session threads
+    each get an independent binding.
     """
-    global _INJECTION_CLASSIFIER, _INJECTION_CLASSIFIER_THRESHOLD, _ON_CLASSIFY_CALLBACK
-    _INJECTION_CLASSIFIER = classifier
-    _INJECTION_CLASSIFIER_THRESHOLD = float(threshold)
-    _ON_CLASSIFY_CALLBACK = on_classify
+    st = _injection_state()
+    st["classifier"] = classifier
+    st["threshold"] = float(threshold)
+    st["on_classify"] = on_classify
 
 
 def get_injection_classifier() -> Any | None:
-    return _INJECTION_CLASSIFIER
+    return _injection_state()["classifier"]
 
 
 _SUSPICION_WARNING_TEMPLATE = (
@@ -217,19 +234,20 @@ def _maybe_apply_injection_classifier(
     The ``on_classify`` callback fires for every classification —
     successful, suspicious, or errored — so trace logs are complete.
     """
-    classifier = _INJECTION_CLASSIFIER
+    st = _injection_state()
+    classifier = st["classifier"]
     if classifier is None:
         return content
     from harness.safety.injection_detector import classify_with_safe_fallback
 
     verdict = classify_with_safe_fallback(classifier, content=content, tool_name=tool_name)
-    cb = _ON_CLASSIFY_CALLBACK
+    cb = st["on_classify"]
     if cb is not None:
         try:
             cb(tool_name, verdict)
         except Exception:  # noqa: BLE001 — never let trace failures break dispatch
             pass
-    if verdict.suspicious and verdict.confidence >= _INJECTION_CLASSIFIER_THRESHOLD:
+    if verdict.suspicious and verdict.confidence >= float(st["threshold"]):
         warning = _SUSPICION_WARNING_TEMPLATE.format(
             confidence=verdict.confidence,
             reason=verdict.reason or "(no reason given)",

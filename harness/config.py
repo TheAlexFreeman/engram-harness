@@ -727,10 +727,10 @@ def _wire_injection_classifier(config: SessionConfig, *, tracer: Any) -> None:
     ``injection_classification`` trace event regardless of verdict so
     downstream tooling can audit false-positive rates.
 
-    This setter is global, so successive sessions overwrite each other.
-    Single-session use only — safe under the harness's typical CLI
-    pattern, fine for the API server because each session builds in a
-    different process or with disjoint dispatch boundaries.
+    The underlying hook is **thread-local** (see ``set_injection_classifier``):
+    each OS thread gets its own classifier, threshold, and trace callback,
+    so concurrent API sessions do not cross wires. The CLI remains
+    single-threaded for dispatch and is unchanged in behavior.
     """
     from harness.tools import set_injection_classifier
 
