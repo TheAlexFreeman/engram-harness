@@ -22,10 +22,8 @@ from harness._engram_fs.trust_decay import (
     CandidateThresholds,
     thresholds_from_yaml,
 )
-from harness.cmd_decay import (
-    _build_git_repo,
-    sweep,
-)
+from harness.cli_helpers import build_engram_git_repo
+from harness.cmd_decay import sweep
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -330,7 +328,7 @@ def test_sweep_commits_when_git_repo_provided(tmp_path: Path) -> None:
     subprocess.run(["git", "add", "-A"], cwd=str(repo_root), check=True)
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=str(repo_root), check=True)
 
-    git_repo = _build_git_repo(content_root)
+    git_repo = build_engram_git_repo(content_root)
     assert git_repo is not None
     result = sweep(
         content_root,

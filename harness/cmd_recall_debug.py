@@ -21,9 +21,9 @@ def _resolve_session_dir(session_id: str, memory_repo: str | None) -> Path | Non
 
     Returns the absolute session directory on hit, ``None`` otherwise.
     """
-    from harness.cmd_status import _resolve_engram_content_root
+    from harness.cli_helpers import resolve_content_root
 
-    content_root = _resolve_engram_content_root(memory_repo)
+    content_root = resolve_content_root(memory_repo)
     if content_root is None:
         return None
     activity_root = content_root / "memory" / "activity"

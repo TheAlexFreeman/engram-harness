@@ -8,10 +8,10 @@ from unittest.mock import patch
 
 import pytest
 
+from harness.cli_helpers import resolve_content_root
 from harness.cmd_status import (
     _print_active_plans,
     _print_recent_sessions,
-    _resolve_engram_content_root,
     _resolve_workspace_dir,
 )
 from harness.session_store import SessionRecord, SessionStore
@@ -64,25 +64,25 @@ def _create_plan(
 
 
 # ---------------------------------------------------------------------------
-# _resolve_engram_content_root
+# resolve_content_root
 # ---------------------------------------------------------------------------
 
 
 def test_resolve_content_root_with_explicit_repo(tmp_path):
     _make_content_root(tmp_path)
     # _resolve_content_root returns the parent of memory/ (the repo root).
-    resolved = _resolve_engram_content_root(str(tmp_path))
+    resolved = resolve_content_root(str(tmp_path))
     assert resolved is not None
     assert (resolved / "memory" / "HOME.md").is_file()
 
 
 def test_resolve_content_root_invalid_path_returns_none(tmp_path):
-    result = _resolve_engram_content_root(str(tmp_path / "nonexistent"))
+    result = resolve_content_root(str(tmp_path / "nonexistent"))
     assert result is None
 
 
 def test_resolve_content_root_directory_without_engram_returns_none(tmp_path):
-    result = _resolve_engram_content_root(str(tmp_path))
+    result = resolve_content_root(str(tmp_path))
     assert result is None
 
 
@@ -94,7 +94,7 @@ def test_resolve_content_root_auto_detect_walks_cwd(tmp_path):
         mock_path_cls.cwd.return_value = subdir
         mock_path_cls.side_effect = lambda *a: Path(*a)
         # Auto-detect from CWD walking upward
-        resolved = _resolve_engram_content_root(str(tmp_path))
+        resolved = resolve_content_root(str(tmp_path))
     assert resolved is not None
 
 

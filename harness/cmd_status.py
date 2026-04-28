@@ -5,22 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-
-def _resolve_engram_content_root(memory_repo: str | None) -> "Path | None":
-    from harness.engram_memory import _resolve_content_root, detect_engram_repo
-
-    if memory_repo:
-        repo_root = Path(memory_repo).expanduser().resolve()
-    else:
-        repo_root = detect_engram_repo(Path.cwd())
-
-    if repo_root is None:
-        return None
-    try:
-        _, content_root = _resolve_content_root(repo_root, None)
-        return content_root
-    except Exception:
-        return None
+from harness.cli_helpers import resolve_content_root
 
 
 def _resolve_workspace_dir(workspace: str | None) -> Path:
@@ -178,7 +163,7 @@ def main() -> None:
 
     print("=== Harness Status ===")
 
-    content_root = _resolve_engram_content_root(memory_repo)
+    content_root = resolve_content_root(memory_repo)
     if content_root is not None:
         print(f"\nMemory repo content root: {content_root}")
     else:

@@ -20,6 +20,7 @@ import os
 import sys
 from pathlib import Path
 
+from harness.cli_helpers import build_engram_git_repo, resolve_content_root
 from harness.consolidate import (
     DEFAULT_MAX_FILES_PER_DIR,
     DEFAULT_MAX_NAMESPACES,
@@ -28,22 +29,6 @@ from harness.consolidate import (
     consolidate,
     find_consolidation_candidates,
 )
-
-
-def _resolve_content_root(memory_repo: str | None) -> Path | None:
-    from harness.engram_memory import _resolve_content_root, detect_engram_repo
-
-    if memory_repo:
-        repo_root = Path(memory_repo).expanduser().resolve()
-    else:
-        repo_root = detect_engram_repo(Path.cwd())
-    if repo_root is None:
-        return None
-    try:
-        _, content_root = _resolve_content_root(repo_root, None)
-        return content_root
-    except Exception:  # noqa: BLE001
-        return None
 
 
 def _build_consolidation_mode(model: str):
@@ -172,7 +157,7 @@ def main() -> None:
     args = parser.parse_args(sys.argv[2:])
 
     memory_repo = args.memory_repo or os.getenv("HARNESS_MEMORY_REPO")
-    content_root = _resolve_content_root(memory_repo)
+    content_root = resolve_content_root(memory_repo)
     if content_root is None:
         print(
             "harness consolidate: no Engram repo found. "
@@ -211,13 +196,7 @@ def main() -> None:
 
     mode = _build_consolidation_mode(args.model)
 
-    git_repo = None
-    try:
-        from harness._engram_fs import GitRepo
-
-        git_repo = GitRepo(content_root.parent if content_root.name == "core" else content_root)
-    except Exception as exc:  # noqa: BLE001
-        print(f"harness consolidate: git not available, will write only: {exc}", file=sys.stderr)
+    git_repo = build_engram_git_repo(content_root)
 
     result = consolidate(
         content_root,
