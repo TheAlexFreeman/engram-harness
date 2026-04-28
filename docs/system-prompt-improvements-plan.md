@@ -7,25 +7,24 @@
 > ### Shipped state
 >
 > - **P1 — Compress workspace section:** done. The `_WORK_SECTION` template
->   lives at [harness/prompt_templates/workspace.md](harness/prompt_templates/workspace.md)
->   and the per-op intros are tightened.
+> lives at [harness/prompt_templates/workspace.md](harness/prompt_templates/workspace.md)
+> and the per-op intros are tightened.
 > - **P2 — Lazy Plans addendum:** done. `_PLANS_ADDENDUM` is loaded from
->   [harness/prompt_templates/plans_addendum.md](harness/prompt_templates/plans_addendum.md);
->   `system_prompt_native()` accepts `with_plan_context` and
->   `harness/config.py::_has_active_plan_context` detects in-progress plans
->   from workspace run-state JSON.
+> [harness/prompt_templates/plans_addendum.md](harness/prompt_templates/plans_addendum.md);
+> `system_prompt_native()` accepts `with_plan_context` and
+> `harness/config.py::_has_active_plan_context` detects in-progress plans
+> from workspace run-state JSON.
 > - **P3 — Critical rules block:** done.
->   [harness/prompt_templates/critical_rules.md](harness/prompt_templates/critical_rules.md)
->   sits between identity and the full rules list.
+> [harness/prompt_templates/critical_rules.md](harness/prompt_templates/critical_rules.md)
+> sits between identity and the full rules list.
 > - **P4 — Required trace events:** done in the memory section copy.
 > - **P5 — Light/memory-only/full mode flags:** done.
->   `system_prompt_native(with_memory_tools, with_work_tools, with_plan_context,
->   memory_writes, work_writes)` is the public API. Read-only variants
->   (`memory_read_only.md`, `workspace_read_only.md`) were added on top of the
->   original plan.
+> `system_prompt_native(with_memory_tools, with_work_tools, with_plan_context, memory_writes, work_writes)` is the public API. Read-only variants
+> (`memory_read_only.md`, `workspace_read_only.md`) were added on top of the
+> original plan.
 > - **P6 — Template files:** done. All seven sections live as `.md` files in
->   `harness/prompt_templates/` and are loaded via
->   `importlib.resources.files("harness.prompt_templates")`.
+> `harness/prompt_templates/` and are loaded via
+> `importlib.resources.files("harness.prompt_templates")`.
 >
 > This document is preserved as the historical record of the design pass.
 > Future prompt changes should edit the templates directly and update
@@ -55,24 +54,24 @@ This document turns those proposals into actionable implementation plans.
 ## Problem inventory (from audit)
 
 1. **Workspace section is a specification, not a prompt.** `work: thread`,
-   `work: note`, and `work: project.*` each include full prose explanations
+  `work: note`, and `work: project.`* each include full prose explanations
    that belong in developer docs, not in a ~3k-token hot path.
 2. **Plans subsection is disproportionately large.** The Plans block
-   (~1,200 chars) describes postcondition prefix syntax, verify semantics,
+  (~1,200 chars) describes postcondition prefix syntax, verify semantics,
    approval gates, and failure-tracking — detail the model doesn't need
    pre-loaded unless it's working a plan.
-3. **`memory: context` `needs` descriptor list is incomplete in the prompt.**
-   The prompt lists `user_preferences`, `recent_sessions`, `domain:<topic>`,
+3. `**memory: context` `needs` descriptor list is incomplete in the prompt.**
+  The prompt lists `user_preferences`, `recent_sessions`, `domain:<topic>`,
    `skill:<name>`, and "any free-form phrase" but doesn't convey which
    descriptors are high-value for common task types.
 4. **Rules section has no triage signal.** All 9 rules are presented at
-   equal weight. The two most-frequently-violated rules (read-before-edit,
+  equal weight. The two most-frequently-violated rules (read-before-edit,
    SELF-CORRECTION) get the same visual treatment as rarely-triggered ones.
-5. **`memory: trace` event taxonomy is buried.** The common event labels
-   (`approach_change`, `key_finding`, etc.) appear only in the trace section,
+5. `**memory: trace` event taxonomy is buried.** The common event labels
+  (`approach_change`, `key_finding`, etc.) appear only in the trace section,
    and the section doesn't convey when tracing is *required* vs. optional.
 6. **No prompt variant for "light" sessions.** A single code-assist session
-   that won't touch memory or workspace is paying 3,300 tokens for affordances
+  that won't touch memory or workspace is paying 3,300 tokens for affordances
    it won't use. There's no lightweight mode.
 
 ---
