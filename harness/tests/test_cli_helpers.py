@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -38,10 +37,8 @@ def test_resolve_content_root_returns_none_for_dir_without_home(tmp_path: Path) 
     assert resolve_content_root(str(tmp_path)) is None
 
 
-def test_resolve_content_root_auto_detects_from_cwd(
-    tmp_path: Path, monkeypatch
-) -> None:
-    repo = _make_engram_repo(tmp_path)
+def test_resolve_content_root_auto_detects_from_cwd(tmp_path: Path, monkeypatch) -> None:
+    _make_engram_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
     assert resolve_content_root(None) is not None
 

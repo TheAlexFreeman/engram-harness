@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any
 
 from harness._engram_fs.frontmatter_utils import write_with_frontmatter
-from harness.cli_helpers import build_engram_git_repo, resolve_content_root
 from harness._engram_fs.trust_decay import (
     DEFAULT_DEMOTE_MAX_EFFECTIVE,
     DEFAULT_DEMOTE_MAX_HELPFULNESS,
@@ -47,6 +46,7 @@ from harness._engram_fs.trust_decay import (
     render_lifecycle_jsonl,
     thresholds_to_yaml,
 )
+from harness.cli_helpers import build_engram_git_repo, resolve_content_root
 
 _log = logging.getLogger(__name__)
 

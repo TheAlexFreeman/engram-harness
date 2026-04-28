@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from pathlib import Path
 
 from harness.cli_helpers import build_engram_git_repo, resolve_content_root
 from harness.consolidate import (
