@@ -258,7 +258,9 @@ class RunResult:
     # PauseInfo (question + tool_use_id + asked_at) so the caller can build the
     # checkpoint without re-deriving it from the trace.
     paused: bool = False
-    pause: Any = None  # harness.checkpoint.PauseInfo when paused; kept untyped to avoid an import cycle.
+    pause: Any = (
+        None  # harness.checkpoint.PauseInfo when paused; kept untyped to avoid an import cycle.
+    )
     # B4: the loop counters at pause time, ready to fold into the checkpoint by
     # the caller. Untyped here for the same reason.
     pause_loop_state: Any = None

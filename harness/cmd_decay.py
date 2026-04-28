@@ -427,10 +427,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_HALF_LIFE_DAYS,
         dest="half_life_days",
-        help=(
-            f"Days at which the decay factor reaches 0.5. "
-            f"Default {DEFAULT_HALF_LIFE_DAYS}."
-        ),
+        help=(f"Days at which the decay factor reaches 0.5. Default {DEFAULT_HALF_LIFE_DAYS}."),
     )
     parser.add_argument(
         "--promote-min-effective",

@@ -783,9 +783,7 @@ def test_drift_report_folds_in_helpfulness_when_content_root_passed(tmp_path: Pa
         ],
     )
     # Need ≥5 baseline sessions to satisfy min_baseline_sessions.
-    records = [
-        _rec(created_at=(now - timedelta(days=10, hours=i)).isoformat()) for i in range(20)
-    ]
+    records = [_rec(created_at=(now - timedelta(days=10, hours=i)).isoformat()) for i in range(20)]
     records += [_rec(created_at=(now - timedelta(days=2)).isoformat())]
     report = compute_drift_report(records, now=now, content_root=content_root)
     assert report.current.mean_recall_helpfulness == pytest.approx(0.4)
@@ -795,9 +793,7 @@ def test_drift_report_folds_in_helpfulness_when_content_root_passed(tmp_path: Pa
 
 def test_drift_report_without_content_root_skips_helpfulness(tmp_path: Path) -> None:
     now = datetime(2026, 4, 25, 12, 0, 0)
-    records = [
-        _rec(created_at=(now - timedelta(days=10, hours=i)).isoformat()) for i in range(20)
-    ]
+    records = [_rec(created_at=(now - timedelta(days=10, hours=i)).isoformat()) for i in range(20)]
     report = compute_drift_report(records, now=now)
     assert report.current.mean_recall_helpfulness == 0.0
     assert report.current.rollup_row_count == 0
@@ -988,9 +984,7 @@ def test_cmd_drift_no_write_alerts_skips_artifact(monkeypatch, tmp_path: Path) -
         )
     store.close()
 
-    monkeypatch.setattr(
-        "sys.argv", ["harness", "drift", "--db", str(db_path), "--no-write-alerts"]
-    )
+    monkeypatch.setattr("sys.argv", ["harness", "drift", "--db", str(db_path), "--no-write-alerts"])
     with patch("harness.cmd_drift.datetime") as fake_dt:
         fake_dt.now.return_value = now
         fake_dt.fromisoformat.side_effect = datetime.fromisoformat

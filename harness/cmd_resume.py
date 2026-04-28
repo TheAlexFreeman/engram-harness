@@ -467,9 +467,7 @@ def main() -> None:
     memory_repo_override = (
         Path(args.memory_repo).expanduser().resolve() if args.memory_repo else None
     )
-    workspace_override = (
-        Path(args.workspace).expanduser().resolve() if args.workspace else None
-    )
+    workspace_override = Path(args.workspace).expanduser().resolve() if args.workspace else None
     rc = _resume_one(
         session_id=args.session_id,
         reply_arg=args.reply,

@@ -318,9 +318,7 @@ def find_pause_tool_result(
     return None
 
 
-def mutate_pause_reply(
-    messages: list[dict[str, Any]], tool_use_id: str, reply: str
-) -> None:
+def mutate_pause_reply(messages: list[dict[str, Any]], tool_use_id: str, reply: str) -> None:
     """Replace the placeholder ``tool_result`` content with the user's reply.
 
     Mutates ``messages`` in place. Raises ``ValueError`` if no matching
@@ -329,9 +327,7 @@ def mutate_pause_reply(
     """
     located = find_pause_tool_result(messages, tool_use_id)
     if located is None:
-        raise ValueError(
-            f"could not locate pause tool_result with tool_use_id={tool_use_id!r}"
-        )
+        raise ValueError(f"could not locate pause tool_result with tool_use_id={tool_use_id!r}")
     msg_idx, block_idx = located
     block = messages[msg_idx]["content"][block_idx]
     block["content"] = f"User reply:\n{reply}".rstrip() + "\n"
@@ -427,9 +423,7 @@ def deserialize_checkpoint(raw: dict[str, Any]) -> Checkpoint:
     pause_required = ("question", "tool_use_id", "asked_at")
     pause_missing = [k for k in pause_required if k not in pause_raw]
     if pause_missing:
-        raise ValueError(
-            f"checkpoint.pause is missing required fields: {', '.join(pause_missing)}"
-        )
+        raise ValueError(f"checkpoint.pause is missing required fields: {', '.join(pause_missing)}")
 
     return Checkpoint(
         version=version,
