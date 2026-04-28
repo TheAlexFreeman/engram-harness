@@ -4,6 +4,7 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from harness.config import RunPolicy
 from harness.loop import (
     RunResult,
     maybe_run_reflection,
@@ -16,6 +17,7 @@ from harness.usage import Usage
 
 if TYPE_CHECKING:
     import argparse
+    from collections.abc import Callable
 
     from harness.config import SessionComponents
 
@@ -61,6 +63,7 @@ def _run_subtask(
     across the whole REPL, not per line.
     """
     config = components.config
+    policy = RunPolicy.from_config(config, pause_handle=components.pause_handle)
     cap_cost = getattr(config, "max_cost_usd", None)
     cap_tools = getattr(config, "max_tool_calls", None)
     rem_cost = session_remaining_cost_usd(cap_cost, session_cost_usd)
@@ -82,24 +85,11 @@ def _run_subtask(
             components.tools,
             components.memory,
             tracer,
-            max_turns=config.max_turns,
-            max_parallel_tools=config.max_parallel_tools,
             stream_sink=components.stream_sink,
-            repeat_guard_threshold=config.repeat_guard_threshold,
-            repeat_guard_terminate_at=config.repeat_guard_terminate_at,
-            repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
-            tool_pattern_guard_threshold=config.tool_pattern_guard_threshold,
-            tool_pattern_guard_terminate_at=config.tool_pattern_guard_terminate_at,
-            tool_pattern_guard_window=config.tool_pattern_guard_window,
-            error_recall_threshold=config.error_recall_threshold,
-            max_cost_usd=rem_cost,
-            max_tool_calls=rem_tools,
-            compaction_input_token_threshold=getattr(
-                config, "compaction_input_token_threshold", None
-            ),
-            full_compaction_input_token_threshold=getattr(
-                config, "full_compaction_input_token_threshold", None
-            ),
+            **policy.for_remaining_budget(
+                max_cost_usd=rem_cost,
+                max_tool_calls=rem_tools,
+            ).idle_kwargs(),
         )
     tracer.event(
         "sub_session_end",
@@ -110,7 +100,12 @@ def _run_subtask(
     return r
 
 
-def run_interactive(args: "argparse.Namespace", components: "SessionComponents") -> Usage:
+def run_interactive(
+    args: "argparse.Namespace",
+    components: "SessionComponents",
+    *,
+    on_pause: "Callable[[RunResult, str], None] | None" = None,
+) -> Usage:
     """Run the interactive REPL. Returns total usage."""
     bridge = _bridge_enabled(components)
 
@@ -155,6 +150,10 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
                 print("=" * 60)
                 if r0.stopped_by_budget:
                     session_started = False
+                if r0.paused:
+                    if on_pause is not None:
+                        on_pause(r0, opener)
+                    return total_usage
             else:
                 first: str | None = None
                 while first is None:
@@ -200,6 +199,10 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
                     print("=" * 60)
                     if r0.stopped_by_budget:
                         session_started = False
+                    if r0.paused:
+                        if on_pause is not None:
+                            on_pause(r0, first)
+                        return total_usage
 
             while session_started:
                 print("harness> ", end="", file=sys.stderr, flush=True)
@@ -234,6 +237,10 @@ def run_interactive(args: "argparse.Namespace", components: "SessionComponents")
                 print("=" * 60)
                 if r.stopped_by_budget:
                     break
+                if r.paused:
+                    if on_pause is not None:
+                        on_pause(r, line)
+                    return total_usage
 
         except KeyboardInterrupt:
             print("\n[interrupt]", file=sys.stderr)
@@ -272,6 +279,7 @@ def run_batch(args: "argparse.Namespace", components: "SessionComponents"):
     """Run a single batch session. Returns RunResult."""
     config = components.config
     bridge = _bridge_enabled(components)
+    policy = RunPolicy.from_config(config, pause_handle=components.pause_handle)
     with components.tracer as tracer:
         return run(
             str(args.task),
@@ -279,26 +287,9 @@ def run_batch(args: "argparse.Namespace", components: "SessionComponents"):
             components.tools,
             components.memory,
             tracer,
-            max_turns=config.max_turns,
-            max_parallel_tools=config.max_parallel_tools,
             stream_sink=components.stream_sink,
-            repeat_guard_threshold=config.repeat_guard_threshold,
-            repeat_guard_terminate_at=config.repeat_guard_terminate_at,
-            repeat_guard_exempt_tools=config.repeat_guard_exempt_tools,
-            tool_pattern_guard_threshold=config.tool_pattern_guard_threshold,
-            tool_pattern_guard_terminate_at=config.tool_pattern_guard_terminate_at,
-            tool_pattern_guard_window=config.tool_pattern_guard_window,
-            error_recall_threshold=config.error_recall_threshold,
             skip_end_session_commit=bridge,
-            reflect=getattr(config, "reflect", True),
-            max_cost_usd=getattr(config, "max_cost_usd", None),
-            max_tool_calls=getattr(config, "max_tool_calls", None),
-            compaction_input_token_threshold=getattr(
-                config, "compaction_input_token_threshold", None
-            ),
-            full_compaction_input_token_threshold=getattr(
-                config, "full_compaction_input_token_threshold", None
-            ),
+            **policy.run_kwargs(),
         )
 
 

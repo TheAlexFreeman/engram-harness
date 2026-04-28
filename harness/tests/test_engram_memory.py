@@ -129,6 +129,27 @@ def test_engram_memory_recall_keyword(engram_repo: Path) -> None:
     assert mem.recall_events  # logged for trace bridge
 
 
+def test_session_snapshot_exposes_trace_bridge_state(engram_repo: Path) -> None:
+    mem = EngramMemory(engram_repo, embed=False)
+    mem.start_session("celery tuning")
+    mem.recall("celery worker pool", k=1)
+    mem.remember("important note")
+    mem.trace_event("key_finding", detail="celery")
+    mem.end_session("summary", defer_artifacts=True)
+
+    snapshot = mem.session_snapshot()
+
+    assert snapshot.content_root == engram_repo / "core"
+    assert snapshot.content_prefix == "core"
+    assert snapshot.session_id == mem.session_id
+    assert snapshot.session_dir_rel == mem.session_dir_rel
+    assert snapshot.task == "celery tuning"
+    assert snapshot.session_summary == "summary"
+    assert len(snapshot.recall_events) == 1
+    assert len(snapshot.buffered_records) == 1
+    assert len(snapshot.trace_events) == 1
+
+
 def test_engram_memory_record_and_end_session(engram_repo: Path) -> None:
     mem = EngramMemory(engram_repo, embed=False)
     mem.start_session("test session")

@@ -30,10 +30,12 @@ from harness.checkpoint import (
     restore_memory_state,
 )
 from harness.config import (
+    RunPolicy,
     SessionComponents,
     SessionConfig,
-    ToolProfile,
     build_session,
+    serialize_session_config,
+    session_config_from_snapshot,
 )
 from harness.loop import run
 from harness.session_index import record_completed_session
@@ -98,18 +100,19 @@ def _validate_resume_paths(checkpoint: Checkpoint) -> str | None:
 def _config_from_checkpoint(checkpoint: Checkpoint) -> SessionConfig:
     """Rebuild a ``SessionConfig`` that mirrors the original session.
 
-    Only fields that affect the model + tool wiring are preserved. Loop
-    bounds, budgets, and trace flags fall back to defaults — the caller is
-    expected to know what they're resuming and accept current settings.
+    New checkpoints carry a full config snapshot in ``extra``. Older
+    checkpoints are still accepted and fall back to defaults plus the
+    checkpoint's required identity/path fields.
     """
-    return SessionConfig(
-        task=checkpoint.task,
+    snapshot = checkpoint.extra.get("session_config")
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    return session_config_from_snapshot(
+        snapshot,
         workspace=Path(checkpoint.workspace),
         model=checkpoint.model,
         mode=checkpoint.mode,
-        memory_backend="engram",
         memory_repo=Path(checkpoint.memory_repo),
-        tool_profile=ToolProfile.FULL,
     )
 
 
@@ -155,6 +158,7 @@ def _re_pause(
         memory_state=serialize_memory_state(components.engram_memory),
         pause=pause.pause_info,
         checkpoint_at=datetime.now().isoformat(timespec="seconds"),
+        extra={**checkpoint.extra, "session_config": serialize_session_config(components.config)},
     )
     write_checkpoint(cp_path, payload)
 
@@ -314,6 +318,7 @@ def _resume_one(
     turns_used: int | None = None
     max_turns_reached = False
     status = "completed"
+    policy = RunPolicy.from_config(config, pause_handle=components.pause_handle)
     try:
         with components.tracer as tracer:
             result = run(
@@ -322,18 +327,10 @@ def _resume_one(
                 components.tools,
                 components.memory,
                 tracer,
-                max_turns=config.max_turns,
-                max_parallel_tools=config.max_parallel_tools,
                 stream_sink=components.stream_sink,
                 skip_end_session_commit=True,
-                compaction_input_token_threshold=getattr(
-                    config, "compaction_input_token_threshold", None
-                ),
-                full_compaction_input_token_threshold=getattr(
-                    config, "full_compaction_input_token_threshold", None
-                ),
-                pause_handle=components.pause_handle,
                 resume_state=resume_state,
+                **policy.run_kwargs(),
             )
     except BaseException:
         status = "error"

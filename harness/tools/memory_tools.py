@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from harness.engram_schema import LIFECYCLE_NAMESPACES
 from harness.tools import CAP_MEMORY_READ, CAP_MEMORY_WRITE
 
 if TYPE_CHECKING:
@@ -757,7 +758,7 @@ class MemoryTrace:
 # ---------------------------------------------------------------------------
 
 
-_LIFECYCLE_DEFAULT_NAMESPACES = ("memory/knowledge", "memory/skills", "memory/users")
+_LIFECYCLE_DEFAULT_NAMESPACES = LIFECYCLE_NAMESPACES
 _LIFECYCLE_DEFAULT_LIMIT = 10
 _LIFECYCLE_MAX_LIMIT = 50
 _LIFECYCLE_KINDS = ("promote", "demote", "both")

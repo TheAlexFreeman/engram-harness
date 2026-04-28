@@ -1677,7 +1677,7 @@ def _read_goal(path: Path) -> tuple[str, str, str]:
     Missing timestamps render as empty strings; a missing file returns
     three empty strings. The frontmatter parser is intentionally minimal
     (YAML front-matter delimited by ``---`` lines); callers who want full
-    frontmatter can use ``engram_mcp.agent_memory_mcp.core.frontmatter_utils``.
+    frontmatter can use ``harness._engram_fs.frontmatter_utils``.
     """
     if not path.is_file():
         return "", "", ""

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -112,6 +112,61 @@ class SessionConfig:
     grok_encrypted_reasoning: bool = False
 
 
+def serialize_session_config(config: SessionConfig) -> dict[str, Any]:
+    """Return a JSON-portable snapshot of a session config for checkpoints."""
+    payload: dict[str, Any] = {}
+    for f in fields(SessionConfig):
+        value = getattr(config, f.name)
+        if isinstance(value, Path):
+            payload[f.name] = str(value)
+        elif isinstance(value, Enum):
+            payload[f.name] = value.value
+        elif isinstance(value, list):
+            payload[f.name] = list(value)
+        else:
+            payload[f.name] = value
+    return payload
+
+
+def session_config_from_snapshot(
+    raw: dict[str, Any] | None,
+    *,
+    workspace: Path,
+    model: str,
+    mode: str,
+    memory_repo: Path,
+) -> SessionConfig:
+    """Rebuild a config from checkpoint data, tolerating older sparse checkpoints."""
+    data = dict(raw or {})
+    data.update(
+        {
+            "workspace": Path(workspace),
+            "model": model,
+            "mode": mode,
+            "memory_backend": "engram",
+            "memory_repo": Path(memory_repo),
+        }
+    )
+
+    kwargs: dict[str, Any] = {}
+    field_names = {f.name for f in fields(SessionConfig)}
+    for name, value in data.items():
+        if name not in field_names:
+            continue
+        if name in {"workspace", "memory_repo"} and value is not None:
+            kwargs[name] = Path(value)
+        elif name == "tool_profile":
+            try:
+                kwargs[name] = ToolProfile(value)
+            except ValueError:
+                kwargs[name] = ToolProfile.FULL
+        elif name in {"repeat_guard_exempt_tools", "approval_gated_tools", "grok_include"}:
+            kwargs[name] = list(value or [])
+        else:
+            kwargs[name] = value
+    return SessionConfig(**kwargs)
+
+
 @dataclass
 class SessionComponents:
     """Constructed session objects, ready for run()."""
@@ -129,6 +184,116 @@ class SessionComponents:
     # is registered only when the active profile includes CAP_PAUSE), but
     # benign no-op when the agent never calls pause_for_user.
     pause_handle: Any = None  # harness.tools.pause.PauseHandle
+
+
+_RUN_POLICY_CONFIG_FIELDS = (
+    "max_turns",
+    "max_parallel_tools",
+    "max_cost_usd",
+    "max_tool_calls",
+    "repeat_guard_threshold",
+    "repeat_guard_terminate_at",
+    "repeat_guard_exempt_tools",
+    "tool_pattern_guard_threshold",
+    "tool_pattern_guard_terminate_at",
+    "tool_pattern_guard_window",
+    "error_recall_threshold",
+    "compaction_input_token_threshold",
+    "full_compaction_input_token_threshold",
+    "reflect",
+)
+
+_RUN_POLICY_IDLE_KWARG_FIELDS = (
+    "max_turns",
+    "max_parallel_tools",
+    "repeat_guard_threshold",
+    "repeat_guard_terminate_at",
+    "repeat_guard_exempt_tools",
+    "tool_pattern_guard_threshold",
+    "tool_pattern_guard_terminate_at",
+    "tool_pattern_guard_window",
+    "error_recall_threshold",
+    "max_cost_usd",
+    "max_tool_calls",
+    "compaction_input_token_threshold",
+    "full_compaction_input_token_threshold",
+    "pause_handle",
+)
+
+
+@dataclass
+class RunPolicy:
+    """Loop-runtime knobs derived from ``SessionConfig``.
+
+    The loop APIs stay backwards-compatible for now; this policy object keeps
+    callers from hand-copying the same long argument list and drifting.
+    """
+
+    max_turns: int = 100
+    max_parallel_tools: int = 4
+    max_cost_usd: float | None = None
+    max_tool_calls: int | None = None
+    repeat_guard_threshold: int = 3
+    repeat_guard_terminate_at: int | None = None
+    repeat_guard_exempt_tools: list[str] = field(default_factory=list)
+    tool_pattern_guard_threshold: int = 5
+    tool_pattern_guard_terminate_at: int | None = None
+    tool_pattern_guard_window: int = 12
+    error_recall_threshold: int = 0
+    compaction_input_token_threshold: int | None = None
+    full_compaction_input_token_threshold: int | None = None
+    reflect: bool = True
+    pause_handle: Any = None
+
+    @classmethod
+    def from_config(
+        cls,
+        config: SessionConfig,
+        *,
+        pause_handle: Any = None,
+        max_turns: int | None = None,
+        max_parallel_tools: int | None = None,
+        max_cost_usd: float | None = None,
+        max_tool_calls: int | None = None,
+    ) -> "RunPolicy":
+        defaults = cls()
+        overrides = {
+            "max_turns": max_turns,
+            "max_parallel_tools": max_parallel_tools,
+            "max_cost_usd": max_cost_usd,
+            "max_tool_calls": max_tool_calls,
+        }
+        values: dict[str, Any] = {}
+        for name in _RUN_POLICY_CONFIG_FIELDS:
+            value = overrides.get(name)
+            if value is None:
+                value = getattr(config, name, getattr(defaults, name))
+            if isinstance(value, list):
+                value = list(value)
+            values[name] = value
+        return cls(
+            **values,
+            pause_handle=pause_handle,
+        )
+
+    def for_remaining_budget(
+        self,
+        *,
+        max_cost_usd: float | None,
+        max_tool_calls: int | None,
+    ) -> "RunPolicy":
+        return replace(
+            self,
+            max_cost_usd=max_cost_usd,
+            max_tool_calls=max_tool_calls,
+            repeat_guard_exempt_tools=list(self.repeat_guard_exempt_tools),
+        )
+
+    def idle_kwargs(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in _RUN_POLICY_IDLE_KWARG_FIELDS}
+
+    def run_kwargs(self) -> dict[str, Any]:
+        return {**self.idle_kwargs(), "reflect": self.reflect}
 
 
 def _harness_project_root() -> Path:
@@ -708,18 +873,23 @@ def _wire_subagent_spawn(
 
         sub_mode = mode.for_tools(sub_tools) if hasattr(mode, "for_tools") else mode
         sub_messages = sub_mode.initial_messages(task=task, prior="", tools=sub_tools)
+        # Subagents intentionally use isolated memory/tracing and single-tool
+        # dispatch, but budget fields still flow through the shared policy type.
+        sub_policy = RunPolicy(
+            max_turns=max_turns,
+            max_parallel_tools=1,
+            max_cost_usd=max_cost_usd,
+            max_tool_calls=max_tool_calls,
+        )
         result = run_until_idle(
             sub_messages,
             sub_mode,
             sub_tools,
             NullMemory(),
             NullTraceSink(),
-            max_turns=max_turns,
             pricing=pricing_loader(),
-            max_parallel_tools=1,
             stream_sink=stream_sink,
-            max_cost_usd=max_cost_usd,
-            max_tool_calls=max_tool_calls,
+            **sub_policy.idle_kwargs(),
         )
         # Best-effort visibility on the parent's trace.
         try:

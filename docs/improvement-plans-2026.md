@@ -731,34 +731,16 @@ of scored trajectory data.
 | Phase 0 (no-regrets) | C1, B5 | shipped |
 | Phase 1 (~2 months) | B1, A1, C2 | shipped |
 | Phase 2 (~3 months) | A6, A3, C3, B4 | shipped |
-| Phase 3 (later) | A4, A5, A2, B2, B3, C4, D1, D2, E1 | A4, A5, C4 shipped; A2, B2, B3, D1, D2, E1 open |
+| Phase 3 (later) | A4, A5, A2, B2, B3, C4, D1, D2, E1 | A2, B2, B3, A4, A5, C4, D1, D2 shipped; E1 open |
 
-**Recommended next sequence for the remaining six items:**
+**Original recommended sequence, with shipped items marked:**
 
-1. **B2 (tiered context compaction)** — second-highest ROI for long
-   sessions, complements B1 (subagents). Without it, long sessions
-   still blow context. Three layers; ship layer 1 (per-tool output
-   budget) first.
-2. **A5 follow-on: helpfulness-weighted re-ranking** — folds A6's
-   candidate logs back into A1's hybrid retrieval. Closes the feedback
-   loop between "we observe what got used" (A6) and "we rank by what
-   gets used" (the missing piece). Smaller than a new theme; could
-   ship as a 1-PR enhancement to engram_memory.recall.
-3. **D1 (two-layer prompt-injection defense)** — relevant whenever
-   `web_fetch` / external `read_file` outputs land in context. Layer 1
-   (untrusted-output markers) is already partially implemented; layer 2
-   (classifier) is the new piece.
-4. **A2 (bi-temporal facts + invalidation)** — biggest conceptual
-   upgrade per the original assessment, but invasive. Defer until C2
-   has produced enough scored sessions to measure whether
-   `valid_from`/`valid_to` actually improves recall (vs. just adding
-   metadata churn).
-5. **D2 (async human-in-the-loop)** — pairs with B4 (already shipped).
-   With pause/resume in place, the jump to async approval channels
-   (Slack / webhook) is small.
-6. **B3 (code-as-action)** — promote when a session's actual workload
-   shows lots of inline data-shaping (CSV parsing, JSON transforms).
-   Until then, the bash + python tools cover it.
+1. **B2 (tiered context compaction)** — shipped.
+2. **A5 follow-on: helpfulness-weighted re-ranking** — shipped.
+3. **D1 (two-layer prompt-injection defense)** — shipped.
+4. **A2 (bi-temporal facts + invalidation)** — shipped.
+5. **D2 (human-in-the-loop approval)** — shipped.
+6. **B3 (code-as-action)** — shipped.
 7. **E1 (DSPy/GEPA optimization)** — defer until ≥20 scored sessions
    exist via C2. Heaviest dependency among the remaining items.
 
