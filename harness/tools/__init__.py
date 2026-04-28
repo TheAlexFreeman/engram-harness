@@ -104,9 +104,7 @@ def _pick_marker(tool_name: str, overflow: int, n: int, budget: int) -> str:
     compact = _truncation_marker_compact(tool_name, overflow, n)
     if len(compact) + min_split_room <= budget:
         return compact
-    minimal = (
-        f"\n[harness] truncated — {overflow} of {n} chars ({tool_name!r}).\n"
-    )
+    minimal = f"\n[harness] truncated — {overflow} of {n} chars ({tool_name!r}).\n"
     if len(minimal) + min_split_room <= budget:
         return minimal
     # Degenerate: marker dominates the budget — return as much marker as fits.
