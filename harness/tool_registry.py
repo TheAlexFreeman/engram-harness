@@ -21,6 +21,7 @@ from harness.tools.fs import (
 from harness.tools.git import Git, GitCommit, GitDiff, GitLog, GitStatus
 from harness.tools.help import ToolHelp
 from harness.tools.python_eval import PythonEval
+from harness.tools.python_exec import PythonExec
 from harness.tools.run_script import RunScript
 from harness.tools.search import WebSearch
 from harness.tools.subagent import SpawnSubagent
@@ -65,6 +66,11 @@ def build_tools(
     ]
     shell: list[Tool] = [Bash(scope), PythonEval(scope), RunScript(scope)]
 
+    # B3: code-as-action tool with an AST allowlist + runtime import
+    # guard. Runs in a subprocess but rejects shell-out / network /
+    # ctypes imports, so it's safe to expose in the NO_SHELL profile.
+    code_as_action: list[Tool] = [PythonExec(scope)]
+
     # Sub-agent spawning is available wherever cost-bearing tools are: in
     # NO_SHELL and FULL profiles, but not READ_ONLY (which is meant to be
     # the minimal-cost / no-side-effects mode). The spawn callback is wired
@@ -74,9 +80,9 @@ def build_tools(
     if profile == ToolProfile.READ_ONLY:
         base = read_only
     elif profile == ToolProfile.NO_SHELL:
-        base = read_only + write_only + subagent
+        base = read_only + write_only + code_as_action + subagent
     else:
-        base = read_only + write_only + shell + subagent
+        base = read_only + write_only + shell + code_as_action + subagent
 
     if extra:
         base.extend(extra)

@@ -110,11 +110,14 @@ def _rewrite_for_last_expr(code: str) -> tuple[str, bool]:
     ast.copy_location(assign, last_expr)
     ast.fix_missing_locations(assign)
 
+    # Use the print() builtin so this works under python_exec's
+    # restricted profile too — importing ``sys`` is on its deny-list.
+    # The end='' / flush semantics give us the same byte sequence as
+    # the prior sys.stdout.write path.
     capture_src = (
-        "import sys as _harness_sys_\n"
-        f"_harness_sys_.stdout.write('\\n{_RESULT_START}\\n')\n"
-        "_harness_sys_.stdout.write(repr(_harness_result_))\n"
-        f"_harness_sys_.stdout.write('\\n{_RESULT_END}\\n')\n"
+        f"print(end='\\n{_RESULT_START}\\n', flush=True)\n"
+        "print(repr(_harness_result_), end='', flush=True)\n"
+        f"print(end='\\n{_RESULT_END}\\n', flush=True)\n"
     )
     capture_module = ast.parse(capture_src)
 
