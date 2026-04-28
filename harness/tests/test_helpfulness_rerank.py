@@ -19,7 +19,6 @@ from pathlib import Path
 import pytest
 
 from harness._engram_fs.helpfulness_index import (
-    MULTIPLIER_FLOOR,
     NEUTRAL_HELPFULNESS,
     HelpfulnessIndex,
     build_helpfulness_index,
@@ -27,7 +26,6 @@ from harness._engram_fs.helpfulness_index import (
 )
 from harness.engram_memory import EngramMemory
 from harness.tests.test_engram_memory import _make_engram_repo
-
 
 # ---------------------------------------------------------------------------
 # HelpfulnessIndex math
