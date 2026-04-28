@@ -880,6 +880,8 @@ def _access_observations(
 ) -> list[_AccessObservation]:
     observations: list[_AccessObservation] = []
     for idx, tc in enumerate(tool_calls):
+        if tc.is_error:
+            continue
         arg_path = _read_target_path(tc)
         if not arg_path:
             continue

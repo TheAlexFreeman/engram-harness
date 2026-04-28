@@ -264,6 +264,37 @@ def test_memory_review_writes_access_entry(
     assert rows[-1]["note"] == "Read but no downstream use detected."
 
 
+def test_failed_memory_review_skips_access_entry(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    events: list[dict] = [
+        {"ts": ts, "kind": "session_start", "task": "review missing memory"},
+        {"ts": ts, "kind": "model_response", "turn": 0},
+        {
+            "ts": ts,
+            "kind": "tool_call",
+            "name": "memory_review",
+            "args": {"path": "knowledge/missing.md"},
+        },
+        {
+            "ts": ts,
+            "kind": "tool_result",
+            "name": "memory_review",
+            "is_error": True,
+            "content_preview": "not found",
+        },
+    ]
+    _write_trace(trace, events)
+
+    result = run_trace_bridge(trace, memory)
+
+    assert result.access_entries == 0
+    access_path = repo / "core" / "memory" / "knowledge" / "ACCESS.jsonl"
+    assert not access_path.exists()
+
+
 def test_summary_renders_deferred_agent_summary(
     repo: Path, memory: EngramMemory, tmp_path: Path
 ) -> None:
