@@ -265,6 +265,18 @@ def _parse_args() -> argparse.Namespace:
         help="Optional session budget for total local tool calls.",
     )
     parser.add_argument(
+        "--compaction-input-token-threshold",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "B2 Layer 2: when a model call's input_tokens exceeds N, summarize "
+            "older tool_result blocks via a no-tool model call to free context. "
+            "0 / unset disables. Falls back to the "
+            "HARNESS_COMPACTION_INPUT_TOKEN_THRESHOLD env var when omitted."
+        ),
+    )
+    parser.add_argument(
         "--trace-live",
         dest="trace_live",
         action="store_true",

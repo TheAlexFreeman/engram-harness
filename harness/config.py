@@ -59,6 +59,12 @@ class SessionConfig:
     tool_pattern_guard_terminate_at: int | None = None
     tool_pattern_guard_window: int = 12
     error_recall_threshold: int = 0  # 0 = disabled; set to e.g. 3 to enable
+    # B2 Layer 2: at this many input tokens, summarize older tool_result
+    # blocks via a no-tool model call. None / 0 disables; recommended
+    # values depend on context window (e.g. ~140k for 200k Sonnet, ~700k
+    # for 1M Opus). Defaults to None so the loop falls through to the
+    # ``HARNESS_COMPACTION_INPUT_TOKEN_THRESHOLD`` env var.
+    compaction_input_token_threshold: int | None = None
 
     # Streaming / tracing
     stream: bool = True
@@ -210,6 +216,7 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         tool_pattern_guard_terminate_at=getattr(args, "tool_pattern_guard_terminate_at", None),
         tool_pattern_guard_window=getattr(args, "tool_pattern_guard_window", 12),
         error_recall_threshold=getattr(args, "error_recall_threshold", 0),
+        compaction_input_token_threshold=getattr(args, "compaction_input_token_threshold", None),
         stream=args.stream,
         stream_max_block_chars=getattr(args, "stream_max_block_chars", 4000),
         trace_live=args.trace_live,

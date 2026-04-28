@@ -23,6 +23,7 @@ class CreateSessionRequest(BaseModel):
     tool_pattern_guard_terminate_at: int | None = Field(default=None, ge=1, le=100)
     tool_pattern_guard_window: int = Field(default=12, ge=1, le=100)
     error_recall_threshold: int = Field(default=0, ge=0, le=100)
+    compaction_input_token_threshold: int | None = Field(default=None, ge=0)
     stream: bool = True
     trace_live: bool = False  # off by default in API mode (no stderr)
     trace_to_engram: bool | None = None

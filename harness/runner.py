@@ -94,6 +94,9 @@ def _run_subtask(
             error_recall_threshold=config.error_recall_threshold,
             max_cost_usd=rem_cost,
             max_tool_calls=rem_tools,
+            compaction_input_token_threshold=getattr(
+                config, "compaction_input_token_threshold", None
+            ),
         )
     tracer.event(
         "sub_session_end",
@@ -287,6 +290,9 @@ def run_batch(args: "argparse.Namespace", components: "SessionComponents"):
             reflect=getattr(config, "reflect", True),
             max_cost_usd=getattr(config, "max_cost_usd", None),
             max_tool_calls=getattr(config, "max_tool_calls", None),
+            compaction_input_token_threshold=getattr(
+                config, "compaction_input_token_threshold", None
+            ),
         )
 
 

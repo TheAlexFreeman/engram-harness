@@ -1,0 +1,569 @@
+"""Tests for B2 Layer 2 in-loop compaction.
+
+Covers:
+- ``maybe_compact`` skips silently when the threshold is disabled or the
+  current input token count is under the threshold.
+- It skips when fewer than ``keep_recent_pairs + 1`` tool pairs exist.
+- It skips when all eligible pairs have already been compacted (idempotent).
+- When triggered, it rewrites the older tool_result blocks to the
+  compacted-placeholder marker and inserts a single user-role summary
+  message right after the last compacted pair.
+- The most-recent ``keep_recent_pairs`` pairs are never modified.
+- Cost from the summarization model call is tracked in ``CompactionResult.usage``.
+- Mode without ``reflect`` is a silent no-op.
+- ``reflect`` failure becomes a tracer event but does not raise.
+- The loop wires it through and folds the cost into the session total.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from harness.compaction import (
+    COMPACTED_PLACEHOLDER,
+    _find_tool_pairs,
+    _is_already_compacted,
+    maybe_compact,
+)
+from harness.tests.test_parallel_tools import (
+    RecordingMemory,
+    ScriptedMode,
+    _ScriptedResponse,
+)
+from harness.tools import ToolCall
+from harness.usage import Usage
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+class _RecordingTracer:
+    """Tracer stub that records all events for assertions."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def event(self, kind: str, **data: Any) -> None:
+        self.events.append((kind, dict(data)))
+
+    def close(self) -> None:
+        pass
+
+
+class _SummarizingMode:
+    """Minimal Mode stub whose reflect() returns canned summary text."""
+
+    def __init__(
+        self,
+        summary_text: str = "- Older work: read three files, fixed two bugs.",
+        usage: Usage | None = None,
+    ) -> None:
+        self.summary_text = summary_text
+        self.usage = usage or Usage(model="test", input_tokens=400, output_tokens=120)
+        self.reflect_calls: list[tuple[list[dict], str]] = []
+
+    def reflect(self, messages: list[dict], prompt: str) -> tuple[str, Usage]:
+        self.reflect_calls.append((list(messages), prompt))
+        return self.summary_text, self.usage
+
+
+class _NoReflectMode:
+    """Mode without reflect() — exercises the silent-skip path."""
+
+    def complete(self, messages, *, stream=None):  # pragma: no cover - unused
+        return None
+
+
+class _ExplodingReflectMode:
+    """Mode whose reflect() raises — exercises the swallow path."""
+
+    def reflect(self, messages: list[dict], prompt: str) -> tuple[str, Usage]:
+        raise RuntimeError("model unavailable")
+
+
+def _tool_use_block(call_id: str, name: str = "read_file", inp: dict | None = None) -> dict:
+    return {
+        "type": "tool_use",
+        "id": call_id,
+        "name": name,
+        "input": inp or {"path": "src/foo.py"},
+    }
+
+
+def _tool_result_block(call_id: str, content: str, is_error: bool = False) -> dict:
+    return {
+        "type": "tool_result",
+        "tool_use_id": call_id,
+        "content": content,
+        "is_error": is_error,
+    }
+
+
+def _build_pair(call_id: str, content: str = "the file contents", text: str = "") -> list[dict]:
+    """Build a (assistant tool_use, user tool_result) message pair."""
+    blocks: list[dict] = []
+    if text:
+        blocks.append({"type": "text", "text": text})
+    blocks.append(_tool_use_block(call_id))
+    return [
+        {"role": "assistant", "content": blocks},
+        {"role": "user", "content": [_tool_result_block(call_id, content)]},
+    ]
+
+
+def _build_messages(num_pairs: int, content_size: int = 100) -> list[dict]:
+    """Build a synthetic conversation: initial task + N tool_use/tool_result pairs."""
+    messages: list[dict] = [{"role": "user", "content": "do the task"}]
+    for i in range(num_pairs):
+        messages.extend(_build_pair(f"call_{i}", "x" * content_size, text=f"step {i}"))
+    return messages
+
+
+# ---------------------------------------------------------------------------
+# Trigger / skip semantics
+# ---------------------------------------------------------------------------
+
+
+def test_disabled_when_threshold_zero():
+    msgs = _build_messages(num_pairs=10)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    result = maybe_compact(msgs, mode, tracer, input_tokens=999_999, threshold_tokens=0)
+    assert result.triggered is False
+    assert result.skipped_reason == "disabled"
+    assert mode.reflect_calls == []
+
+
+def test_skip_when_input_below_threshold():
+    msgs = _build_messages(num_pairs=10)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    result = maybe_compact(msgs, mode, tracer, input_tokens=1000, threshold_tokens=10_000)
+    assert result.triggered is False
+    assert result.skipped_reason == "below_threshold"
+    assert mode.reflect_calls == []
+
+
+def test_skip_when_not_enough_pairs():
+    # 4 pairs and keep_recent_pairs=4 → no eligible pairs to compact.
+    msgs = _build_messages(num_pairs=4)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    result = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=999_999,
+        threshold_tokens=100,
+        keep_recent_pairs=4,
+    )
+    assert result.triggered is False
+    assert result.skipped_reason == "not_enough_pairs"
+    assert mode.reflect_calls == []
+
+
+def test_skip_when_mode_lacks_reflect():
+    msgs = _build_messages(num_pairs=10)
+    mode = _NoReflectMode()
+    tracer = _RecordingTracer()
+    result = maybe_compact(msgs, mode, tracer, input_tokens=999_999, threshold_tokens=100)
+    assert result.triggered is False
+    assert result.skipped_reason == "mode_no_reflect"
+
+
+def test_reflect_failure_becomes_skip_not_exception():
+    msgs = _build_messages(num_pairs=10)
+    mode = _ExplodingReflectMode()
+    tracer = _RecordingTracer()
+    result = maybe_compact(msgs, mode, tracer, input_tokens=999_999, threshold_tokens=100)
+    assert result.triggered is False
+    assert result.skipped_reason == "reflect_failed"
+    assert "RuntimeError" in (result.error or "")
+    kinds = [k for k, _ in tracer.events]
+    assert "compaction_error" in kinds
+
+
+def test_empty_summary_is_skip():
+    msgs = _build_messages(num_pairs=10)
+    mode = _SummarizingMode(summary_text="   ")
+    tracer = _RecordingTracer()
+    result = maybe_compact(msgs, mode, tracer, input_tokens=999_999, threshold_tokens=100)
+    assert result.triggered is False
+    assert result.skipped_reason == "empty_summary"
+
+
+# ---------------------------------------------------------------------------
+# Successful compaction
+# ---------------------------------------------------------------------------
+
+
+def test_compaction_replaces_old_results_and_inserts_summary():
+    # 8 pairs total; keep last 4 untouched → compact pairs 0..3 (4 pairs).
+    msgs = _build_messages(num_pairs=8, content_size=500)
+    pre_pairs = _find_tool_pairs(msgs)
+    assert len(pre_pairs) == 8
+    pre_count_messages = len(msgs)
+
+    mode = _SummarizingMode(summary_text="- step1: did A\n- step2: did B\n")
+    tracer = _RecordingTracer()
+    result = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=4,
+    )
+
+    assert result.triggered is True
+    assert result.pairs_compacted == 4
+    assert result.summary_chars > 0
+    assert result.usage.input_tokens > 0  # Costs accounted for
+
+    # Exactly one summary message inserted → length grew by 1.
+    assert len(msgs) == pre_count_messages + 1
+
+    # The first 4 user-tool_result messages have been replaced with the placeholder.
+    pairs_after = _find_tool_pairs(msgs)
+    # Pairs slid +1 in the index space because of the insertion, but count is preserved.
+    assert len(pairs_after) == 8
+    for a, u in pairs_after[:4]:
+        assert _is_already_compacted(msgs[u])
+    # Recent 4 pairs are untouched.
+    for a, u in pairs_after[-4:]:
+        assert not _is_already_compacted(msgs[u])
+
+    # The inserted summary message is right after the last compacted pair's
+    # user message, before the first preserved assistant message.
+    last_compacted_user_idx = pairs_after[3][1]
+    summary_idx = last_compacted_user_idx + 1
+    summary_msg = msgs[summary_idx]
+    assert summary_msg["role"] == "user"
+    assert "[harness compaction summary]" in summary_msg["content"]
+    assert "step1" in summary_msg["content"]
+
+
+def test_compaction_traces_lifecycle_events():
+    msgs = _build_messages(num_pairs=8, content_size=300)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=4,
+    )
+    kinds = [k for k, _ in tracer.events]
+    assert "compaction_start" in kinds
+    assert "compaction_complete" in kinds
+
+
+def test_compaction_is_idempotent_on_already_compacted_region():
+    msgs = _build_messages(num_pairs=8, content_size=200)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+
+    # First pass: compacts pairs 0..3.
+    r1 = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=4,
+    )
+    assert r1.triggered is True
+
+    # Second pass with no new content above keep_recent_pairs → nothing left.
+    r2 = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=4,
+    )
+    assert r2.triggered is False
+    assert r2.skipped_reason == "all_already_compacted"
+    # Mode's reflect was only called once.
+    assert len(mode.reflect_calls) == 1
+
+
+def test_compaction_keep_zero_recent_compacts_everything():
+    # When keep_recent_pairs=0 we compact every pair (rare default but valid).
+    msgs = _build_messages(num_pairs=5, content_size=200)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    result = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=0,
+    )
+    assert result.triggered is True
+    assert result.pairs_compacted == 5
+
+
+def test_compaction_extends_to_new_pairs_after_idempotence():
+    """After a first compaction, new pairs accumulate; a later compaction
+    picks them up but leaves the previously-compacted pairs alone."""
+    msgs = _build_messages(num_pairs=8, content_size=200)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+
+    r1 = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=4,
+    )
+    assert r1.triggered is True
+
+    # Add 4 new pairs (extending the conversation)
+    for i in range(4):
+        msgs.extend(_build_pair(f"new_call_{i}", "fresh content here", text=""))
+
+    r2 = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=4,
+    )
+    assert r2.triggered is True
+    # Should compact the 4 newly accumulated old pairs.
+    assert r2.pairs_compacted == 4
+
+
+# ---------------------------------------------------------------------------
+# Pair detection edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_find_tool_pairs_skips_isolated_assistant_messages():
+    msgs = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "no tools"}]},
+        {"role": "user", "content": "more"},
+    ]
+    assert _find_tool_pairs(msgs) == []
+
+
+def test_find_tool_pairs_handles_string_content_assistant():
+    msgs = [
+        {"role": "user", "content": "task"},
+        {"role": "assistant", "content": "reply text"},  # plain string content
+    ]
+    assert _find_tool_pairs(msgs) == []
+
+
+def test_is_already_compacted_recognises_placeholder():
+    msg = {
+        "role": "user",
+        "content": [_tool_result_block("X", COMPACTED_PLACEHOLDER)],
+    }
+    assert _is_already_compacted(msg) is True
+
+
+def test_is_already_compacted_partial_placeholder_is_false():
+    # Two tool_results, one compacted, one not — should NOT be considered compacted.
+    msg = {
+        "role": "user",
+        "content": [
+            _tool_result_block("A", COMPACTED_PLACEHOLDER),
+            _tool_result_block("B", "real content here"),
+        ],
+    }
+    assert _is_already_compacted(msg) is False
+
+
+# ---------------------------------------------------------------------------
+# Env var integration
+# ---------------------------------------------------------------------------
+
+
+def test_env_var_threshold_picked_up(monkeypatch):
+    monkeypatch.setenv("HARNESS_COMPACTION_INPUT_TOKEN_THRESHOLD", "50000")
+    msgs = _build_messages(num_pairs=8, content_size=200)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    # Pass threshold_tokens=None so the env var is consulted.
+    result = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=100_000,
+        threshold_tokens=None,
+        keep_recent_pairs=4,
+    )
+    assert result.triggered is True
+
+
+def test_env_var_invalid_treated_as_disabled(monkeypatch):
+    monkeypatch.setenv("HARNESS_COMPACTION_INPUT_TOKEN_THRESHOLD", "not-a-number")
+    msgs = _build_messages(num_pairs=8, content_size=200)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    result = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=999_999,
+        threshold_tokens=None,
+    )
+    assert result.triggered is False
+    assert result.skipped_reason == "disabled"
+
+
+def test_explicit_threshold_overrides_env(monkeypatch):
+    monkeypatch.setenv("HARNESS_COMPACTION_INPUT_TOKEN_THRESHOLD", "0")
+    msgs = _build_messages(num_pairs=8, content_size=200)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    # Explicit threshold should override the env var's "disabled".
+    result = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=999_999,
+        threshold_tokens=100_000,
+        keep_recent_pairs=4,
+    )
+    assert result.triggered is True
+
+
+# ---------------------------------------------------------------------------
+# Loop integration: ensure cost is folded in & threshold reaches the loop
+# ---------------------------------------------------------------------------
+
+
+class _FakeTool:
+    """Minimal mutating-free tool that returns canned content."""
+
+    name = "read_file"
+    description = "read"
+    input_schema = {"type": "object", "properties": {"path": {"type": "string"}}}
+    mutates = False
+    capabilities = frozenset()
+    untrusted_output = False
+
+    def __init__(self, content: str = "ok") -> None:
+        self.content = content
+
+    def run(self, args: dict) -> str:
+        return self.content
+
+
+class _LoopMode(ScriptedMode):
+    """ScriptedMode that fakes a large input_tokens count and supports reflect()."""
+
+    def __init__(
+        self,
+        responses: list[_ScriptedResponse],
+        *,
+        fake_input_tokens: int,
+    ) -> None:
+        super().__init__(responses)
+        self._fake_input_tokens = fake_input_tokens
+        self.reflect_calls: list[tuple[list[dict], str]] = []
+
+    def extract_usage(self, response):
+        # Override per-response usage so all responses share the inflated input_tokens.
+        return Usage(
+            model="test",
+            input_tokens=self._fake_input_tokens,
+            output_tokens=20,
+        )
+
+    def reflect(self, messages: list[dict], prompt: str) -> tuple[str, Usage]:
+        self.reflect_calls.append((list(messages), prompt))
+        return (
+            "- compacted summary line one\n- compacted summary line two",
+            Usage(model="test", input_tokens=300, output_tokens=80),
+        )
+
+
+def test_loop_invokes_compaction_and_folds_cost():
+    """End-to-end: run_until_idle should call maybe_compact when configured."""
+    from harness.loop import run_until_idle
+
+    # Build five tool-call turns, then a final no-tool turn.
+    responses = [
+        _ScriptedResponse(
+            tool_calls=[ToolCall(name="read_file", args={"path": f"f{i}.py"}, id=f"c{i}")],
+            text=f"step {i}",
+        )
+        for i in range(5)
+    ]
+    responses.append(_ScriptedResponse(tool_calls=[], text="done"))
+
+    mode = _LoopMode(responses, fake_input_tokens=200_000)
+    tools = {"read_file": _FakeTool("file contents go here")}
+    memory = RecordingMemory()
+    tracer = _RecordingTracer()
+    messages: list[dict] = [{"role": "user", "content": "do work"}]
+
+    # We need the ScriptedMode helpers to produce real tool_use/tool_result block
+    # shapes the compaction module can find. Override as_assistant_message and
+    # as_tool_results_message to use Anthropic-shaped blocks.
+    def as_assistant_message(response):
+        blocks = []
+        if response.text:
+            blocks.append({"type": "text", "text": response.text})
+        for c in response.tool_calls:
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": c.id or "auto_id",
+                    "name": c.name,
+                    "input": c.args,
+                }
+            )
+        return {"role": "assistant", "content": blocks}
+
+    def as_tool_results_message(results):
+        return {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": r.call.id,
+                    "content": r.content,
+                    "is_error": r.is_error,
+                }
+                for r in results
+            ],
+        }
+
+    mode.as_assistant_message = as_assistant_message  # type: ignore[assignment]
+    mode.as_tool_results_message = as_tool_results_message  # type: ignore[assignment]
+
+    result = run_until_idle(
+        messages,
+        mode,
+        tools,
+        memory,
+        tracer,
+        max_turns=10,
+        max_parallel_tools=1,
+        repeat_guard_threshold=0,
+        compaction_input_token_threshold=100_000,
+    )
+
+    # Compaction should have fired at least once during the run.
+    kinds = [k for k, _ in tracer.events]
+    assert "compaction_complete" in kinds
+    # Reflect was called by the compaction path.
+    assert len(mode.reflect_calls) >= 1
+    # Cost from the compaction reflect is included in result.usage —
+    # reflect returns input_tokens=300, output_tokens=80, summed across
+    # however many compactions fired.
+    assert result.usage.input_tokens >= 300

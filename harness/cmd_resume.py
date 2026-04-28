@@ -326,6 +326,9 @@ def _resume_one(
                 max_parallel_tools=config.max_parallel_tools,
                 stream_sink=components.stream_sink,
                 skip_end_session_commit=True,
+                compaction_input_token_threshold=getattr(
+                    config, "compaction_input_token_threshold", None
+                ),
                 pause_handle=components.pause_handle,
                 resume_state=resume_state,
             )

@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, cast
 
+from harness.compaction import maybe_compact
 from harness.memory import MemoryBackend
 from harness.modes.base import Mode
 from harness.pricing import PricingTable, compute_cost, load_pricing
@@ -360,6 +361,7 @@ def run_until_idle(
     stop_event: threading.Event | None = None,
     max_cost_usd: float | None = None,
     max_tool_calls: int | None = None,
+    compaction_input_token_threshold: int | None = None,
     pause_handle: Any = None,
     resume_counters: Any = None,
     resume_usage: Usage | None = None,
@@ -668,6 +670,23 @@ def run_until_idle(
                 tool_calls_used=total_tool_calls,
             )
 
+        # B2 Layer 2: high-water-mark compaction. Runs after tool_results are
+        # appended and after the pause exit, before any nudge logic — that way
+        # we never compact a freshly-injected nudge nor compact past a paused
+        # boundary. The cost of the (rare) compaction model call is folded
+        # into the session total so accounting stays honest. Failures degrade
+        # gracefully; the loop must never fail because compaction failed.
+        compaction_result = maybe_compact(
+            messages,
+            mode,
+            tracer,
+            input_tokens=turn_usage.input_tokens,
+            threshold_tokens=compaction_input_token_threshold,
+            pricing=pricing,
+        )
+        if compaction_result.triggered:
+            total = total + compaction_result.usage
+
         # Adaptive recall: when a tool has failed repeatedly and memory_recall is
         # available, inject a nudge prompting the agent to query prior context.
         # Must come AFTER tool_results to satisfy the API contract that tool_result
@@ -915,6 +934,7 @@ def run(
     reflect: bool = True,
     max_cost_usd: float | None = None,
     max_tool_calls: int | None = None,
+    compaction_input_token_threshold: int | None = None,
     pause_handle: Any = None,
     resume_state: Any = None,
 ) -> RunResult:
@@ -974,6 +994,7 @@ def run(
         stop_event=stop_event,
         max_cost_usd=max_cost_usd,
         max_tool_calls=max_tool_calls,
+        compaction_input_token_threshold=compaction_input_token_threshold,
         pause_handle=pause_handle,
         resume_counters=resume_counters,
         resume_usage=resume_usage,
