@@ -60,6 +60,12 @@ nul
 # Do NOT ignore ACCESS.jsonl files — they are part of Engram's feedback loop
 # Do NOT ignore any .md files — they are the substance of Engram memory
 
+# Decay-sweep cache (A5): a per-namespace derived view full-rewritten on each
+# `harness decay-sweep` run. Recomputable from ACCESS.jsonl + frontmatter, so
+# committing it would just churn diffs. The advisory `_promote_candidates.md`
+# / `_demote_candidates.md` files alongside it ARE tracked.
+_lifecycle.jsonl
+
 # Leftovers from failed git init attempts on the fuse mount (see README for context)
 .git.broken*/
 ount (see README for context)

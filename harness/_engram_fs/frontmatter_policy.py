@@ -71,12 +71,23 @@ def validate_trust_boundary(
         )
 
 
+def is_user_stated(frontmatter: Mapping[str, Any]) -> bool:
+    """Return True when the frontmatter declares ``source: user-stated``.
+
+    User-stated content is the highest-trust marker the curation system has;
+    automated lifecycle features (decay sweeps, supersede flows, aggregation)
+    must treat it as exempt from machine-driven mutation.
+    """
+    return frontmatter.get("source") == "user-stated"
+
+
 __all__ = [
     "ALLOWED_SOURCE_VALUES",
     "ALLOWED_TRUST_VALUES",
     "REQUIRED_FRONTMATTER_KEYS",
     "SOURCE_VALUE_ORDER",
     "TRUST_VALUE_ORDER",
+    "is_user_stated",
     "validate_frontmatter_metadata",
     "validate_trust_boundary",
 ]
