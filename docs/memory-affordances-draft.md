@@ -4,12 +4,31 @@
 > the system prompt so the model treats them as first-class affordances
 > rather than generic tool calls.
 >
-> **Status:** wired. The five-operation surface lives in
-> `harness/tools/memory_tools.py` and is documented in
-> `harness/prompts.py::_MEMORY_SECTION`. The ROADMAP's Phase 2 tracks
-> remaining work (mainly ACCESS helpfulness scoring). The open question
-> about a minimal `start_session` bootstrap remains unresolved and needs
-> its own design pass.
+> **Status (2026-04-27):** wired and extended.
+>
+> - The original five-operation surface (`memory_recall`, `memory_remember`,
+>   `memory_review`, `memory_context`, `memory_trace`) lives in
+>   `harness/tools/memory_tools.py` and is documented in
+>   `harness/prompt_templates/memory.md` (loaded by
+>   `harness/prompts.py::_MEMORY_SECTION`).
+> - **A5 added `memory_lifecycle_review`** ([memory_tools.py](harness/tools/memory_tools.py))
+>   — read-only surface for promote/demote candidates produced by
+>   `harness decay-sweep`. Honors the `source: user-stated` exemption.
+> - **B4 added `pause_for_user`** ([tools/pause.py](harness/tools/pause.py))
+>   — agent-driven session pause; user resumes via `harness resume <id>`.
+>   Currently registered as a memory-family tool (CAP_PAUSE capability,
+>   present only for non-read-only profiles). Note that `pause_for_user`
+>   is **not yet documented in `prompt_templates/memory.md`** — the agent
+>   sees it via the native tool-list (with its own description) but the
+>   prompt section doesn't yet teach when to call it. Adding a `### memory:
+>   pause` block alongside the existing operations is a small follow-up.
+> - ACCESS helpfulness scoring is shipped — the trace bridge derives
+>   helpfulness from downstream tool use (read→edit, recall→success).
+>   Strengthening this signal further is open as A6 follow-on work
+>   (helpfulness-weighted re-ranking).
+> - The bootstrap-shrink open question remains: whether `start_session`
+>   should drop further files in favor of agent-initiated `memory_context`
+>   / `work_status`. Still unresolved.
 
 ---
 

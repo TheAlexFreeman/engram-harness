@@ -7,7 +7,8 @@
 > Companion to `memory-affordances-draft.md`, which covers the `memory:`
 > family for the durable, git-backed memory system.
 >
-> **Status:** fully wired (16 tools shipped).
+> **Status (2026-04-27):** fully wired (17 tools shipped — the original 16
+> in this doc plus `work_list` which surfaces top-level workspace files).
 >
 > - Shipped: every tool in this doc — `work_status`, `work_thread`,
 >   `work_jot`, `work_note`, `work_read`, `work_search`, `work_scratch`,
