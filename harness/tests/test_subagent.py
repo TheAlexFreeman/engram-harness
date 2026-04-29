@@ -600,6 +600,106 @@ def test_wire_subagent_falls_back_to_null_when_parent_lacks_path() -> None:
     assert runs[0][1]["trace_path"] is None
 
 
+def test_wire_subagent_seq_seeded_from_existing_trace(tmp_path) -> None:
+    """``harness resume`` reopens an existing parent trace; new spawns
+    must continue numbering past the pre-pause max ``seq`` so we don't
+    overwrite the original ``subagent-NNN.jsonl`` or collide on span IDs.
+    """
+    import json as _json
+
+    from harness.config import _wire_subagent_spawn
+    from harness.trace import Tracer
+
+    parent_trace_path = tmp_path / "session" / "ACTIONS.native.jsonl"
+    parent_trace_path.parent.mkdir(parents=True, exist_ok=True)
+    # Pre-existing trace with two subagent_run events from a prior pre-pause run.
+    with parent_trace_path.open("w", encoding="utf-8") as f:
+        f.write(
+            _json.dumps(
+                {"kind": "subagent_run", "seq": 1, "trace_path": "x.subagent-001.jsonl"}
+            )
+            + "\n"
+        )
+        f.write(
+            _json.dumps(
+                {"kind": "subagent_run", "seq": 2, "trace_path": "x.subagent-002.jsonl"}
+            )
+            + "\n"
+        )
+    parent_tracer = Tracer(parent_trace_path)
+
+    parent_tools: dict[str, Tool] = {
+        "spawn_subagent": SpawnSubagent(),
+        "noop": SleepingTool("noop"),
+    }
+    sub_mode = ScriptedMode([_ScriptedResponse(tool_calls=[], text="ok")])
+    _wire_subagent_spawn(
+        parent_tools,
+        mode=sub_mode,
+        parent_tracer=parent_tracer,
+        pricing_loader=lambda: None,
+    )
+
+    parent_tools["spawn_subagent"].run(
+        {"task": "post-resume", "allowed_tools": ["noop"]}
+    )
+    parent_tracer.close()
+
+    # The new spawn should have used seq=3 (continuing past max=2).
+    expected = parent_trace_path.parent / "ACTIONS.native.subagent-003.jsonl"
+    assert expected.is_file(), f"expected continuation at {expected}"
+    parent_events = [
+        _json.loads(line)
+        for line in parent_trace_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    new_runs = [
+        ev
+        for ev in parent_events
+        if ev.get("kind") == "subagent_run" and ev.get("trace_path") != "x.subagent-001.jsonl"
+        and ev.get("trace_path") != "x.subagent-002.jsonl"
+    ]
+    assert len(new_runs) == 1
+    assert new_runs[0]["seq"] == 3
+
+
+def test_wire_subagent_seq_zero_when_no_existing_runs(tmp_path) -> None:
+    """A fresh session's trace has no subagent_run events; counter starts
+    at 0 so the first spawn lands at seq=1 (the existing PR 1 contract).
+    """
+    import json as _json
+
+    from harness.config import _wire_subagent_spawn
+    from harness.trace import Tracer
+
+    parent_trace_path = tmp_path / "session" / "ACTIONS.native.jsonl"
+    parent_tracer = Tracer(parent_trace_path)
+
+    parent_tools: dict[str, Tool] = {
+        "spawn_subagent": SpawnSubagent(),
+        "noop": SleepingTool("noop"),
+    }
+    sub_mode = ScriptedMode([_ScriptedResponse(tool_calls=[], text="ok")])
+    _wire_subagent_spawn(
+        parent_tools,
+        mode=sub_mode,
+        parent_tracer=parent_tracer,
+        pricing_loader=lambda: None,
+    )
+    parent_tools["spawn_subagent"].run({"task": "first", "allowed_tools": ["noop"]})
+    parent_tracer.close()
+
+    assert (parent_trace_path.parent / "ACTIONS.native.subagent-001.jsonl").is_file()
+    parent_events = [
+        _json.loads(line)
+        for line in parent_trace_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    runs = [ev for ev in parent_events if ev.get("kind") == "subagent_run"]
+    assert len(runs) == 1
+    assert runs[0]["seq"] == 1
+
+
 def test_wire_subagent_unwraps_composite_tracer(tmp_path) -> None:
     """The trace path is discovered through ``CompositeTracer._children``."""
     from harness.config import _wire_subagent_spawn
