@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from harness.config import RunPolicy
+from harness.lanes import Lane, LaneRegistry
 from harness.loop import (
     RunResult,
     maybe_run_reflection,
@@ -79,18 +80,24 @@ def _run_subtask(
             tool_calls_used=0,
         )
     else:
-        r = run_until_idle(
-            messages,
-            components.mode,
-            components.tools,
-            components.memory,
-            tracer,
-            stream_sink=components.stream_sink,
-            **policy.for_remaining_budget(
-                max_cost_usd=rem_cost,
-                max_tool_calls=rem_tools,
-            ).idle_kwargs(),
-        )
+        idle_kwargs = policy.for_remaining_budget(
+            max_cost_usd=rem_cost,
+            max_tool_calls=rem_tools,
+        ).idle_kwargs()
+        session_key = str(components.config.workspace.resolve())
+
+        def _do_run() -> RunResult:
+            return run_until_idle(
+                messages,
+                components.mode,
+                components.tools,
+                components.memory,
+                tracer,
+                stream_sink=components.stream_sink,
+                **idle_kwargs,
+            )
+
+        r = _submit_main_lane(components, _do_run, tracer=tracer, session_key=session_key)
     tracer.event(
         "sub_session_end",
         subtask_idx=subtask_idx,
@@ -98,6 +105,28 @@ def _run_subtask(
         turns=r.turns_used,
     )
     return r
+
+
+def _submit_main_lane(
+    components: "SessionComponents",
+    run_fn,
+    *,
+    tracer,
+    session_key: str | None = None,
+):
+    """Run ``run_fn`` under the main lane, falling back to a direct call
+    if the components don't expose a lane registry (e.g. legacy tests
+    constructing SessionComponents by hand).
+    """
+    lanes = getattr(components, "lanes", None)
+    if isinstance(lanes, LaneRegistry):
+        return lanes.submit(
+            Lane.MAIN,
+            run_fn,
+            session_key=session_key,
+            tracer=tracer,
+        )
+    return run_fn()
 
 
 def run_interactive(
@@ -280,17 +309,22 @@ def run_batch(args: "argparse.Namespace", components: "SessionComponents"):
     config = components.config
     bridge = _bridge_enabled(components)
     policy = RunPolicy.from_config(config, pause_handle=components.pause_handle)
+    session_key = str(config.workspace.resolve())
     with components.tracer as tracer:
-        return run(
-            str(args.task),
-            components.mode,
-            components.tools,
-            components.memory,
-            tracer,
-            stream_sink=components.stream_sink,
-            skip_end_session_commit=bridge,
-            **policy.run_kwargs(),
-        )
+
+        def _do_run() -> RunResult:
+            return run(
+                str(args.task),
+                components.mode,
+                components.tools,
+                components.memory,
+                tracer,
+                stream_sink=components.stream_sink,
+                skip_end_session_commit=bridge,
+                **policy.run_kwargs(),
+            )
+
+        return _submit_main_lane(components, _do_run, tracer=tracer, session_key=session_key)
 
 
 def run_trace_bridge_if_enabled(components: "SessionComponents") -> TraceBridgeStatus:

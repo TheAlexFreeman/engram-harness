@@ -49,6 +49,14 @@ class SessionConfig:
     max_output_tokens: int = 4096
     max_cost_usd: float | None = None
     max_tool_calls: int | None = None
+    # Lane-aware concurrency caps (Phase 1 of lane rollout). Bounds the
+    # number of concurrent runs in each named lane. Defaults match
+    # harness/lanes.py: main=4 (parent run_until_idle invocations
+    # against this process), subagent=4 (children spawned via
+    # spawn_subagent / spawn_subagents). Override via CLI flags or
+    # HARNESS_LANE_CAP_MAIN / HARNESS_LANE_CAP_SUBAGENT env vars.
+    lane_cap_main: int = 4
+    lane_cap_subagent: int = 4
     repeat_guard_threshold: int = 3
     # Hard-stop streak length; None disables loop termination (only the soft
     # nudge fires). When set, the run aborts with stopped_by_loop_detection
@@ -184,6 +192,11 @@ class SessionComponents:
     # is registered only when the active profile includes CAP_PAUSE), but
     # benign no-op when the agent never calls pause_for_user.
     pause_handle: Any = None  # harness.tools.pause.PauseHandle
+    # Lane registry — process-local concurrency coordinator. Subagent
+    # tools route through it; cli.py wraps the top-level run_until_idle
+    # in lanes.submit(Lane.MAIN, ...). Always present; defaults caps
+    # come from SessionConfig (lane_cap_main / lane_cap_subagent).
+    lanes: Any = None  # harness.lanes.LaneRegistry
 
 
 _RUN_POLICY_CONFIG_FIELDS = (
@@ -385,6 +398,23 @@ def trace_to_engram_enabled(config: SessionConfig, engram_memory: Any | None) ->
     return True
 
 
+def _resolve_lane_cap(args: argparse.Namespace, attr: str, env_var: str, default: int) -> int:
+    val = getattr(args, attr, None)
+    if val is None:
+        env = os.environ.get(env_var)
+        if env is not None and env.strip():
+            try:
+                val = int(env)
+            except ValueError:
+                val = default
+        else:
+            val = default
+    val = int(val)
+    if val < 1:
+        raise ValueError(f"{attr} must be >= 1 (got {val})")
+    return val
+
+
 def config_from_args(args: argparse.Namespace) -> SessionConfig:
     """Convert parsed CLI arguments to a SessionConfig."""
     reflect_arg = getattr(args, "reflect", None)
@@ -400,6 +430,10 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         max_output_tokens=getattr(args, "max_output_tokens", 4096),
         max_cost_usd=getattr(args, "max_cost_usd", None),
         max_tool_calls=getattr(args, "max_tool_calls", None),
+        lane_cap_main=_resolve_lane_cap(args, "lane_cap_main", "HARNESS_LANE_CAP_MAIN", 4),
+        lane_cap_subagent=_resolve_lane_cap(
+            args, "lane_cap_subagent", "HARNESS_LANE_CAP_SUBAGENT", 4
+        ),
         repeat_guard_threshold=args.repeat_guard_threshold,
         repeat_guard_terminate_at=getattr(args, "repeat_guard_terminate_at", None),
         repeat_guard_exempt_tools=list(getattr(args, "repeat_guard_exempt", None) or []),
@@ -742,6 +776,7 @@ def build_session(
     scope: Any | None = None,
     resume_session_id: str | None = None,
     resume_trace_path: Path | None = None,
+    lanes: Any | None = None,
 ) -> SessionComponents:
     """Construct all session objects from config.
 
@@ -762,13 +797,21 @@ def build_session(
         Optional WorkspaceScope used by the filesystem tools. When Engram
         memory is active, its mounted memory root is set before the mode sees
         tool descriptions.
+    lanes
+        Optional ``harness.lanes.LaneRegistry`` to share across multiple
+        sessions in a process (e.g. the API server). When ``None``, a
+        fresh registry is built from ``config.lane_cap_main`` /
+        ``config.lane_cap_subagent``.
     """
     # Build the pause handle up-front so it can be passed into both the
     # tool registry (via _build_memory → PauseForUser(handle)) and stashed on
     # SessionComponents for the loop to poll.
+    from harness.lanes import LaneCaps, LaneRegistry
     from harness.tools.pause import PauseHandle
 
     pause_handle = PauseHandle()
+    if lanes is None:
+        lanes = LaneRegistry(LaneCaps(main=config.lane_cap_main, subagent=config.lane_cap_subagent))
 
     memory, engram_memory, extra_tools = _build_memory(
         config,
@@ -803,6 +846,7 @@ def build_session(
         stream_sink=stream_sink,
         max_cost_usd=config.max_cost_usd,
         max_tool_calls=config.max_tool_calls,
+        lanes=lanes,
     )
 
     _wire_injection_classifier(config, tracer=tracer)
@@ -818,6 +862,7 @@ def build_session(
         trace_path=trace_path,
         config=config,
         pause_handle=pause_handle,
+        lanes=lanes,
     )
 
 
@@ -830,6 +875,7 @@ def _wire_subagent_spawn(
     stream_sink: Any | None = None,
     max_cost_usd: float | None = None,
     max_tool_calls: int | None = None,
+    lanes: Any | None = None,
 ) -> None:
     """Late-bind the spawn callback on any ``SpawnSubagent`` tool in ``tools``.
 
@@ -839,9 +885,14 @@ def _wire_subagent_spawn(
     ``NullTraceSink`` to keep their internal state isolated from the parent's
     session. The parent's tracer still sees a single ``subagent_run`` summary
     event for each call.
+
+    When ``lanes`` is supplied, both ``spawn_subagent`` (singular) and
+    ``spawn_subagents`` (batch) route their dispatches through it so
+    concurrent fan-out stays under ``LaneCaps.subagent``.
     """
     spawn_tool = tools.get("spawn_subagent")
-    if spawn_tool is None or not hasattr(spawn_tool, "set_spawn_fn"):
+    batch_tool = tools.get("spawn_subagents")
+    if spawn_tool is None and batch_tool is None:
         return
 
     from harness.loop import run_until_idle
@@ -859,7 +910,9 @@ def _wire_subagent_spawn(
         # Filter parent registry by allowed names. Skip 'spawn_subagent' here —
         # nested spawning is handled below with its own depth bound.
         sub_tools = {
-            n: t for n, t in parent_tools.items() if n in allowed_tools and n != "spawn_subagent"
+            n: t
+            for n, t in parent_tools.items()
+            if n in allowed_tools and n not in ("spawn_subagent", "spawn_subagents")
         }
         # Allow nested spawns (within the depth budget) when the caller
         # explicitly opted in via allowed_tools.
@@ -868,6 +921,8 @@ def _wire_subagent_spawn(
                 spawn,
                 max_depth=spawn_tool.max_depth,
                 current_depth=depth,
+                lanes=lanes,
+                tracer=parent_tracer,
             )
             sub_tools["spawn_subagent"] = nested
 
@@ -913,7 +968,14 @@ def _wire_subagent_spawn(
         )
 
     _ = DEFAULT_ALLOWED_TOOLS  # imported for visibility; consumed by the tool itself
-    spawn_tool.set_spawn_fn(spawn)
+    if spawn_tool is not None and hasattr(spawn_tool, "set_spawn_fn"):
+        spawn_tool.set_spawn_fn(spawn)
+        if lanes is not None and hasattr(spawn_tool, "set_lanes"):
+            spawn_tool.set_lanes(lanes, tracer=parent_tracer)
+    if batch_tool is not None and hasattr(batch_tool, "set_spawn_fn"):
+        batch_tool.set_spawn_fn(spawn)
+        if lanes is not None and hasattr(batch_tool, "set_lanes"):
+            batch_tool.set_lanes(lanes, tracer=parent_tracer)
 
 
 def _wire_injection_classifier(config: SessionConfig, *, tracer: Any) -> None:

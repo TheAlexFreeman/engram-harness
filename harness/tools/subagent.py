@@ -20,9 +20,12 @@ Design
   recurse past ``max_depth`` (default 2).
 - ``allowed_tools`` defaults to a read-only subset matching what
   ``ToolProfile.READ_ONLY`` produces, plus any web-search tools.
+- When a ``LaneRegistry`` is wired in, every spawn is gated through
+  the ``Lane.SUBAGENT`` semaphore so concurrent fan-out stays under
+  the configured cap. ``spawn_subagents`` (plural) lets the model
+  intentionally dispatch a batch in one tool call.
 
 Out of scope for this PR (call out as follow-ups):
-- Parallel sub-agent dispatch (Cursor 2.0 pattern).
 - Trace-bridge nested spans matching OTel GenAI semconv.
 - Cost budget propagation beyond the result text.
 - Per-sub-agent system-prompt rewrite (currently reuses parent's
@@ -31,9 +34,12 @@ Out of scope for this PR (call out as follow-ups):
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from harness.lanes import Lane, LaneRegistry
 from harness.tools import CAP_SUBAGENT
 from harness.usage import Usage
 
@@ -159,10 +165,16 @@ class SpawnSubagent:
         *,
         max_depth: int = DEFAULT_MAX_DEPTH,
         current_depth: int = 0,
+        lanes: LaneRegistry | None = None,
+        tracer: Any | None = None,
+        parent_run_id: str | None = None,
     ):
         self._spawn_fn = spawn_fn
         self.max_depth = max_depth
         self.current_depth = current_depth
+        self._lanes = lanes
+        self._tracer = tracer
+        self._parent_run_id = parent_run_id
 
     def set_spawn_fn(self, spawn_fn: SpawnFn) -> None:
         """Late-bind the spawn callback.
@@ -173,6 +185,22 @@ class SpawnSubagent:
         a wired callback raises a clear error.
         """
         self._spawn_fn = spawn_fn
+
+    def set_lanes(
+        self,
+        lanes: LaneRegistry,
+        *,
+        tracer: Any | None = None,
+        parent_run_id: str | None = None,
+    ) -> None:
+        """Late-bind the lane registry. Optional — without lanes the tool
+        runs the spawn synchronously without a concurrency cap.
+        """
+        self._lanes = lanes
+        if tracer is not None:
+            self._tracer = tracer
+        if parent_run_id is not None:
+            self._parent_run_id = parent_run_id
 
     def run(self, args: dict) -> str:
         if self._spawn_fn is None:
@@ -208,14 +236,236 @@ class SpawnSubagent:
             raise ValueError("max_turns must be an integer") from e
         max_turns = max(MIN_MAX_TURNS, min(max_turns, MAX_MAX_TURNS))
 
-        sub_result = self._spawn_fn(
-            task=task.strip(),
-            allowed_tools=allowed_tools,
-            max_turns=max_turns,
-            depth=self.current_depth + 1,
-        )
+        def _do_spawn() -> SubagentResult:
+            return self._spawn_fn(
+                task=task.strip(),
+                allowed_tools=allowed_tools,
+                max_turns=max_turns,
+                depth=self.current_depth + 1,
+            )
+
+        if self._lanes is None:
+            sub_result = _do_spawn()
+        else:
+            sub_result = self._lanes.submit(
+                Lane.SUBAGENT,
+                _do_spawn,
+                parent_run_id=self._parent_run_id,
+                tracer=self._tracer,
+            )
 
         return _format_subagent_output(sub_result)
+
+
+class SpawnSubagents:
+    """Batch dispatch — spawn N subagents in parallel, gated by the
+    ``subagent`` lane cap.
+
+    Routing N independent ``spawn_subagent`` calls through the parent's
+    tool batch dispatcher caps parallelism at ``max_parallel_tools``
+    (default 4). This batch tool short-circuits that limit by handing
+    every child directly to the lane registry, so the only ceiling is
+    ``LaneCaps.subagent``. Children that exceed the cap wait at
+    ``Lane.submit``; their wait time appears as ``waited_ms`` on the
+    ``lane_acquire`` trace event.
+    """
+
+    name = "spawn_subagents"
+    mutates = False
+    capabilities = frozenset({CAP_SUBAGENT})
+    description = (
+        "Spawn multiple isolated sub-agents in parallel, each on its own focused task. "
+        "Gated by the configured subagent-lane cap; children beyond the cap wait their turn. "
+        "Use this when several investigations are mutually independent — for example, "
+        "checking three different files or three different greps. Each task must be "
+        "self-contained (no shared parent context). Returns a single concatenation of the "
+        "children's final summaries in submission order."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "tasks": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": (
+                                "Self-contained task for one sub-agent. "
+                                "Must be unambiguous without parent context."
+                            ),
+                        },
+                        "allowed_tools": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Optional per-child tool allowlist. "
+                                "Defaults to the read-only set used by spawn_subagent."
+                            ),
+                        },
+                        "max_turns": {
+                            "type": "integer",
+                            "description": (
+                                f"Optional per-child max turns. Default {DEFAULT_MAX_TURNS}, "
+                                f"clamped to [{MIN_MAX_TURNS}, {MAX_MAX_TURNS}]."
+                            ),
+                        },
+                    },
+                    "required": ["task"],
+                },
+            },
+            "fail_fast": {
+                "type": "boolean",
+                "description": (
+                    "When true, stop launching new children after the first exception. "
+                    "Children already running are left to complete (best-effort cancellation). "
+                    "Defaults to false — every child runs and errors are reported per-child."
+                ),
+            },
+        },
+        "required": ["tasks"],
+    }
+
+    MAX_BATCH_SIZE = 8
+
+    def __init__(
+        self,
+        spawn_fn: SpawnFn | None = None,
+        *,
+        max_depth: int = DEFAULT_MAX_DEPTH,
+        current_depth: int = 0,
+        lanes: LaneRegistry | None = None,
+        tracer: Any | None = None,
+        parent_run_id: str | None = None,
+    ):
+        self._spawn_fn = spawn_fn
+        self.max_depth = max_depth
+        self.current_depth = current_depth
+        self._lanes = lanes
+        self._tracer = tracer
+        self._parent_run_id = parent_run_id
+
+    def set_spawn_fn(self, spawn_fn: SpawnFn) -> None:
+        self._spawn_fn = spawn_fn
+
+    def set_lanes(
+        self,
+        lanes: LaneRegistry,
+        *,
+        tracer: Any | None = None,
+        parent_run_id: str | None = None,
+    ) -> None:
+        self._lanes = lanes
+        if tracer is not None:
+            self._tracer = tracer
+        if parent_run_id is not None:
+            self._parent_run_id = parent_run_id
+
+    def run(self, args: dict) -> str:
+        if self._spawn_fn is None:
+            raise RuntimeError(
+                "spawn_subagents: spawn callback not wired. The harness build "
+                "path must call set_spawn_fn() after constructing the Mode."
+            )
+        if self._lanes is None:
+            raise RuntimeError(
+                "spawn_subagents: lane registry not wired. The harness build "
+                "path must call set_lanes() before this tool can dispatch."
+            )
+        if self.current_depth >= self.max_depth:
+            raise ValueError(
+                f"sub-agent depth limit reached (current={self.current_depth}, "
+                f"max={self.max_depth}); refusing to spawn nested sub-agents."
+            )
+
+        raw_tasks = args.get("tasks")
+        if not isinstance(raw_tasks, list) or not raw_tasks:
+            raise ValueError("tasks must be a non-empty list of task objects")
+        if len(raw_tasks) > self.MAX_BATCH_SIZE:
+            raise ValueError(
+                f"tasks: at most {self.MAX_BATCH_SIZE} children per batch (got {len(raw_tasks)})"
+            )
+
+        normalized: list[dict[str, Any]] = []
+        for i, raw in enumerate(raw_tasks):
+            if not isinstance(raw, dict):
+                raise ValueError(f"tasks[{i}] must be an object with a 'task' field")
+            task = raw.get("task")
+            if not isinstance(task, str) or not task.strip():
+                raise ValueError(f"tasks[{i}].task must be a non-empty string")
+            allowed_raw = raw.get("allowed_tools")
+            if allowed_raw is None:
+                allowed_tools = list(DEFAULT_ALLOWED_TOOLS)
+            else:
+                if not isinstance(allowed_raw, list) or not all(
+                    isinstance(t, str) for t in allowed_raw
+                ):
+                    raise ValueError(f"tasks[{i}].allowed_tools must be a list of strings")
+                allowed_tools = list(allowed_raw)
+            raw_max_turns = raw.get("max_turns", DEFAULT_MAX_TURNS)
+            try:
+                max_turns = int(raw_max_turns)
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"tasks[{i}].max_turns must be an integer") from e
+            max_turns = max(MIN_MAX_TURNS, min(max_turns, MAX_MAX_TURNS))
+            normalized.append(
+                {
+                    "task": task.strip(),
+                    "allowed_tools": allowed_tools,
+                    "max_turns": max_turns,
+                }
+            )
+
+        fail_fast = bool(args.get("fail_fast", False))
+        return self._dispatch(normalized, fail_fast=fail_fast)
+
+    def _dispatch(self, tasks: list[dict[str, Any]], *, fail_fast: bool) -> str:
+        n = len(tasks)
+        results: list[SubagentResult | BaseException] = [None] * n  # type: ignore[list-item]
+        cancel_remaining = threading.Event()
+
+        def _run_one(idx: int) -> None:
+            if fail_fast and cancel_remaining.is_set():
+                results[idx] = _CancelledChild(reason="fail_fast")
+                return
+            spec = tasks[idx]
+
+            def _do_spawn() -> SubagentResult:
+                return self._spawn_fn(
+                    task=spec["task"],
+                    allowed_tools=spec["allowed_tools"],
+                    max_turns=spec["max_turns"],
+                    depth=self.current_depth + 1,
+                )
+
+            try:
+                results[idx] = self._lanes.submit(
+                    Lane.SUBAGENT,
+                    _do_spawn,
+                    parent_run_id=self._parent_run_id,
+                    tracer=self._tracer,
+                )
+            except BaseException as exc:  # noqa: BLE001
+                results[idx] = exc
+                if fail_fast:
+                    cancel_remaining.set()
+
+        with ThreadPoolExecutor(max_workers=n) as pool:
+            futures = [pool.submit(_run_one, i) for i in range(n)]
+            for f in futures:
+                f.result()
+
+        return _format_batch_output(results)
+
+
+@dataclass
+class _CancelledChild:
+    """Marker for children that fail-fast skipped before launch."""
+
+    reason: str
 
 
 def _format_subagent_output(result: SubagentResult) -> str:
@@ -237,8 +487,35 @@ def _format_subagent_output(result: SubagentResult) -> str:
     return f"{body}\n\n--- subagent ---\n{footer}\n"
 
 
+def _format_batch_output(results: list[SubagentResult | BaseException]) -> str:
+    """Render a batch of sub-agent outcomes for the parent's tool-result.
+
+    Each child gets a numbered block; failures and fail-fast skips are
+    rendered explicitly so the model can reason about which queries
+    succeeded. The header reports the count split (ok / failed / cancelled).
+    """
+    n = len(results)
+    ok_count = sum(1 for r in results if isinstance(r, SubagentResult))
+    cancelled_count = sum(1 for r in results if isinstance(r, _CancelledChild))
+    failed_count = n - ok_count - cancelled_count
+    header = (
+        f"Spawned {n} subagents in parallel: "
+        f"ok={ok_count} failed={failed_count} cancelled={cancelled_count}"
+    )
+    blocks: list[str] = [header]
+    for idx, r in enumerate(results, start=1):
+        if isinstance(r, SubagentResult):
+            blocks.append(f"--- child {idx} ---\n{_format_subagent_output(r)}")
+        elif isinstance(r, _CancelledChild):
+            blocks.append(f"--- child {idx} ---\n(skipped: {r.reason})\n")
+        else:  # BaseException
+            blocks.append(f"--- child {idx} ---\n(failed: {type(r).__name__}: {r})\n")
+    return "\n".join(blocks)
+
+
 __all__ = [
     "SpawnSubagent",
+    "SpawnSubagents",
     "SubagentResult",
     "SpawnFn",
     "NullMemory",

@@ -24,7 +24,7 @@ from harness.tools.python_eval import PythonEval
 from harness.tools.python_exec import PythonExec
 from harness.tools.run_script import RunScript
 from harness.tools.search import WebSearch
-from harness.tools.subagent import SpawnSubagent
+from harness.tools.subagent import SpawnSubagent, SpawnSubagents
 from harness.tools.todos import AnalyzeTodos, ReadTodos, UpdateTodo, WriteTodos
 from harness.tools.x_search import XSearch
 
@@ -73,9 +73,11 @@ def build_tools(
 
     # Sub-agent spawning is available wherever cost-bearing tools are: in
     # NO_SHELL and FULL profiles, but not READ_ONLY (which is meant to be
-    # the minimal-cost / no-side-effects mode). The spawn callback is wired
-    # by build_session once Mode + memory exist.
-    subagent: list[Tool] = [SpawnSubagent()]
+    # the minimal-cost / no-side-effects mode). The spawn callback and
+    # lane registry are wired by build_session once Mode + memory exist.
+    # ``spawn_subagents`` (plural) is the lane-aware batch dispatch tool;
+    # without a wired LaneRegistry it raises a clear error at run time.
+    subagent: list[Tool] = [SpawnSubagent(), SpawnSubagents()]
 
     if profile == ToolProfile.READ_ONLY:
         base = read_only
