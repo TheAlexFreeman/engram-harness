@@ -576,9 +576,7 @@ def _render_summary(
         fm["sub_sessions"] = sub_sessions
     if stats.subagent_runs:
         fm["subagent_count"] = len(stats.subagent_runs)
-        fm["subagent_total_cost_usd"] = round(
-            sum(s.cost_usd for s in stats.subagent_runs), 4
-        )
+        fm["subagent_total_cost_usd"] = round(sum(s.cost_usd for s in stats.subagent_runs), 4)
 
     body_lines = [
         f"# Session {memory.session_id}",
@@ -870,9 +868,7 @@ def _build_subagent_spans(
             span_cost = round(turn_cost / n, 6)
             out.append(
                 {
-                    "span_id": _short_hash(
-                        f"{sub_session_id}:{tc.seq}:{tc.name}:{tc.timestamp}"
-                    ),
+                    "span_id": _short_hash(f"{sub_session_id}:{tc.seq}:{tc.name}:{tc.timestamp}"),
                     "parent_span_id": sub_span_id,
                     "session_id": sub_session_id,
                     "timestamp": tc.timestamp,

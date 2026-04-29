@@ -615,15 +615,11 @@ def test_wire_subagent_seq_seeded_from_existing_trace(tmp_path) -> None:
     # Pre-existing trace with two subagent_run events from a prior pre-pause run.
     with parent_trace_path.open("w", encoding="utf-8") as f:
         f.write(
-            _json.dumps(
-                {"kind": "subagent_run", "seq": 1, "trace_path": "x.subagent-001.jsonl"}
-            )
+            _json.dumps({"kind": "subagent_run", "seq": 1, "trace_path": "x.subagent-001.jsonl"})
             + "\n"
         )
         f.write(
-            _json.dumps(
-                {"kind": "subagent_run", "seq": 2, "trace_path": "x.subagent-002.jsonl"}
-            )
+            _json.dumps({"kind": "subagent_run", "seq": 2, "trace_path": "x.subagent-002.jsonl"})
             + "\n"
         )
     parent_tracer = Tracer(parent_trace_path)
@@ -640,9 +636,7 @@ def test_wire_subagent_seq_seeded_from_existing_trace(tmp_path) -> None:
         pricing_loader=lambda: None,
     )
 
-    parent_tools["spawn_subagent"].run(
-        {"task": "post-resume", "allowed_tools": ["noop"]}
-    )
+    parent_tools["spawn_subagent"].run({"task": "post-resume", "allowed_tools": ["noop"]})
     parent_tracer.close()
 
     # The new spawn should have used seq=3 (continuing past max=2).
@@ -656,7 +650,8 @@ def test_wire_subagent_seq_seeded_from_existing_trace(tmp_path) -> None:
     new_runs = [
         ev
         for ev in parent_events
-        if ev.get("kind") == "subagent_run" and ev.get("trace_path") != "x.subagent-001.jsonl"
+        if ev.get("kind") == "subagent_run"
+        and ev.get("trace_path") != "x.subagent-001.jsonl"
         and ev.get("trace_path") != "x.subagent-002.jsonl"
     ]
     assert len(new_runs) == 1
@@ -757,9 +752,7 @@ def test_console_trace_printer_prefix_prepends_to_each_line(capsys) -> None:
     captured = capsys.readouterr()
     # session_usage emits multiple bar+body lines — prefix applies to each.
     assert all(
-        line.startswith("[subagent-001] ")
-        for line in captured.err.splitlines()
-        if line.strip()
+        line.startswith("[subagent-001] ") for line in captured.err.splitlines() if line.strip()
     )
 
 
@@ -793,9 +786,7 @@ def test_wire_subagent_streams_to_parent_console(tmp_path, capsys) -> None:
     }
     sub_mode = ScriptedMode(
         [
-            _ScriptedResponse(
-                tool_calls=[ToolCall(name="noop", args={"duration": 0.0}, id="c0")]
-            ),
+            _ScriptedResponse(tool_calls=[ToolCall(name="noop", args={"duration": 0.0}, id="c0")]),
             _ScriptedResponse(tool_calls=[], text="ok"),
         ]
     )
