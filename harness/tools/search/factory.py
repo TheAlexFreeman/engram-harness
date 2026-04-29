@@ -5,6 +5,7 @@ import os
 from .backends import WebSearchBackend
 from .bing import BingBackend
 from .brave import BraveBackend
+from .browserbase import BrowserbaseBackend
 from .tavily import TavilyBackend
 from .types import SearchHit
 from .x import XSearchBackend
@@ -31,8 +32,9 @@ def load_backend_from_env() -> WebSearchBackend:
     Select a search backend from the environment.
 
     - HARNESS_SEARCH_DISABLED: if ``1``, ``true``, or ``yes`` (case-insensitive), returns NoOpBackend.
-    - HARNESS_SEARCH_PROVIDER: ``brave`` (default), ``tavily``, or ``bing``.
-    - Keys: BRAVE_API_KEY, TAVILY_API_KEY, or AZURE_BING_SEARCH_KEY (+ optional AZURE_BING_SEARCH_ENDPOINT).
+    - HARNESS_SEARCH_PROVIDER: ``brave`` (default), ``tavily``, ``bing``, or ``browserbase``.
+    - Keys: BRAVE_API_KEY, TAVILY_API_KEY, AZURE_BING_SEARCH_KEY
+      (+ optional AZURE_BING_SEARCH_ENDPOINT), or BROWSERBASE_API_KEY.
     """
     disabled = os.environ.get("HARNESS_SEARCH_DISABLED", "").strip().lower()
     if disabled in ("1", "true", "yes", "on"):
@@ -45,9 +47,11 @@ def load_backend_from_env() -> WebSearchBackend:
         return TavilyBackend()
     if provider == "bing":
         return BingBackend()
+    if provider == "browserbase":
+        return BrowserbaseBackend()
     if provider in ("x", "twitter", "xsearch"):
         return XSearchBackend()
     raise ValueError(
         f"Unknown HARNESS_SEARCH_PROVIDER={provider!r}. "
-        f"Use brave, tavily, bing, or x (for X/Twitter search)."
+        f"Use brave, tavily, bing, browserbase, or x (for X/Twitter search)."
     )

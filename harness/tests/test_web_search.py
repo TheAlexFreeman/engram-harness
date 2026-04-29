@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from harness.tools.search.brave import BraveBackend
+from harness.tools.search.browserbase import BrowserbaseBackend
 from harness.tools.search.factory import load_backend_from_env
 from harness.tools.search.tool import WebSearch
 from harness.tools.search.types import SearchHit
@@ -77,6 +78,140 @@ def test_brave_http_error_short_message(monkeypatch: pytest.MonkeyPatch) -> None
     backend = BraveBackend(api_key="dummy")
     with pytest.raises(ValueError, match="Brave search failed: HTTP 401"):
         backend.search("q", max_results=3, timeout_sec=10.0)
+
+
+def test_load_backend_browserbase_requires_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_SEARCH_PROVIDER", "browserbase")
+    monkeypatch.delenv("HARNESS_SEARCH_DISABLED", raising=False)
+    monkeypatch.delenv("BROWSERBASE_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="BROWSERBASE_API_KEY"):
+        load_backend_from_env()
+
+
+def test_load_backend_browserbase(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_SEARCH_PROVIDER", "browserbase")
+    monkeypatch.setenv("BROWSERBASE_API_KEY", "bb-test-key")
+    monkeypatch.delenv("HARNESS_SEARCH_DISABLED", raising=False)
+    b = load_backend_from_env()
+    assert type(b).__name__ == "BrowserbaseBackend"
+
+
+def test_browserbase_http_error_short_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"error": "rate-limited"})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+
+    def _client(**kwargs: object) -> httpx.Client:
+        timeout = kwargs.get("timeout", 5.0)
+        return real_client(transport=transport, timeout=timeout)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("harness.tools.search.browserbase.httpx.Client", _client)
+    backend = BrowserbaseBackend(api_key="dummy")
+    with pytest.raises(ValueError, match="Browserbase search failed: HTTP 429"):
+        backend.search("q", max_results=3, timeout_sec=10.0)
+
+
+def test_browserbase_success_sends_auth_and_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        captured["url"] = str(request.url)
+        captured["auth"] = request.headers.get("X-BB-API-Key")
+        captured["body"] = _json.loads(request.content.decode("utf-8"))
+        return httpx.Response(
+            200,
+            json={
+                "requestId": "r-1",
+                "query": "hello",
+                "results": [
+                    {
+                        "id": "h-1",
+                        "url": "https://one.example",
+                        "title": "T1",
+                        "author": "Alice",
+                        "publishedDate": "2026-04-15T10:30:00Z",
+                    },
+                ],
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+
+    def _client(**kwargs: object) -> httpx.Client:
+        timeout = kwargs.get("timeout", 5.0)
+        return real_client(transport=transport, timeout=timeout)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("harness.tools.search.browserbase.httpx.Client", _client)
+    backend = BrowserbaseBackend(api_key="secret")
+    hits = backend.search("hello", max_results=5, timeout_sec=10.0)
+
+    assert captured["url"] == "https://api.browserbase.com/v1/search"
+    assert captured["auth"] == "secret"
+    assert captured["body"] == {"query": "hello", "numResults": 5}
+    assert len(hits) == 1
+    assert hits[0].url == "https://one.example"
+    assert hits[0].title == "T1"
+    # Snippet is synthesized from author + publishedDate (date prefix only).
+    assert "Alice" in hits[0].snippet
+    assert "2026-04-15" in hits[0].snippet
+    assert "T10:30" not in hits[0].snippet
+
+
+def test_browserbase_clamps_query_and_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        captured["body"] = _json.loads(request.content.decode("utf-8"))
+        return httpx.Response(200, json={"results": []})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+
+    def _client(**kwargs: object) -> httpx.Client:
+        timeout = kwargs.get("timeout", 5.0)
+        return real_client(transport=transport, timeout=timeout)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("harness.tools.search.browserbase.httpx.Client", _client)
+    backend = BrowserbaseBackend(api_key="k")
+    backend.search("x" * 500, max_results=999, timeout_sec=10.0)
+
+    # Query clamped to 200 chars; numResults clamped to 25.
+    assert len(captured["body"]["query"]) == 200
+    assert captured["body"]["numResults"] == 25
+
+
+def test_browserbase_skips_results_without_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"id": "1", "title": "no url"},  # dropped
+                    {"id": "2", "title": "T2", "url": "https://two.example"},
+                    "not a dict",  # dropped
+                ]
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+
+    def _client(**kwargs: object) -> httpx.Client:
+        timeout = kwargs.get("timeout", 5.0)
+        return real_client(transport=transport, timeout=timeout)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("harness.tools.search.browserbase.httpx.Client", _client)
+    backend = BrowserbaseBackend(api_key="k")
+    hits = backend.search("q", max_results=5, timeout_sec=10.0)
+    assert len(hits) == 1
+    assert hits[0].url == "https://two.example"
 
 
 def test_brave_success(monkeypatch: pytest.MonkeyPatch) -> None:
