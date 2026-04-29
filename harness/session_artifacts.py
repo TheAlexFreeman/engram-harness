@@ -113,8 +113,7 @@ def subagent_runs_section(runs: list[Any], *, heading: str = "Subagent runs") ->
             lines.append(f"  Task: {task!r}")
         if by_tool:
             tool_summary = ", ".join(
-                f"{name}({count})"
-                for name, count in sorted(by_tool.items(), key=lambda kv: -kv[1])
+                f"{name}({count})" for name, count in sorted(by_tool.items(), key=lambda kv: -kv[1])
             )
             lines.append(f"  Tools: {tool_summary}")
     lines.append("")

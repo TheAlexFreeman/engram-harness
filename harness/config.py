@@ -1115,15 +1115,11 @@ def _wire_subagent_spawn(
                     elif getattr(result, "stopped_by_loop_detection", False):
                         end_reason = "loop_detected"
                     elif getattr(result, "stopped_by_budget", False):
-                        end_reason = (
-                            getattr(result, "budget_reason", None) or "budget_exceeded"
-                        )
+                        end_reason = getattr(result, "budget_reason", None) or "budget_exceeded"
                     if end_reason is None:
                         sub_tracer.event("session_end", turns=result.turns_used)
                     else:
-                        sub_tracer.event(
-                            "session_end", turns=result.turns_used, reason=end_reason
-                        )
+                        sub_tracer.event("session_end", turns=result.turns_used, reason=end_reason)
                 except Exception:  # noqa: BLE001
                     pass
             try:
@@ -1139,9 +1135,7 @@ def _wire_subagent_spawn(
             parent_path = _parent_trace_path(parent_tracer)
             if parent_path is not None:
                 try:
-                    rel_trace_path = str(
-                        sub_trace_path.relative_to(parent_path.parent).as_posix()
-                    )
+                    rel_trace_path = str(sub_trace_path.relative_to(parent_path.parent).as_posix())
                 except ValueError:
                     rel_trace_path = str(sub_trace_path)
             else:
