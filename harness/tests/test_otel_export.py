@@ -409,6 +409,140 @@ def test_emit_span_error_status() -> None:
     assert str(span.status_code) == "ERROR"
 
 
+def test_export_session_spans_links_parent_to_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spans with a ``parent_span_id`` are emitted under the matching parent
+    span's OTel context, not the root context — the multi-pass emitter
+    threads the relationship through.
+    """
+    import json as _json
+
+    spans_file = tmp_path / "spans.jsonl"
+    spans_file.write_text(
+        "\n".join(
+            [
+                _json.dumps(
+                    {
+                        "span_id": "parent-aaa",
+                        "span_type": "agent_invocation",
+                        "name": "subagent-001",
+                        "status": "ok",
+                    }
+                ),
+                _json.dumps(
+                    {
+                        "span_id": "child-bbb",
+                        "parent_span_id": "parent-aaa",
+                        "span_type": "tool_call",
+                        "name": "read_file",
+                        "status": "ok",
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+    monkeypatch.delenv("OTEL_SAMPLE_RATE", raising=False)
+
+    captured_emits: list[tuple[dict, object]] = []
+
+    def fake_emit_span(_tracer, raw, parent_ctx, _common=None):  # noqa: ARG001
+        captured_emits.append((raw, parent_ctx))
+        return mock.MagicMock(name=f"emitted_{raw.get('span_id')}")
+
+    sentinel_root_ctx = mock.MagicMock(name="root_ctx")
+    sentinel_parent_ctx = mock.MagicMock(name="parent_ctx")
+
+    def fake_span_to_context(span):
+        # First call wraps the root span; subsequent calls wrap emitted spans.
+        nonlocal_count[0] += 1
+        if nonlocal_count[0] == 1:
+            return sentinel_root_ctx
+        return sentinel_parent_ctx
+
+    nonlocal_count = [0]
+
+    fake_provider = mock.MagicMock()
+    fake_provider.get_tracer.return_value = mock.MagicMock()
+
+    with (
+        mock.patch.object(otel_mod, "_OTEL_AVAILABLE", True),
+        mock.patch("harness.otel_export._start_span", return_value=mock.MagicMock()),
+        mock.patch("harness.otel_export._span_to_context", side_effect=fake_span_to_context),
+        mock.patch("harness.otel_export._build_root_context", return_value=mock.MagicMock()),
+        mock.patch("harness.otel_export._set_attr"),
+        mock.patch("harness.otel_export._emit_span", side_effect=fake_emit_span),
+        mock.patch.dict(
+            "sys.modules",
+            {
+                "opentelemetry.exporter.otlp.proto.http.trace_exporter": mock.MagicMock(
+                    OTLPSpanExporter=mock.MagicMock()
+                ),
+                "opentelemetry.sdk.resources": mock.MagicMock(Resource=mock.MagicMock()),
+                "opentelemetry.sdk.trace": mock.MagicMock(
+                    TracerProvider=mock.MagicMock(return_value=fake_provider)
+                ),
+                "opentelemetry.sdk.trace.export": mock.MagicMock(
+                    SimpleSpanProcessor=mock.MagicMock()
+                ),
+            },
+        ),
+    ):
+        result = export_session_spans(spans_file, session_id="ses-link")
+
+    assert result == 2
+    # First emission is the parent (no parent_span_id), under the root ctx.
+    parent_raw, parent_ctx_used = captured_emits[0]
+    assert parent_raw["span_id"] == "parent-aaa"
+    assert parent_ctx_used is sentinel_root_ctx
+
+    # Second emission is the child, threaded under the parent's recorded ctx.
+    child_raw, child_ctx_used = captured_emits[1]
+    assert child_raw["span_id"] == "child-bbb"
+    assert child_ctx_used is sentinel_parent_ctx
+
+
+def test_emit_span_agent_invocation_attributes() -> None:
+    """B1+ PR 2: subagent invocation spans use ``invoke_agent <name>`` and
+    populate gen_ai.agent attrs / token usage from the subagent_run event.
+    """
+    raw = {
+        "span_type": "agent_invocation",
+        "name": "subagent-001",
+        "status": "ok",
+        "timestamp": "2026-04-25T10:00:00",
+        "cost": {"usd": 0.0042},
+        "metadata": {
+            "task": "Find usages of the deprecated middleware",
+            "depth": 1,
+            "turns": 3,
+            "max_turns_reached": False,
+            "input_tokens": 800,
+            "output_tokens": 300,
+        },
+    }
+    common = _SpanCommonContext(
+        session_id="ses-parent",
+        agent_name="engram-harness",
+        gen_ai_provider_name="anthropic",
+        model="claude-sonnet-4-6",
+    )
+    span = _record_emit(raw, common)
+
+    assert span.name == "invoke_agent subagent-001"
+    assert span.attrs["gen_ai.operation.name"] == "invoke_agent"
+    # The agent.name on a nested invocation is the subagent identifier so
+    # the OTel consumer can distinguish parent from child.
+    assert span.attrs["gen_ai.agent.name"] == "subagent-001"
+    assert span.attrs["gen_ai.agent.description"].startswith(
+        "Find usages of the deprecated middleware"
+    )
+    assert span.attrs["gen_ai.usage.input_tokens"] == 800
+    assert span.attrs["gen_ai.usage.output_tokens"] == 300
+    assert span.attrs["gen_ai.usage.cost_usd"] == 0.0042
+
+
 # ---------------------------------------------------------------------------
 # export_session_spans threading the model + agent_name kwargs
 # ---------------------------------------------------------------------------

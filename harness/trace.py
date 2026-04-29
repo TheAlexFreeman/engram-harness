@@ -48,14 +48,46 @@ class Tracer:
         self.close()
 
 
+_QUIET_KINDS = frozenset(
+    {
+        "tool_call",
+        "tool_result",
+        "tool_dispatch",
+        "session_start",
+        "session_end",
+        "session_paused",
+        "session_resume",
+        "subagent_run",
+    }
+)
+
+
 class ConsoleTracePrinter:
     """Human-readable trace lines to stderr (``TraceSink``). Canonical log remains ``Tracer`` JSONL."""
 
     _TASK_MAX = 120
     _ARGS_JSON_MAX = 400
 
+    def __init__(self, *, prefix: str = "", quiet: bool = False) -> None:
+        """Configure stderr trace output.
+
+        ``prefix`` is prepended to every emitted line — used by the
+        subagent wiring to label nested events as ``  [subagent-NNN] …``
+        so the operator can tell parent and child apart at a glance.
+        ``quiet`` filters to a tight set of high-signal events (tool
+        calls, results, dispatch summaries, session boundaries). The
+        per-turn ``usage`` and ``model_response`` lines are dropped —
+        useful for subagent runs where the per-turn token accounting is
+        already captured in the JSONL trace and would just clutter the
+        terminal.
+        """
+        self._prefix = prefix
+        self._quiet = quiet
+
     def event(self, kind: str, **data: Any) -> None:
         if kind == "model_response":
+            return
+        if self._quiet and kind not in _QUIET_KINDS:
             return
         if kind == "session_start":
             task = str(data.get("task", ""))
@@ -147,6 +179,8 @@ class ConsoleTracePrinter:
         else:
             line = f"[trace] {kind} {data!r}"
 
+        if self._prefix:
+            line = "\n".join(f"{self._prefix}{seg}" for seg in line.split("\n"))
         print(line, file=sys.stderr, flush=True)
 
     def close(self) -> None:

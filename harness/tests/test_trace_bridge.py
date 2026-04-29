@@ -837,3 +837,412 @@ def test_run_trace_bridge_no_markers_unchanged(
     assert not (result.session_dir / "sub-001").is_dir()
     summary = result.summary_path.read_text(encoding="utf-8")
     assert "Sub-sessions" not in summary
+
+
+# ---------------------------------------------------------------------------
+# B1+ PR 2: nested subagent span linking
+# ---------------------------------------------------------------------------
+
+
+def _make_subagent_trace_events(
+    task: str = "subagent task",
+    *,
+    tools: list[str] | None = None,
+) -> list[dict]:
+    """Build a minimal subagent JSONL trace — session_start → tool_calls → session_end."""
+    if tools is None:
+        tools = ["read_file", "grep_workspace"]
+    ts = _now_iso()
+    events: list[dict] = [{"ts": ts, "kind": "session_start", "task": task}]
+    for i, name in enumerate(tools):
+        events.extend(
+            [
+                {"ts": ts, "kind": "model_response", "turn": i},
+                {
+                    "ts": ts,
+                    "kind": "tool_call",
+                    "name": name,
+                    "args": {"path": f"/tmp/{name}.md"},
+                    "turn": i,
+                    "seq": i,
+                },
+                {
+                    "ts": ts,
+                    "kind": "tool_result",
+                    "name": name,
+                    "is_error": False,
+                    "content_preview": "...",
+                    "seq": i,
+                },
+            ]
+        )
+    events.append(
+        {
+            "ts": ts,
+            "kind": "session_usage",
+            "input_tokens": 500,
+            "output_tokens": 200,
+            "total_cost_usd": 0.0042,
+        }
+    )
+    events.append({"ts": ts, "kind": "session_end", "turns": len(tools)})
+    return events
+
+
+def test_subagent_run_emits_invoke_agent_span_with_children(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """A parent trace with a subagent_run event referencing a sibling
+    subagent trace produces an ``agent_invocation`` span plus child
+    ``tool_call`` spans nested under it.
+    """
+    parent_trace = tmp_path / "trace.jsonl"
+    sub_trace = tmp_path / "trace.subagent-001.jsonl"
+    _write_trace(sub_trace, _make_subagent_trace_events(tools=["read_file", "grep_workspace"]))
+
+    ts = _now_iso()
+    parent_events = [
+        {"ts": ts, "kind": "session_start", "task": "delegated investigation"},
+        {"ts": ts, "kind": "model_response", "turn": 0},
+        {
+            "ts": ts,
+            "kind": "tool_call",
+            "name": "spawn_subagent",
+            "args": {"task": "find usages"},
+        },
+        {
+            "ts": ts,
+            "kind": "tool_result",
+            "name": "spawn_subagent",
+            "is_error": False,
+            "content_preview": "ok",
+        },
+        {
+            "ts": ts,
+            "kind": "subagent_run",
+            "depth": 1,
+            "seq": 1,
+            "task": "find usages",
+            "trace_path": "trace.subagent-001.jsonl",
+            "turns": 2,
+            "max_turns_reached": False,
+            "input_tokens": 500,
+            "output_tokens": 200,
+            "cost_usd": 0.0042,
+        },
+        {"ts": ts, "kind": "session_end", "turns": 1},
+    ]
+    _write_trace(parent_trace, parent_events)
+
+    result = run_trace_bridge(parent_trace, memory, commit=False)
+    spans = [
+        json.loads(line)
+        for line in result.spans_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+
+    invocation_spans = [s for s in spans if s.get("span_type") == "agent_invocation"]
+    assert len(invocation_spans) == 1
+    inv = invocation_spans[0]
+    assert inv["name"] == "subagent-001"
+    assert inv["metadata"]["task"] == "find usages"
+    assert inv["metadata"]["turns"] == 2
+    assert inv["metadata"]["max_turns_reached"] is False
+    assert inv["cost"]["usd"] == 0.0042
+
+    sub_span_id = inv["span_id"]
+    children = [s for s in spans if s.get("parent_span_id") == sub_span_id]
+    assert {s["name"] for s in children} == {"read_file", "grep_workspace"}
+    assert all(s["span_type"] == "tool_call" for s in children)
+
+
+def test_subagent_run_with_missing_trace_file_still_emits_parent_span(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """When the subagent's JSONL is missing or unreadable, the parent
+    invocation span is still emitted (graceful degradation) — only the
+    children are skipped.
+    """
+    parent_trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    parent_events = [
+        {"ts": ts, "kind": "session_start", "task": "delegated"},
+        {
+            "ts": ts,
+            "kind": "subagent_run",
+            "depth": 1,
+            "seq": 1,
+            "task": "missing",
+            "trace_path": "trace.subagent-001.jsonl",
+            "turns": 0,
+            "max_turns_reached": False,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+        },
+        {"ts": ts, "kind": "session_end", "turns": 1},
+    ]
+    _write_trace(parent_trace, parent_events)
+
+    result = run_trace_bridge(parent_trace, memory, commit=False)
+    spans = [
+        json.loads(line)
+        for line in result.spans_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    invocation_spans = [s for s in spans if s.get("span_type") == "agent_invocation"]
+    assert len(invocation_spans) == 1
+    children = [s for s in spans if s.get("parent_span_id") == invocation_spans[0]["span_id"]]
+    assert children == []
+
+
+def test_subagent_run_recurses_into_nested_subagents(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """A subagent trace that itself contains subagent_run events with
+    trace_path produces three levels of spans.
+    """
+    parent_trace = tmp_path / "trace.jsonl"
+    nested_trace = tmp_path / "trace.subagent-001.subagent-001.jsonl"
+    sub_trace = tmp_path / "trace.subagent-001.jsonl"
+
+    _write_trace(nested_trace, _make_subagent_trace_events(tools=["read_file"]))
+
+    ts = _now_iso()
+    sub_events = [
+        {"ts": ts, "kind": "session_start", "task": "outer subagent"},
+        {"ts": ts, "kind": "model_response", "turn": 0},
+        {
+            "ts": ts,
+            "kind": "tool_call",
+            "name": "grep_workspace",
+            "args": {"q": "x"},
+            "turn": 0,
+            "seq": 0,
+        },
+        {
+            "ts": ts,
+            "kind": "tool_result",
+            "name": "grep_workspace",
+            "is_error": False,
+            "seq": 0,
+        },
+        {
+            "ts": ts,
+            "kind": "subagent_run",
+            "depth": 2,
+            "seq": 1,
+            "task": "nested",
+            "trace_path": "trace.subagent-001.subagent-001.jsonl",
+            "turns": 1,
+            "max_turns_reached": False,
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cost_usd": 0.001,
+        },
+        {"ts": ts, "kind": "session_end", "turns": 1},
+    ]
+    _write_trace(sub_trace, sub_events)
+
+    parent_events = [
+        {"ts": ts, "kind": "session_start", "task": "top"},
+        {
+            "ts": ts,
+            "kind": "subagent_run",
+            "depth": 1,
+            "seq": 1,
+            "task": "outer",
+            "trace_path": "trace.subagent-001.jsonl",
+            "turns": 2,
+            "max_turns_reached": False,
+            "input_tokens": 600,
+            "output_tokens": 250,
+            "cost_usd": 0.005,
+        },
+        {"ts": ts, "kind": "session_end", "turns": 1},
+    ]
+    _write_trace(parent_trace, parent_events)
+
+    result = run_trace_bridge(parent_trace, memory, commit=False)
+    spans = [
+        json.loads(line)
+        for line in result.spans_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    invocation_spans = [s for s in spans if s.get("span_type") == "agent_invocation"]
+    # Two invocation spans: outer subagent + nested subagent.
+    assert len(invocation_spans) == 2
+    names = {s["name"] for s in invocation_spans}
+    assert names == {"subagent-001"}  # both seq=1, but at different depths
+
+    # The nested invocation's parent should be the outer invocation.
+    outer = next(s for s in invocation_spans if s["metadata"]["depth"] == 1)
+    nested = next(s for s in invocation_spans if s["metadata"]["depth"] == 2)
+    assert nested["parent_span_id"] == outer["span_id"]
+
+    # The nested subagent's child tool_call should hang off the nested
+    # invocation, not the outer one.
+    nested_children = [s for s in spans if s.get("parent_span_id") == nested["span_id"]]
+    assert {s["name"] for s in nested_children} == {"read_file"}
+
+
+# ---------------------------------------------------------------------------
+# B1+ PR 3: subagent runs in summary + reflection artifacts
+# ---------------------------------------------------------------------------
+
+
+def test_summary_includes_subagent_runs_section(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """The summary surfaces a Subagent runs section with task / turn / cost
+    breakdown for each delegated run, and the frontmatter exposes
+    subagent_count and subagent_total_cost_usd for downstream queries.
+    """
+    parent_trace = tmp_path / "trace.jsonl"
+    sub_trace = tmp_path / "trace.subagent-001.jsonl"
+    _write_trace(sub_trace, _make_subagent_trace_events(tools=["read_file", "grep_workspace"]))
+
+    ts = _now_iso()
+    parent_events = [
+        {"ts": ts, "kind": "session_start", "task": "delegated"},
+        {
+            "ts": ts,
+            "kind": "subagent_run",
+            "depth": 1,
+            "seq": 1,
+            "task": "Find usages of deprecated middleware",
+            "trace_path": "trace.subagent-001.jsonl",
+            "turns": 2,
+            "max_turns_reached": False,
+            "input_tokens": 500,
+            "output_tokens": 200,
+            "cost_usd": 0.0042,
+        },
+        {"ts": ts, "kind": "session_end", "turns": 1},
+    ]
+    _write_trace(parent_trace, parent_events)
+
+    result = run_trace_bridge(parent_trace, memory, commit=False)
+    summary = result.summary_path.read_text(encoding="utf-8")
+    assert "## Subagent runs" in summary
+    assert "subagent-001" in summary
+    assert "Find usages of deprecated middleware" in summary
+    assert "read_file" in summary
+    assert "grep_workspace" in summary
+    # Frontmatter exposes the aggregate count + cost.
+    assert "subagent_count: 1" in summary
+    assert "subagent_total_cost_usd: 0.0042" in summary
+
+
+def test_summary_omits_subagent_section_when_no_runs(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """Sessions without subagent_run events are unchanged — no Subagent runs
+    section, no subagent_count frontmatter (regression guard).
+    """
+    parent_trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    events = [
+        {"ts": ts, "kind": "session_start", "task": "no subagents"},
+        {"ts": ts, "kind": "session_end", "turns": 0},
+    ]
+    _write_trace(parent_trace, events)
+
+    result = run_trace_bridge(parent_trace, memory, commit=False)
+    summary = result.summary_path.read_text(encoding="utf-8")
+    assert "Subagent runs" not in summary
+    assert "subagent_count" not in summary
+
+
+def test_reflection_flags_max_turns_subagent(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """When a subagent hit max_turns, the reflection's Gaps section calls it
+    out so future delegations can be scoped tighter.
+    """
+    parent_trace = tmp_path / "trace.jsonl"
+    sub_trace = tmp_path / "trace.subagent-001.jsonl"
+    _write_trace(sub_trace, _make_subagent_trace_events(tools=["read_file"]))
+    ts = _now_iso()
+    parent_events = [
+        {"ts": ts, "kind": "session_start", "task": "broad task"},
+        {
+            "ts": ts,
+            "kind": "subagent_run",
+            "depth": 1,
+            "seq": 1,
+            "task": "boil the ocean",
+            "trace_path": "trace.subagent-001.jsonl",
+            "turns": 15,
+            "max_turns_reached": True,
+            "input_tokens": 2000,
+            "output_tokens": 800,
+            "cost_usd": 0.012,
+        },
+        {"ts": ts, "kind": "session_end", "turns": 1},
+    ]
+    _write_trace(parent_trace, parent_events)
+
+    result = run_trace_bridge(parent_trace, memory, commit=False)
+    reflection = result.reflection_path.read_text(encoding="utf-8")
+    assert "subagent-001 hit max_turns" in reflection
+    # And the Subagent delegations section is rendered too.
+    assert "## Subagent delegations" in reflection
+
+
+def test_reflection_flags_high_subagent_error_rate(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """Subagents whose >30% of tool calls error get flagged in the reflection."""
+    parent_trace = tmp_path / "trace.jsonl"
+    sub_trace = tmp_path / "trace.subagent-001.jsonl"
+    ts = _now_iso()
+    # 5 tool calls, 3 errors → 60% error rate.
+    sub_events: list[dict] = [{"ts": ts, "kind": "session_start", "task": "noisy sub"}]
+    for i in range(5):
+        sub_events.extend(
+            [
+                {"ts": ts, "kind": "model_response", "turn": i},
+                {
+                    "ts": ts,
+                    "kind": "tool_call",
+                    "name": "read_file",
+                    "args": {},
+                    "turn": i,
+                    "seq": i,
+                },
+                {
+                    "ts": ts,
+                    "kind": "tool_result",
+                    "name": "read_file",
+                    "is_error": i < 3,  # first 3 error
+                    "seq": i,
+                },
+            ]
+        )
+    sub_events.append({"ts": ts, "kind": "session_end", "turns": 5})
+    _write_trace(sub_trace, sub_events)
+
+    parent_events = [
+        {"ts": ts, "kind": "session_start", "task": "delegated"},
+        {
+            "ts": ts,
+            "kind": "subagent_run",
+            "depth": 1,
+            "seq": 1,
+            "task": "do stuff",
+            "trace_path": "trace.subagent-001.jsonl",
+            "turns": 5,
+            "max_turns_reached": False,
+            "input_tokens": 200,
+            "output_tokens": 80,
+            "cost_usd": 0.001,
+        },
+        {"ts": ts, "kind": "session_end", "turns": 1},
+    ]
+    _write_trace(parent_trace, parent_events)
+
+    result = run_trace_bridge(parent_trace, memory, commit=False)
+    reflection = result.reflection_path.read_text(encoding="utf-8")
+    assert "high tool-error rate" in reflection
+    assert "subagent-001" in reflection

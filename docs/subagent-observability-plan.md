@@ -1,6 +1,6 @@
 ---
 title: "B1+: Subagent Observability"
-status: draft
+status: shipped (PRs 1–4)
 audience: project maintainers + contributors
 parent: improvement-plans-2026.md (Theme B — Agent loop)
 last_updated: 2026-04-28
@@ -13,15 +13,19 @@ runs with a `NullTraceSink` and returns only a final text summary — the
 parent session has no visibility into what the subagent actually did. This
 plan adds four layers of increasing detail:
 
-1. **Trace capture.** Write the subagent's internal events to a real JSONL
-   trace file alongside the parent's.
-2. **Nested span linking.** Teach the trace bridge to read subagent trace
-   files and emit their tool calls as child spans under a subagent
-   invocation span.
-3. **Session artifact integration.** Surface subagent activity in the
-   parent session's summary and reflection artifacts.
-4. **Live console visibility.** Stream subagent tool calls to the terminal
-   in real time with a `[subagent]` prefix during interactive sessions.
+1. **Trace capture.** ✅ shipped. Subagents write JSONL traces alongside
+   the parent's; the parent's `subagent_run` event carries `seq`, `task`,
+   and `trace_path`.
+2. **Nested span linking.** ✅ shipped. `_build_spans` emits
+   `agent_invocation` spans plus child `tool_call` spans loaded from
+   sibling subagent traces; the OTel exporter threads parent-child via a
+   multi-pass emit using `parent_span_id`.
+3. **Session artifact integration.** ✅ shipped. `_SubagentStats` plus
+   `subagent_runs_section` render a per-subagent breakdown into
+   `summary.md`; reflection flags max-turns hits and high error rates.
+4. **Live console visibility.** ✅ shipped. `ConsoleTracePrinter` gained
+   `prefix` and `quiet` knobs; `_wire_subagent_spawn` adds a prefixed
+   quiet console child when the parent runs interactively.
 
 Together these turn subagent runs from opaque function calls into fully
 observable nested agent invocations — debuggable after the fact, visible
