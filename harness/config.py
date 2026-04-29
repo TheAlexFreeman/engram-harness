@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import threading
@@ -903,6 +904,49 @@ def _parent_has_console_printer(parent_tracer: Any) -> bool:
     return False
 
 
+def _max_existing_subagent_seq(trace_path: Path | None) -> int:
+    """Return the highest ``seq`` already recorded in the parent trace.
+
+    ``harness resume`` reopens a paused session's existing trace file and
+    appends to it. New subagent spawns must continue numbering after any
+    that ran before the pause, otherwise the post-resume run would emit
+    ``seq=1`` again and collide with the original
+    ``ACTIONS.*.subagent-001.jsonl`` file (and its span/summary IDs).
+
+    Fresh sessions have an empty trace file (``_derive_trace_path`` writes
+    ``""``), so this returns 0.
+    """
+    if trace_path is None:
+        return 0
+    try:
+        if not trace_path.is_file():
+            return 0
+    except OSError:
+        return 0
+    max_seq = 0
+    try:
+        with trace_path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or "subagent_run" not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("kind") != "subagent_run":
+                    continue
+                try:
+                    seq = int(rec.get("seq", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if seq > max_seq:
+                    max_seq = seq
+    except OSError:
+        return max_seq
+    return max_seq
+
+
 def _derive_subagent_trace_path(parent_tracer: Any, seq: int) -> Path | None:
     """Return ``<session_dir>/<stem>.subagent-NNN.jsonl`` next to the parent.
 
@@ -965,7 +1009,13 @@ def _wire_subagent_spawn(
     from harness.trace import Tracer
 
     parent_tools = tools
-    spawn_seq = 0
+    # Resume continuity: when ``harness resume`` reopens an existing trace,
+    # any subagent_run events already in it must not have their seq reused
+    # — the existing files would be overwritten and span/summary IDs would
+    # collide. Seed the counter from the highest seq found in the parent
+    # trace; fresh sessions start at 0 (file is empty after
+    # ``_derive_trace_path`` truncates).
+    spawn_seq = _max_existing_subagent_seq(_parent_trace_path(parent_tracer))
     spawn_seq_lock = threading.Lock()
     live_console = _parent_has_console_printer(parent_tracer)
 
