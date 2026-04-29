@@ -25,7 +25,9 @@ class BrowserbaseBackend:
     """
 
     def __init__(self, api_key: str | None = None):
-        key = (api_key if api_key is not None else os.environ.get("BROWSERBASE_API_KEY", "")).strip()
+        key = (
+            api_key if api_key is not None else os.environ.get("BROWSERBASE_API_KEY", "")
+        ).strip()
         if not key:
             raise ValueError(
                 "Browserbase search requires BROWSERBASE_API_KEY in the environment "
