@@ -223,9 +223,7 @@ def test_web_fetch_clamps_timeout() -> None:
 
 def test_web_fetch_truncates_large_body() -> None:
     huge = "x" * 200_000
-    backend = StaticBackend(
-        {"statusCode": 200, "contentType": "text/plain", "content": huge}
-    )
+    backend = StaticBackend({"statusCode": 200, "contentType": "text/plain", "content": huge})
     out = WebFetch(backend).run({"url": "https://example.com"})
     assert "[output truncated" in out
 
@@ -253,3 +251,123 @@ def test_web_fetch_marked_untrusted_output() -> None:
     # them in <untrusted_tool_output>. Verify the tool flag is set.
     assert WebFetch.untrusted_output is True
     assert WebFetch.mutates is False
+
+
+# --- explicit boolean parsing ----------------------------------------------
+#
+# bool("false") is True, so naive coercion can silently flip use_proxy on
+# (real money) when an LLM formats the arg as a string. These tests pin the
+# explicit-parsing contract.
+
+
+def test_web_fetch_string_false_does_not_enable_proxy() -> None:
+    backend = StaticBackend({"statusCode": 200, "contentType": "text/plain", "content": "ok"})
+    WebFetch(backend).run({"url": "https://example.com", "use_proxy": "false"})
+    assert backend.last_call is not None
+    assert backend.last_call["use_proxy"] is False
+
+
+def test_web_fetch_string_true_enables_proxy() -> None:
+    backend = StaticBackend({"statusCode": 200, "contentType": "text/plain", "content": "ok"})
+    WebFetch(backend).run({"url": "https://example.com", "use_proxy": "true"})
+    assert backend.last_call is not None
+    assert backend.last_call["use_proxy"] is True
+
+
+def test_web_fetch_string_off_disables_redirects() -> None:
+    backend = StaticBackend({"statusCode": 200, "contentType": "text/plain", "content": "ok"})
+    WebFetch(backend).run({"url": "https://example.com", "follow_redirects": "off"})
+    assert backend.last_call is not None
+    assert backend.last_call["follow_redirects"] is False
+
+
+def test_web_fetch_invalid_bool_string_raises() -> None:
+    backend = StaticBackend({"statusCode": 200, "contentType": "text/plain", "content": "ok"})
+    with pytest.raises(ValueError, match="use_proxy must be a boolean"):
+        WebFetch(backend).run({"url": "https://example.com", "use_proxy": "maybe"})
+
+
+def test_web_fetch_int_zero_is_false() -> None:
+    backend = StaticBackend({"statusCode": 200, "contentType": "text/plain", "content": "ok"})
+    WebFetch(backend).run({"url": "https://example.com", "use_proxy": 0})
+    assert backend.last_call is not None
+    assert backend.last_call["use_proxy"] is False
+
+
+def test_web_fetch_int_one_is_true() -> None:
+    backend = StaticBackend({"statusCode": 200, "contentType": "text/plain", "content": "ok"})
+    WebFetch(backend).run({"url": "https://example.com", "use_proxy": 1})
+    assert backend.last_call is not None
+    assert backend.last_call["use_proxy"] is True
+
+
+# --- base64 binary handling -------------------------------------------------
+
+
+def test_web_fetch_base64_binary_returns_summary_not_blob() -> None:
+    import base64
+
+    blob = b"\x89PNG\r\n\x1a\n" + (b"\x00" * 4096)  # plausible PNG-ish bytes
+    backend = StaticBackend(
+        {
+            "statusCode": 200,
+            "contentType": "image/png",
+            "encoding": "base64",
+            "content": base64.b64encode(blob).decode("ascii"),
+        }
+    )
+    out = WebFetch(backend).run({"url": "https://example.com/img.png"})
+    assert "binary content" in out.lower()
+    assert "image/png" in out
+    assert f"{len(blob)} bytes" in out
+    # Must not leak the base64 blob into the output.
+    assert base64.b64encode(blob).decode("ascii")[:64] not in out
+
+
+def test_web_fetch_base64_text_content_decoded() -> None:
+    import base64
+
+    html = "<html><head><title>B64</title></head><body><p>encoded</p></body></html>"
+    backend = StaticBackend(
+        {
+            "statusCode": 200,
+            "contentType": "text/html; charset=utf-8",
+            "encoding": "base64",
+            "content": base64.b64encode(html.encode("utf-8")).decode("ascii"),
+        }
+    )
+    out = WebFetch(backend).run({"url": "https://example.com"})
+    assert "Title: B64" in out
+    assert "encoded" in out
+    assert "binary content" not in out.lower()
+
+
+def test_web_fetch_base64_text_returns_raw_html_when_format_html() -> None:
+    import base64
+
+    html = "<p>raw markup</p>"
+    backend = StaticBackend(
+        {
+            "statusCode": 200,
+            "contentType": "text/html",
+            "encoding": "base64",
+            "content": base64.b64encode(html.encode("utf-8")).decode("ascii"),
+        }
+    )
+    out = WebFetch(backend).run({"url": "https://example.com", "format": "html"})
+    assert "<p>raw markup</p>" in out
+
+
+def test_web_fetch_invalid_base64_falls_through_to_summary() -> None:
+    backend = StaticBackend(
+        {
+            "statusCode": 200,
+            "contentType": "application/octet-stream",
+            "encoding": "base64",
+            "content": "not_valid_base64!!!@@",
+        }
+    )
+    out = WebFetch(backend).run({"url": "https://example.com"})
+    # Non-text content-type → summary, not the unparsed blob.
+    assert "binary content" in out.lower()
+    assert "application/octet-stream" in out

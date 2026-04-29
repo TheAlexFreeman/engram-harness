@@ -23,6 +23,8 @@ Limits (enforced by Browserbase):
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 from html.parser import HTMLParser
@@ -50,6 +52,69 @@ def _parse_json(resp: httpx.Response) -> Any:
     except json.JSONDecodeError as e:
         preview = (resp.text or "")[:300]
         raise ValueError(f"Browserbase fetch returned non-JSON response: {preview}") from e
+
+
+# ---- arg parsing -----------------------------------------------------------
+#
+# Tool args come from the model and are not type-validated by the dispatch
+# boundary beyond required-key checks. ``bool("false")`` is ``True`` in
+# Python, which would silently flip ``use_proxy`` on (real money) when an
+# LLM happens to format the arg as a string. Parse explicitly.
+
+_TRUE_LITERALS = frozenset({"true", "1", "yes", "y", "on"})
+_FALSE_LITERALS = frozenset({"false", "0", "no", "n", "off"})
+
+
+def _parse_bool(value: Any, *, field: str, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in _TRUE_LITERALS:
+            return True
+        if v in _FALSE_LITERALS:
+            return False
+    raise ValueError(f"{field} must be a boolean (true/false). Got {value!r}.")
+
+
+# ---- content-type & binary handling ----------------------------------------
+#
+# Browserbase returns either a UTF-8 string or base64-encoded bytes,
+# signalled by the ``encoding`` field. For binary content (PDFs, images,
+# zips) returning the base64 blob would burn the whole context for no
+# usable signal — render a short summary instead. Decode-and-render is
+# only attempted when the Content-Type indicates text-shaped data.
+
+_TEXTUAL_CONTENT_PREFIXES = ("text/",)
+_TEXTUAL_CONTENT_TYPES = frozenset(
+    {
+        "application/json",
+        "application/xml",
+        "application/xhtml+xml",
+        "application/javascript",
+        "application/x-javascript",
+        "application/ecmascript",
+        "application/ld+json",
+        "application/x-www-form-urlencoded",
+    }
+)
+
+
+def _is_textual_content_type(content_type: str) -> bool:
+    ct = content_type.lower().split(";", 1)[0].strip()
+    if not ct:
+        return False
+    if any(ct.startswith(p) for p in _TEXTUAL_CONTENT_PREFIXES):
+        return True
+    if ct in _TEXTUAL_CONTENT_TYPES:
+        return True
+    return ct.endswith("+json") or ct.endswith("+xml")
+
+
 _MAX_OUTPUT_CHARS = 80_000
 _DEFAULT_TIMEOUT = 15.0
 _MIN_TIMEOUT = 5.0
@@ -60,7 +125,9 @@ class BrowserbaseFetchBackend:
     """Thin httpx wrapper around Browserbase POST /v1/fetch."""
 
     def __init__(self, api_key: str | None = None):
-        key = (api_key if api_key is not None else os.environ.get("BROWSERBASE_API_KEY", "")).strip()
+        key = (
+            api_key if api_key is not None else os.environ.get("BROWSERBASE_API_KEY", "")
+        ).strip()
         if not key:
             raise ValueError(
                 "Browserbase fetch requires BROWSERBASE_API_KEY in the environment "
@@ -91,7 +158,9 @@ class BrowserbaseFetchBackend:
         _raise_for_status(resp)
         data = _parse_json(resp)
         if not isinstance(data, dict):
-            raise ValueError(f"Browserbase fetch returned unexpected payload: {type(data).__name__}")
+            raise ValueError(
+                f"Browserbase fetch returned unexpected payload: {type(data).__name__}"
+            )
         return data
 
 
@@ -128,9 +197,27 @@ def _load_backend_from_env() -> BrowserbaseFetchBackend | _NoOpFetchBackend:
 
 _BLOCK_TAGS = frozenset(
     {
-        "p", "div", "section", "article", "header", "footer", "main", "aside",
-        "nav", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr", "br", "hr",
-        "blockquote", "pre",
+        "p",
+        "div",
+        "section",
+        "article",
+        "header",
+        "footer",
+        "main",
+        "aside",
+        "nav",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "li",
+        "tr",
+        "br",
+        "hr",
+        "blockquote",
+        "pre",
     }
 )
 _SKIP_TAGS = frozenset({"script", "style", "noscript", "template"})
@@ -285,8 +372,10 @@ class WebFetch:
         if fmt not in ("text", "html"):
             raise ValueError("format must be 'text' or 'html'")
 
-        follow_redirects = bool(args.get("follow_redirects", True))
-        use_proxy = bool(args.get("use_proxy", False))
+        follow_redirects = _parse_bool(
+            args.get("follow_redirects"), field="follow_redirects", default=True
+        )
+        use_proxy = _parse_bool(args.get("use_proxy"), field="use_proxy", default=False)
 
         raw_timeout = args.get("timeout_sec", _DEFAULT_TIMEOUT)
         try:
@@ -304,9 +393,41 @@ class WebFetch:
 
         status = result.get("statusCode")
         content_type = (result.get("contentType") or "").strip()
-        content = result.get("content") or ""
-        if not isinstance(content, str):
-            content = str(content)
+        encoding = (result.get("encoding") or "").strip().lower()
+        raw_content = result.get("content") or ""
+        if not isinstance(raw_content, str):
+            raw_content = str(raw_content)
+
+        header_lines = [
+            f"URL: {url}",
+            f"Status: {status}" if status is not None else "Status: (unknown)",
+        ]
+        if content_type:
+            header_lines.append(f"Content-Type: {content_type}")
+
+        # Binary path: Browserbase signals binary payloads with encoding=base64.
+        # Returning the blob verbatim would burn the entire context for no
+        # usable signal, so render a short summary unless the content-type
+        # says the bytes are actually text.
+        if encoding == "base64":
+            try:
+                decoded_bytes = base64.b64decode(raw_content, validate=False)
+            except (binascii.Error, ValueError):
+                decoded_bytes = None
+
+            if decoded_bytes is not None and _is_textual_content_type(content_type):
+                content = decoded_bytes.decode("utf-8", errors="replace")
+            else:
+                size = len(decoded_bytes) if decoded_bytes is not None else len(raw_content)
+                kind = content_type or "(unknown)"
+                summary = (
+                    f"(binary content, {size} bytes, Content-Type: {kind} — "
+                    "not displayed; use a different tool to download or inspect)"
+                )
+                header = "\n".join(header_lines)
+                return f"{header}\n\n{summary}\n"
+        else:
+            content = raw_content
 
         title = ""
         body = content
@@ -318,12 +439,6 @@ class WebFetch:
             if stripped_body and ("<" in content and ">" in content):
                 title, body = stripped_title, stripped_body
 
-        header_lines = [
-            f"URL: {url}",
-            f"Status: {status}" if status is not None else "Status: (unknown)",
-        ]
-        if content_type:
-            header_lines.append(f"Content-Type: {content_type}")
         if title:
             header_lines.append(f"Title: {title}")
         header = "\n".join(header_lines)
