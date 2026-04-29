@@ -244,7 +244,12 @@ class SpawnSubagent:
                 depth=self.current_depth + 1,
             )
 
-        if self._lanes is None:
+        # Nested calls (current_depth > 0) bypass the lane: the outer
+        # subagent already holds a Lane.SUBAGENT slot synchronously and
+        # would self-deadlock if the nested child tried to acquire a
+        # second slot from the same thread (lane acquisition is
+        # non-reentrant). One subagent task tree = one lane slot.
+        if self._lanes is None or self.current_depth > 0:
             sub_result = _do_spawn()
         else:
             sub_result = self._lanes.submit(
@@ -442,12 +447,19 @@ class SpawnSubagents:
                 )
 
             try:
-                results[idx] = self._lanes.submit(
-                    Lane.SUBAGENT,
-                    _do_spawn,
-                    parent_run_id=self._parent_run_id,
-                    tracer=self._tracer,
-                )
+                # Nested batch dispatch (current_depth > 0) bypasses the
+                # lane for the same self-deadlock reason as the singular
+                # tool — the outer subagent's slot already accounts for
+                # the whole subtree.
+                if self.current_depth > 0:
+                    results[idx] = _do_spawn()
+                else:
+                    results[idx] = self._lanes.submit(
+                        Lane.SUBAGENT,
+                        _do_spawn,
+                        parent_run_id=self._parent_run_id,
+                        tracer=self._tracer,
+                    )
             except BaseException as exc:  # noqa: BLE001
                 results[idx] = exc
                 if fail_fast:

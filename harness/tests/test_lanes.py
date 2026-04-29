@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from harness.lanes import Lane, LaneCaps, LaneRegistry
+from harness.lanes import Lane, LaneCaps, LaneRegistry, lane_cap_from_env
 
 
 class _CollectingTracer:
@@ -197,3 +197,41 @@ def test_slots_in_use_gauge_round_trips() -> None:
     can_finish.set()
     t.join(timeout=2.0)
     assert r.slots_in_use(Lane.SUBAGENT) == 0
+
+
+# ---------------------------------------------------------------------------
+# lane_cap_from_env — defensive parsing for server / deployment configs
+# ---------------------------------------------------------------------------
+
+
+def test_lane_cap_from_env_returns_default_when_unset(monkeypatch) -> None:
+    monkeypatch.delenv("HARNESS_TEST_CAP", raising=False)
+    assert lane_cap_from_env("HARNESS_TEST_CAP", 4) == 4
+
+
+def test_lane_cap_from_env_returns_default_on_blank(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_TEST_CAP", "   ")
+    assert lane_cap_from_env("HARNESS_TEST_CAP", 4) == 4
+
+
+def test_lane_cap_from_env_parses_valid_integer(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_TEST_CAP", "12")
+    assert lane_cap_from_env("HARNESS_TEST_CAP", 4) == 12
+
+
+def test_lane_cap_from_env_falls_back_on_non_integer(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_TEST_CAP", "garbage")
+    assert lane_cap_from_env("HARNESS_TEST_CAP", 7) == 7
+
+
+def test_lane_cap_from_env_falls_back_on_zero(monkeypatch) -> None:
+    """A zero cap would create a BoundedSemaphore(0) that blocks every
+    submission forever — fall back to the default instead.
+    """
+    monkeypatch.setenv("HARNESS_TEST_CAP", "0")
+    assert lane_cap_from_env("HARNESS_TEST_CAP", 4) == 4
+
+
+def test_lane_cap_from_env_falls_back_on_negative(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_TEST_CAP", "-3")
+    assert lane_cap_from_env("HARNESS_TEST_CAP", 4) == 4

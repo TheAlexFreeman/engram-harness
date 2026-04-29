@@ -253,3 +253,103 @@ def test_spawn_subagents_depth_limit_enforced() -> None:
     tool = SpawnSubagents(lambda **_: _result(), lanes=r, current_depth=2, max_depth=2)
     with pytest.raises(ValueError, match="depth limit"):
         tool.run({"tasks": [{"task": "x"}]})
+
+
+# ---------------------------------------------------------------------------
+# Nested-call deadlock prevention
+# ---------------------------------------------------------------------------
+
+
+def test_nested_spawn_subagent_bypasses_lane() -> None:
+    """A SpawnSubagent invoked from inside another subagent's run
+    (current_depth > 0) must NOT route through the lane semaphore —
+    the outer subagent already holds a slot for the whole subtree, so
+    a nested submit on a saturated cap=1 lane would self-deadlock.
+    """
+    r = LaneRegistry(LaneCaps(main=4, subagent=1))
+
+    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+        return _result(text=f"nested-result:{task}")
+
+    nested = SpawnSubagent(spawn, lanes=r, current_depth=1, max_depth=2)
+
+    # Pretend the outer subagent already holds the only slot. Without
+    # the bypass, this run() call would block forever waiting for the
+    # cap-1 lane.
+    holder_done = threading.Event()
+
+    def hold_outer_slot() -> None:
+        holder_done.wait(timeout=2.0)
+
+    outer_thread = threading.Thread(target=lambda: r.submit(Lane.SUBAGENT, hold_outer_slot))
+    outer_thread.start()
+    # Wait until outer has acquired the slot.
+    deadline = time.monotonic() + 1.0
+    while r.slots_in_use(Lane.SUBAGENT) < 1 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert r.slots_in_use(Lane.SUBAGENT) == 1
+
+    # Nested call must complete without acquiring a slot.
+    nested_done = threading.Event()
+    nested_result_box: list[str] = []
+
+    def call_nested() -> None:
+        nested_result_box.append(nested.run({"task": "deep"}))
+        nested_done.set()
+
+    inner_thread = threading.Thread(target=call_nested)
+    inner_thread.start()
+    assert nested_done.wait(timeout=1.0), (
+        "nested SpawnSubagent.run blocked on a saturated lane — "
+        "the bypass for current_depth > 0 is not in effect"
+    )
+    assert "nested-result:deep" in nested_result_box[0]
+
+    holder_done.set()
+    outer_thread.join(timeout=2.0)
+    inner_thread.join(timeout=2.0)
+
+
+def test_nested_spawn_subagents_bypasses_lane() -> None:
+    """Same bypass for the batch tool: a nested ``spawn_subagents``
+    must not deadlock when the parent already holds the slot.
+    """
+    r = LaneRegistry(LaneCaps(main=4, subagent=1))
+
+    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+        return _result(text=f"ok:{task}")
+
+    nested = SpawnSubagents(spawn, lanes=r, current_depth=1, max_depth=2)
+
+    holder_done = threading.Event()
+
+    def hold_outer_slot() -> None:
+        holder_done.wait(timeout=2.0)
+
+    outer_thread = threading.Thread(target=lambda: r.submit(Lane.SUBAGENT, hold_outer_slot))
+    outer_thread.start()
+    deadline = time.monotonic() + 1.0
+    while r.slots_in_use(Lane.SUBAGENT) < 1 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert r.slots_in_use(Lane.SUBAGENT) == 1
+
+    done = threading.Event()
+    result_box: list[str] = []
+
+    def call_nested() -> None:
+        result_box.append(nested.run({"tasks": [{"task": "a"}, {"task": "b"}]}))
+        done.set()
+
+    inner_thread = threading.Thread(target=call_nested)
+    inner_thread.start()
+    assert done.wait(timeout=1.0), (
+        "nested SpawnSubagents.run blocked on a saturated lane — "
+        "the bypass for current_depth > 0 is not in effect"
+    )
+    assert "ok=2" in result_box[0]
+    assert "ok:a" in result_box[0]
+    assert "ok:b" in result_box[0]
+
+    holder_done.set()
+    outer_thread.join(timeout=2.0)
+    inner_thread.join(timeout=2.0)

@@ -35,6 +35,7 @@ becomes a real multi-tenant gateway.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 import uuid
@@ -43,6 +44,28 @@ from enum import Enum
 from typing import Any, Callable, TypeVar
 
 T = TypeVar("T")
+
+
+def lane_cap_from_env(env_var: str, default: int = 4, *, min_value: int = 1) -> int:
+    """Parse a lane cap from an environment variable.
+
+    Falls back to ``default`` for missing, blank, non-integer, or
+    sub-``min_value`` values. The fallback is intentional: server-side
+    deployments configured via env vars should be robust to common
+    misconfiguration rather than crash at session-creation time.
+    A zero-or-negative cap would otherwise silently disable the lane
+    (the underlying ``BoundedSemaphore(0)`` blocks every submission).
+    """
+    raw = os.environ.get(env_var)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        val = int(raw)
+    except ValueError:
+        return default
+    if val < min_value:
+        return default
+    return val
 
 
 class Lane(str, Enum):
@@ -194,4 +217,5 @@ __all__ = [
     "Lane",
     "LaneCaps",
     "LaneRegistry",
+    "lane_cap_from_env",
 ]

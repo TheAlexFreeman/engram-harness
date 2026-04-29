@@ -238,14 +238,20 @@ _lanes_lock = threading.Lock()
 
 
 def _get_lanes():
-    """Return the process-wide LaneRegistry, creating it on first call."""
-    from harness.lanes import LaneCaps, LaneRegistry
+    """Return the process-wide LaneRegistry, creating it on first call.
+
+    Caps are sourced from ``HARNESS_LANE_CAP_MAIN`` /
+    ``HARNESS_LANE_CAP_SUBAGENT`` via ``lane_cap_from_env``, which
+    silently falls back to the default (4) on missing, non-integer,
+    or sub-1 values — server boot must not be fragile to env typos.
+    """
+    from harness.lanes import LaneCaps, LaneRegistry, lane_cap_from_env
 
     global _lanes_registry
     with _lanes_lock:
         if _lanes_registry is None:
-            main = int(os.environ.get("HARNESS_LANE_CAP_MAIN", "4"))
-            sub = int(os.environ.get("HARNESS_LANE_CAP_SUBAGENT", "4"))
+            main = lane_cap_from_env("HARNESS_LANE_CAP_MAIN", 4)
+            sub = lane_cap_from_env("HARNESS_LANE_CAP_SUBAGENT", 4)
             _lanes_registry = LaneRegistry(LaneCaps(main=main, subagent=sub))
         return _lanes_registry
 
