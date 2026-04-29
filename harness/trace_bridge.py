@@ -35,6 +35,7 @@ from harness.engram_schema import (
 from harness.session_artifacts import (
     buffered_records_section,
     recall_events_section,
+    subagent_runs_section,
     trace_events_section,
 )
 
@@ -72,6 +73,30 @@ class _ToolCall:
 
 
 @dataclass
+class _SubagentStats:
+    """Per-subagent aggregate stats, derived from the parent's
+    ``subagent_run`` event plus (optionally) the subagent's own JSONL trace.
+
+    Populated by the trace bridge after PR 1 lands a per-spawn trace file
+    and a parent ``subagent_run`` event with ``seq``, ``task``, and
+    ``trace_path``. Used for the summary "Subagent runs" section and the
+    reflection prompt's delegation-quality nudges.
+    """
+
+    seq: int = 0
+    task: str = ""
+    depth: int = 1
+    turns: int = 0
+    tool_call_count: int = 0
+    error_count: int = 0
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    max_turns_reached: bool = False
+    by_tool: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
 class _SessionStats:
     task: str = ""
     turns: int = 0
@@ -90,6 +115,7 @@ class _SessionStats:
     # turn number → total cost for that turn (from "usage" events)
     turn_costs: dict[int, float] = field(default_factory=dict)
     pattern_diagnostics: list[dict[str, Any]] = field(default_factory=list)
+    subagent_runs: list[_SubagentStats] = field(default_factory=list)
 
 
 @dataclass
@@ -165,6 +191,7 @@ def run_trace_bridge(
 
     events = list(_read_events(trace_path))
     stats = _aggregate_stats(events)
+    _populate_subagent_runs(events, stats, trace_path=trace_path)
 
     snapshot = memory.session_snapshot()
     session_dir_rel = snapshot.session_dir_rel
@@ -203,7 +230,7 @@ def run_trace_bridge(
     _write_artifact(reflection_path, reflection_text)
     written.append(_relpath(memory, reflection_path))
 
-    spans = _build_spans(snapshot, tool_calls, events, stats)
+    spans = _build_spans(snapshot, tool_calls, events, stats, trace_path=trace_path)
     _write_jsonl(spans_path, spans)
     written.append(_relpath(memory, spans_path))
 
@@ -547,6 +574,9 @@ def _render_summary(
     fm["retrievals"] = len(memory.recall_events)
     if sub_sessions:
         fm["sub_sessions"] = sub_sessions
+    if stats.subagent_runs:
+        fm["subagent_count"] = len(stats.subagent_runs)
+        fm["subagent_total_cost_usd"] = round(sum(s.cost_usd for s in stats.subagent_runs), 4)
 
     body_lines = [
         f"# Session {memory.session_id}",
@@ -589,6 +619,8 @@ def _render_summary(
             err_marker = f" ({errors} err)" if errors else ""
             body_lines.append(f"- `{name}`: {count}{err_marker}")
         body_lines.append("")
+
+    body_lines.extend(subagent_runs_section(stats.subagent_runs))
 
     notable = _notable_calls(calls)
     if notable:
@@ -687,6 +719,21 @@ def _render_reflection(
                 )
         if not memory.recall_events and stats.tool_call_count > 5:
             gaps.append("session ran without recalling memory — task may be missing context")
+        # Subagent delegation quality nudges. Hitting max_turns means the
+        # subagent ran out of budget — likely an over-broad task. A high
+        # error rate within a subagent suggests the wrong allowlist or a
+        # task the subagent wasn't equipped to answer.
+        for sub in stats.subagent_runs:
+            if sub.max_turns_reached:
+                gaps.append(
+                    f"subagent-{sub.seq:03d} hit max_turns — "
+                    "task may have been too broad to delegate"
+                )
+            if sub.tool_call_count and (sub.error_count / sub.tool_call_count) > 0.3:
+                gaps.append(
+                    f"subagent-{sub.seq:03d} had a high tool-error rate "
+                    f"({sub.error_count}/{sub.tool_call_count}) — review the allowlist"
+                )
         body_lines.append("## Gaps noticed")
         body_lines.append("")
         if gaps:
@@ -696,6 +743,7 @@ def _render_reflection(
             body_lines.append("- (none)")
         body_lines.append("")
 
+    body_lines.extend(subagent_runs_section(stats.subagent_runs, heading="Subagent delegations"))
     body_lines.extend(trace_events_section(memory.trace_events))
 
     body = "\n".join(body_lines)
@@ -707,6 +755,8 @@ def _build_spans(
     calls: list[_ToolCall],
     events: list[dict[str, Any]],
     stats: _SessionStats,
+    *,
+    trace_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     session_id = memory.session_dir_rel
 
@@ -736,7 +786,168 @@ def _build_spans(
                 },
             }
         )
+
+    # B1+ PR 2: emit invoke_agent spans for each subagent run, plus child
+    # tool_call spans loaded from the subagent's trace file. Subagent traces
+    # live next to the parent's trace at <stem>.subagent-NNN.jsonl (PR 1).
+    spans.extend(_build_subagent_spans(events, session_id, trace_path=trace_path))
+
     return spans
+
+
+def _build_subagent_spans(
+    events: list[dict[str, Any]],
+    parent_session_id: str,
+    *,
+    trace_path: Path | None,
+    depth: int = 0,
+    parent_span_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Recursively emit invoke_agent + child execute_tool spans for subagent runs.
+
+    Each ``subagent_run`` event in ``events`` produces:
+      1. One ``agent_invocation`` span (invoke_agent) carrying the subagent's
+         total cost / turns / task as metadata.
+      2. Child ``tool_call`` spans extracted from the subagent's trace file.
+      3. If the subagent itself spawned nested subagents, recursive spans
+         under them.
+
+    Returns an empty list when ``trace_path`` is None or the trace file is
+    missing/malformed — graceful degradation, the agent_invocation span is
+    still emitted (with no children) so consumers see the run happened.
+    """
+    if depth >= 3:
+        # Defensive: matches the runtime DEFAULT_MAX_DEPTH=2 ceiling. Three
+        # levels of subagent traces would already be unusual; bail out so a
+        # broken trace can't make the bridge recurse forever.
+        return []
+
+    out: list[dict[str, Any]] = []
+    for ev in events:
+        if ev.get("kind") != "subagent_run":
+            continue
+        seq = int(ev.get("seq", 0) or 0)
+        sub_span_id = _short_hash(f"{parent_session_id}:subagent:{seq}:{depth}")
+        sub_session_id = f"{parent_session_id}:subagent-{seq:03d}"
+        out.append(
+            {
+                "span_id": sub_span_id,
+                "parent_span_id": parent_span_id,
+                "session_id": sub_session_id,
+                "timestamp": str(ev.get("ts", "")),
+                "span_type": "agent_invocation",
+                "name": f"subagent-{seq:03d}",
+                "status": "ok",
+                "cost": {"usd": float(ev.get("cost_usd", 0.0) or 0.0)},
+                "metadata": {
+                    "task": str(ev.get("task", ""))[:240],
+                    "depth": int(ev.get("depth", 1) or 1),
+                    "turns": int(ev.get("turns", 0) or 0),
+                    "max_turns_reached": bool(ev.get("max_turns_reached", False)),
+                    "input_tokens": int(ev.get("input_tokens", 0) or 0),
+                    "output_tokens": int(ev.get("output_tokens", 0) or 0),
+                },
+            }
+        )
+
+        rel_path = ev.get("trace_path")
+        if not rel_path or trace_path is None:
+            continue
+        sub_trace_abs = (Path(trace_path).parent / str(rel_path)).resolve()
+        sub_events = _load_trace_events(sub_trace_abs)
+        if not sub_events:
+            continue
+        sub_calls = _extract_tool_calls(sub_events)
+        sub_stats = _aggregate_stats(sub_events)
+        calls_per_turn: dict[int, int] = defaultdict(int)
+        for tc in sub_calls:
+            calls_per_turn[tc.turn] += 1
+        for tc in sub_calls:
+            n = calls_per_turn[tc.turn] or 1
+            turn_cost = sub_stats.turn_costs.get(tc.turn, 0.0)
+            span_cost = round(turn_cost / n, 6)
+            out.append(
+                {
+                    "span_id": _short_hash(f"{sub_session_id}:{tc.seq}:{tc.name}:{tc.timestamp}"),
+                    "parent_span_id": sub_span_id,
+                    "session_id": sub_session_id,
+                    "timestamp": tc.timestamp,
+                    "span_type": "tool_call",
+                    "name": tc.name,
+                    "status": "error" if tc.is_error else "ok",
+                    "cost": {"usd": span_cost},
+                    "metadata": {
+                        "turn": tc.turn,
+                        "seq": tc.seq,
+                        "args_summary": _args_summary(tc.args),
+                    },
+                }
+            )
+
+        # Recurse into nested subagent_run events so depth-2 traces also
+        # populate the span tree.
+        out.extend(
+            _build_subagent_spans(
+                sub_events,
+                sub_session_id,
+                trace_path=sub_trace_abs,
+                depth=depth + 1,
+                parent_span_id=sub_span_id,
+            )
+        )
+    return out
+
+
+def _load_trace_events(trace_path: Path) -> list[dict[str, Any]]:
+    """Read a JSONL trace file and return its events, or [] on error.
+
+    Subagent trace files might be missing (subagent crashed before flush),
+    truncated, or malformed. Failures degrade silently so the parent's
+    artifacts can still be written; the warning log gives operators a hook
+    to diagnose recurring corruption.
+    """
+    try:
+        return list(_read_events(trace_path))
+    except OSError as exc:
+        _log.warning("trace bridge: failed to load subagent trace %s: %s", trace_path, exc)
+        return []
+
+
+def _populate_subagent_runs(
+    events: list[dict[str, Any]],
+    stats: _SessionStats,
+    *,
+    trace_path: Path | None,
+) -> None:
+    """Walk ``subagent_run`` events and attach per-subagent stats to ``stats``.
+
+    Each entry combines the parent's summary fields (cost, turns, depth)
+    with per-tool counts harvested from the subagent's JSONL trace, when
+    that file is available. Missing or unreadable trace files still
+    produce an entry — just without the per-tool breakdown.
+    """
+    for ev in events:
+        if ev.get("kind") != "subagent_run":
+            continue
+        sub = _SubagentStats(
+            seq=int(ev.get("seq", 0) or 0),
+            task=str(ev.get("task", "") or ""),
+            depth=int(ev.get("depth", 1) or 1),
+            turns=int(ev.get("turns", 0) or 0),
+            cost_usd=float(ev.get("cost_usd", 0.0) or 0.0),
+            input_tokens=int(ev.get("input_tokens", 0) or 0),
+            output_tokens=int(ev.get("output_tokens", 0) or 0),
+            max_turns_reached=bool(ev.get("max_turns_reached", False)),
+        )
+        rel_path = ev.get("trace_path")
+        if rel_path and trace_path is not None:
+            sub_trace_abs = (Path(trace_path).parent / str(rel_path)).resolve()
+            sub_events = _load_trace_events(sub_trace_abs)
+            sub_stats = _aggregate_stats(sub_events)
+            sub.tool_call_count = sub_stats.tool_call_count
+            sub.error_count = sub_stats.error_count
+            sub.by_tool = dict(sub_stats.by_tool)
+        stats.subagent_runs.append(sub)
 
 
 # ---------------------------------------------------------------------------
