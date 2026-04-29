@@ -36,8 +36,11 @@ class WebSearch:
     description = (
         "Search the public web and return titles, URLs, and snippets. "
         "Results are third-party summaries and may be incomplete or outdated; cite URLs when stating facts. "
-        "Configuration: set HARNESS_SEARCH_PROVIDER to brave (default), tavily, or bing. "
-        "Set BRAVE_API_KEY, TAVILY_API_KEY, or AZURE_BING_SEARCH_KEY (+ optional AZURE_BING_SEARCH_ENDPOINT for Bing). "
+        "Configuration: set HARNESS_SEARCH_PROVIDER to brave (default), tavily, bing, or browserbase. "
+        "Set BRAVE_API_KEY, TAVILY_API_KEY, AZURE_BING_SEARCH_KEY (+ optional AZURE_BING_SEARCH_ENDPOINT for Bing), "
+        "or BROWSERBASE_API_KEY. "
+        "Note: the browserbase provider returns title + URL + author/publishedDate metadata but no excerpt text; "
+        "chain into web_fetch when you need page content. "
         "Set HARNESS_SEARCH_DISABLED=1 to disable live search (tool still available; returns guidance)."
     )
     # Search results are attacker-influenceable (SEO, ranking manipulation,

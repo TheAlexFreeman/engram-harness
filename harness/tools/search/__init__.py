@@ -3,6 +3,7 @@ from __future__ import annotations
 from .backends import WebSearchBackend
 from .bing import BingBackend
 from .brave import BraveBackend
+from .browserbase import BrowserbaseBackend
 from .factory import NoOpBackend, load_backend_from_env
 from .tavily import TavilyBackend
 from .tool import WebSearch
@@ -12,6 +13,7 @@ from .x import XSearchBackend
 __all__ = [
     "BingBackend",
     "BraveBackend",
+    "BrowserbaseBackend",
     "NoOpBackend",
     "SearchHit",
     "TavilyBackend",
