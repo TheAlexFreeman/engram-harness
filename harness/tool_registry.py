@@ -26,6 +26,7 @@ from harness.tools.run_script import RunScript
 from harness.tools.search import WebSearch
 from harness.tools.subagent import SpawnSubagent, SpawnSubagents
 from harness.tools.todos import AnalyzeTodos, ReadTodos, UpdateTodo, WriteTodos
+from harness.tools.web_fetch import WebFetch
 from harness.tools.x_search import XSearch
 
 
@@ -49,6 +50,7 @@ def build_tools(
         AnalyzeTodos(scope),
         WebSearch(),
         XSearch(),
+        WebFetch(),
         ToolHelp(),
     ]
     write_only: list[Tool] = [
