@@ -261,6 +261,18 @@ class _WorkspaceWriteLock:
         while True:
             try:
                 fd = os.open(str(self._lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except PermissionError:
+                # Windows: a freshly-unlinked lock file can sit in
+                # "delete pending" state briefly, so a racing acquirer
+                # gets PermissionError(13) instead of FileExistsError.
+                # Treat both as "lock currently held, retry."
+                if time.monotonic() >= deadline:
+                    raise WorkspaceWriteError(
+                        "Another process is writing to this workspace "
+                        "(lock file in delete-pending state). Retry."
+                    )
+                time.sleep(_WORKSPACE_LOCK_POLL_INTERVAL_SECONDS)
+                continue
             except FileExistsError:
                 if _try_remove_stale_lock(self._lock_path):
                     continue
