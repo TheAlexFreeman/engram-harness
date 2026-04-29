@@ -319,19 +319,25 @@ def _resume_one(
     max_turns_reached = False
     status = "completed"
     policy = RunPolicy.from_config(config, pause_handle=components.pause_handle)
+    session_key = str(config.workspace.resolve())
     try:
         with components.tracer as tracer:
-            result = run(
-                checkpoint.task,
-                components.mode,
-                components.tools,
-                components.memory,
-                tracer,
-                stream_sink=components.stream_sink,
-                skip_end_session_commit=True,
-                resume_state=resume_state,
-                **policy.run_kwargs(),
-            )
+            from harness.runner import _submit_main_lane
+
+            def _do_run():
+                return run(
+                    checkpoint.task,
+                    components.mode,
+                    components.tools,
+                    components.memory,
+                    tracer,
+                    stream_sink=components.stream_sink,
+                    skip_end_session_commit=True,
+                    resume_state=resume_state,
+                    **policy.run_kwargs(),
+                )
+
+            result = _submit_main_lane(components, _do_run, tracer=tracer, session_key=session_key)
     except BaseException:
         status = "error"
         store.close()

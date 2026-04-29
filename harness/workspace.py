@@ -35,10 +35,15 @@ Design points (see docs/workspace-affordances-draft.md):
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 import re
 import subprocess
+import threading
+import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -117,6 +122,191 @@ _PC_PREFIX_TEST = "test:"
 # can't hang the session.
 _PC_TEST_TIMEOUT_SECS = 120
 _APPROVAL_ID_PREFIX = "apr_"
+
+# ---------------------------------------------------------------------------
+# Workspace write lock
+# ---------------------------------------------------------------------------
+#
+# Two harness invocations against the same workspace must not silently
+# stomp each other's CURRENT.md threads or plan run-state. Mirrors the
+# pattern used by ``harness._engram_fs.git_repo.GitRepo.write_lock`` —
+# atomic ``os.O_CREAT|O_EXCL`` create with bounded poll/timeout, plus a
+# stale-lock recovery for crashed processes. Reentrant within a single
+# Python thread so helpers that compose (open_thread → write_current,
+# plan_advance → _save_run_state) don't self-deadlock.
+
+_WORKSPACE_LOCK_NAME = ".harness-write.lock"
+_WORKSPACE_LOCK_TIMEOUT_SECONDS = 5.0
+_WORKSPACE_LOCK_POLL_INTERVAL_SECONDS = 0.05
+_WORKSPACE_LOCK_STALE_AGE_SECONDS = 30.0
+
+
+class WorkspaceWriteError(RuntimeError):
+    """Raised when a workspace write lock cannot be acquired in time."""
+
+
+def _is_pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but we may not have permission to signal it.
+        return True
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return False
+        if getattr(error, "winerror", None) == 87:
+            return False
+        # Treat unknown errors as alive to avoid unsafe lock removal.
+        return True
+
+
+def _read_lock_pid(lock_path: Path) -> int | None:
+    try:
+        contents = lock_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for raw in contents.splitlines():
+        line = raw.strip()
+        if not line.lower().startswith("pid="):
+            continue
+        token = line.split("=", 1)[1].strip()
+        if not token:
+            return None
+        try:
+            pid = int(token)
+        except ValueError:
+            return None
+        return pid if pid > 0 else None
+    return None
+
+
+def _try_remove_stale_lock(lock_path: Path) -> bool:
+    """Remove the lock file if it's older than the stale threshold and
+    its owner PID is dead. Returns True if a stale lock was removed.
+    """
+    try:
+        mtime = lock_path.stat().st_mtime
+    except OSError:
+        return False
+    if (time.time() - mtime) <= _WORKSPACE_LOCK_STALE_AGE_SECONDS:
+        return False
+    pid = _read_lock_pid(lock_path)
+    if pid is not None and _is_pid_alive(pid):
+        return False
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return True
+
+
+class _WorkspaceWriteLock:
+    """Reentrant workspace write lock.
+
+    Within a single thread, repeated ``acquire()`` calls reuse the same
+    file lock (depth-counted). Across threads or processes, callers
+    serialize via the on-disk lock file at
+    ``<workspace>/.harness-write.lock``.
+    """
+
+    def __init__(self, lock_path: Path):
+        self._lock_path = lock_path
+        self._state_mutex = threading.Lock()
+        self._owner_tid: int | None = None
+        self._depth = 0
+
+    @contextmanager
+    def acquire(self, *, purpose: str = "write"):
+        tid = threading.get_ident()
+        with self._state_mutex:
+            if self._owner_tid == tid:
+                self._depth += 1
+                reentrant = True
+            else:
+                reentrant = False
+        if reentrant:
+            try:
+                yield
+            finally:
+                with self._state_mutex:
+                    self._depth -= 1
+            return
+
+        self._acquire_file_lock(purpose=purpose)
+        with self._state_mutex:
+            self._owner_tid = tid
+            self._depth = 1
+        try:
+            yield
+        finally:
+            with self._state_mutex:
+                self._depth -= 1
+                release = self._depth == 0
+                if release:
+                    self._owner_tid = None
+            if release:
+                self._release_file_lock()
+
+    def _acquire_file_lock(self, *, purpose: str) -> None:
+        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + _WORKSPACE_LOCK_TIMEOUT_SECONDS
+        payload = f"pid={os.getpid()}\npurpose={purpose}\nstarted_at={time.time()}\n"
+        while True:
+            try:
+                fd = os.open(str(self._lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except PermissionError:
+                # Windows: a freshly-unlinked lock file can sit in
+                # "delete pending" state briefly, so a racing acquirer
+                # gets PermissionError(13) instead of FileExistsError.
+                # Treat both as "lock currently held, retry."
+                if time.monotonic() >= deadline:
+                    raise WorkspaceWriteError(
+                        "Another process is writing to this workspace "
+                        "(lock file in delete-pending state). Retry."
+                    )
+                time.sleep(_WORKSPACE_LOCK_POLL_INTERVAL_SECONDS)
+                continue
+            except FileExistsError:
+                if _try_remove_stale_lock(self._lock_path):
+                    continue
+                if time.monotonic() >= deadline:
+                    owner = ""
+                    try:
+                        owner = self._lock_path.read_text(encoding="utf-8").strip()
+                    except OSError:
+                        pass
+                    suffix = f" Active writer: {owner}" if owner else ""
+                    raise WorkspaceWriteError(
+                        f"Another process is writing to this workspace. Wait and retry.{suffix}"
+                    )
+                time.sleep(_WORKSPACE_LOCK_POLL_INTERVAL_SECONDS)
+                continue
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(payload)
+            except OSError:
+                # If we somehow couldn't write the payload, leave an
+                # empty lock file — stale-recovery will eventually
+                # reclaim it. Don't raise.
+                pass
+            return
+
+    def _release_file_lock(self) -> None:
+        try:
+            self._lock_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            # Best-effort: leave the lock file; stale recovery will
+            # handle it. Don't propagate.
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +622,21 @@ class Workspace:
             self.dir = self.root / "workspace"
         self.session_id = session_id
         self._today = today_provider
+        self._lock = _WorkspaceWriteLock(self.dir / _WORKSPACE_LOCK_NAME)
+
+    @contextmanager
+    def write_lock(self, *, purpose: str = "write"):
+        """Acquire the per-workspace write lock.
+
+        Reentrant within a single thread (helpers can compose freely).
+        Cross-thread / cross-process callers serialize via an on-disk
+        lock file at ``<workspace>/.harness-write.lock``. Times out
+        after ``_WORKSPACE_LOCK_TIMEOUT_SECONDS`` raising
+        ``WorkspaceWriteError``; older-than-30s locks whose owning PID
+        is dead are reclaimed automatically.
+        """
+        with self._lock.acquire(purpose=purpose):
+            yield
 
     # ------------------------------------------------------------------
     # Layout management
@@ -514,9 +719,17 @@ class Workspace:
         return parse_current(self.current_path.read_text(encoding="utf-8"))
 
     def write_current(self, doc: CurrentDoc) -> None:
-        """Write CURRENT.md. Ensures the workspace layout exists first."""
-        self.ensure_layout()
-        self.current_path.write_text(doc.render(), encoding="utf-8")
+        """Write CURRENT.md. Ensures the workspace layout exists first.
+
+        Acquires the workspace write lock for the duration of the write
+        so two concurrent writers can't produce a torn file. Read-modify-
+        write helpers (``open_thread``, ``jot``, …) hold the same lock
+        across their read+write so concurrent helpers don't lose
+        updates either.
+        """
+        with self.write_lock(purpose="write_current"):
+            self.ensure_layout()
+            self.current_path.write_text(doc.render(), encoding="utf-8")
 
     # Threads ----------------------------------------------------------
 
@@ -530,16 +743,17 @@ class Workspace:
     ) -> Thread:
         """Create a new thread. Raises ValueError if name already exists."""
         _validate_thread_name(name)
-        doc = self.read_current()
-        if doc.find_thread(name):
-            raise ValueError(f"thread {name!r} already exists")
-        if project is not None and not self.project(project).exists():
-            raise ValueError(f"project {project!r} does not exist")
-        thread = Thread(name=name, status=status, next=next_action.strip(), project=project)
-        doc.threads.append(thread)
-        self._rotate_expired_closed(doc)
-        self.write_current(doc)
-        return thread
+        with self.write_lock(purpose="open_thread"):
+            doc = self.read_current()
+            if doc.find_thread(name):
+                raise ValueError(f"thread {name!r} already exists")
+            if project is not None and not self.project(project).exists():
+                raise ValueError(f"project {project!r} does not exist")
+            thread = Thread(name=name, status=status, next=next_action.strip(), project=project)
+            doc.threads.append(thread)
+            self._rotate_expired_closed(doc)
+            self.write_current(doc)
+            return thread
 
     def update_thread(
         self,
@@ -549,28 +763,30 @@ class Workspace:
         next_action: str | None = None,
     ) -> Thread:
         """Update an existing thread's status and/or next-action line."""
-        doc = self.read_current()
-        t = doc.find_thread(name)
-        if t is None:
-            raise ValueError(f"thread {name!r} not found")
-        if status is not None:
-            t.status = status.strip() or t.status
-        if next_action is not None:
-            t.next = next_action.strip()
-        self._rotate_expired_closed(doc)
-        self.write_current(doc)
-        return t
+        with self.write_lock(purpose="update_thread"):
+            doc = self.read_current()
+            t = doc.find_thread(name)
+            if t is None:
+                raise ValueError(f"thread {name!r} not found")
+            if status is not None:
+                t.status = status.strip() or t.status
+            if next_action is not None:
+                t.next = next_action.strip()
+            self._rotate_expired_closed(doc)
+            self.write_current(doc)
+            return t
 
     def close_thread(self, name: str, summary: str = "") -> ClosedThread:
         """Move a thread from Threads to Closed."""
-        doc = self.read_current()
-        today = self._today().isoformat()
-        closed_thread = doc.close_thread(name, summary, today=today)
-        if closed_thread is None:
-            raise ValueError(f"thread {name!r} not found")
-        self._rotate_expired_closed(doc)
-        self.write_current(doc)
-        return doc.closed[0]
+        with self.write_lock(purpose="close_thread"):
+            doc = self.read_current()
+            today = self._today().isoformat()
+            closed_thread = doc.close_thread(name, summary, today=today)
+            if closed_thread is None:
+                raise ValueError(f"thread {name!r} not found")
+            self._rotate_expired_closed(doc)
+            self.write_current(doc)
+            return doc.closed[0]
 
     # Notes ------------------------------------------------------------
 
@@ -578,12 +794,13 @@ class Workspace:
         body = content.strip()
         if not body:
             raise ValueError("jot content must be non-empty")
-        doc = self.read_current()
-        stamp = datetime.now().isoformat(timespec="seconds")
-        note = doc.append_note(stamp, body)
-        self._rotate_expired_closed(doc)
-        self.write_current(doc)
-        return note
+        with self.write_lock(purpose="jot"):
+            doc = self.read_current()
+            stamp = datetime.now().isoformat(timespec="seconds")
+            note = doc.append_note(stamp, body)
+            self._rotate_expired_closed(doc)
+            self.write_current(doc)
+            return note
 
     # Closed-thread archive rotation ----------------------------------
 
@@ -867,25 +1084,28 @@ class Workspace:
         dest = archive_root / name
         if dest.exists():
             raise ValueError(f"archived project already exists at {dest}")
-        # Prepend archival summary to SUMMARY.md before the move.
-        self.regenerate_summary(p)
-        summary_text = (
-            p.summary_path.read_text(encoding="utf-8") if p.summary_path.is_file() else ""
-        )
-        stamp = self._today().isoformat()
-        archived_header = f"> **Archived {stamp}:** {summary.strip()}\n\n"
-        p.summary_path.write_text(archived_header + summary_text, encoding="utf-8")
-        p.root.rename(dest)
-        # Auto-close any CURRENT.md threads linked to the project.
-        doc = self.read_current()
-        closed_any = False
-        today_str = self._today().isoformat()
-        for t in list(doc.threads):
-            if t.project == name:
-                doc.close_thread(t.name, f"project archived: {summary.strip()}", today=today_str)
-                closed_any = True
-        if closed_any:
-            self.write_current(doc)
+        with self.write_lock(purpose="project_archive"):
+            # Prepend archival summary to SUMMARY.md before the move.
+            self.regenerate_summary(p)
+            summary_text = (
+                p.summary_path.read_text(encoding="utf-8") if p.summary_path.is_file() else ""
+            )
+            stamp = self._today().isoformat()
+            archived_header = f"> **Archived {stamp}:** {summary.strip()}\n\n"
+            p.summary_path.write_text(archived_header + summary_text, encoding="utf-8")
+            p.root.rename(dest)
+            # Auto-close any CURRENT.md threads linked to the project.
+            doc = self.read_current()
+            closed_any = False
+            today_str = self._today().isoformat()
+            for t in list(doc.threads):
+                if t.project == name:
+                    doc.close_thread(
+                        t.name, f"project archived: {summary.strip()}", today=today_str
+                    )
+                    closed_any = True
+            if closed_any:
+                self.write_current(doc)
         return Project(name=name, root=dest)
 
     # -- Plans --------------------------------------------------------
@@ -921,48 +1141,49 @@ class Workspace:
 
         plan_path = _plan_yaml_path(p, plan_id)
         state_path = _plan_run_state_path(p, plan_id)
-        if plan_path.exists() or state_path.exists():
-            raise ValueError(f"plan {plan_id!r} already exists in project {project!r}")
-        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.write_lock(purpose="plan_create"):
+            if plan_path.exists() or state_path.exists():
+                raise ValueError(f"plan {plan_id!r} already exists in project {project!r}")
+            plan_path.parent.mkdir(parents=True, exist_ok=True)
 
-        plan_doc: dict[str, Any] = {
-            "plan_id": plan_id,
-            "purpose": purpose.strip(),
-            "phases": cleaned_phases,
-        }
-        if questions:
-            plan_doc["questions"] = [str(q).strip() for q in questions if str(q).strip()]
-        if budget:
-            cleaned_budget = _validate_budget(budget)
-            if cleaned_budget:
-                plan_doc["budget"] = cleaned_budget
+            plan_doc: dict[str, Any] = {
+                "plan_id": plan_id,
+                "purpose": purpose.strip(),
+                "phases": cleaned_phases,
+            }
+            if questions:
+                plan_doc["questions"] = [str(q).strip() for q in questions if str(q).strip()]
+            if budget:
+                cleaned_budget = _validate_budget(budget)
+                if cleaned_budget:
+                    plan_doc["budget"] = cleaned_budget
 
-        plan_path.write_text(
-            yaml.dump(plan_doc, default_flow_style=False, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
+            plan_path.write_text(
+                yaml.dump(plan_doc, default_flow_style=False, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
 
-        now = datetime.now().isoformat(timespec="seconds")
-        run_state: dict[str, Any] = {
-            "plan_id": plan_id,
-            "status": PLAN_STATUS_ACTIVE,
-            "current_phase": 0,
-            "phases_completed": [],
-            # sessions_used counts distinct harness sessions that have
-            # advanced the plan (complete or fail). Creation alone does
-            # not count — otherwise a plan with max_sessions: 1 would
-            # look fully consumed before any work is done. The
-            # companion sessions_touched list dedupes repeated advance
-            # calls from the same session so budget tracking stays
-            # accurate under the intuitive "sessions used" definition.
-            "sessions_used": 0,
-            "sessions_touched": [],
-            "failure_history": [],
-            "last_checkpoint": None,
-            "created": now,
-            "modified": now,
-        }
-        self._save_run_state(state_path, run_state)
+            now = datetime.now().isoformat(timespec="seconds")
+            run_state: dict[str, Any] = {
+                "plan_id": plan_id,
+                "status": PLAN_STATUS_ACTIVE,
+                "current_phase": 0,
+                "phases_completed": [],
+                # sessions_used counts distinct harness sessions that have
+                # advanced the plan (complete or fail). Creation alone does
+                # not count — otherwise a plan with max_sessions: 1 would
+                # look fully consumed before any work is done. The
+                # companion sessions_touched list dedupes repeated advance
+                # calls from the same session so budget tracking stays
+                # accurate under the intuitive "sessions used" definition.
+                "sessions_used": 0,
+                "sessions_touched": [],
+                "failure_history": [],
+                "last_checkpoint": None,
+                "created": now,
+                "modified": now,
+            }
+            self._save_run_state(state_path, run_state)
         return plan_path
 
     def plan_load(self, project: str, plan_id: str) -> tuple[dict, dict]:
@@ -1049,6 +1270,32 @@ class Workspace:
         if action not in ("complete", "fail"):
             raise ValueError(f"action must be 'complete' or 'fail'; got {action!r}")
 
+        with self.write_lock(purpose="plan_advance"):
+            return self._plan_advance_locked(
+                project,
+                plan_id,
+                action,
+                checkpoint=checkpoint,
+                reason=reason,
+                verify=verify,
+                approved=approved,
+                allow_test_postconditions=allow_test_postconditions,
+                cwd=cwd,
+            )
+
+    def _plan_advance_locked(
+        self,
+        project: str,
+        plan_id: str,
+        action: str,
+        *,
+        checkpoint: str | None,
+        reason: str | None,
+        verify: bool,
+        approved: bool,
+        allow_test_postconditions: bool,
+        cwd: Path | None,
+    ) -> dict:
         plan_doc, state = self.plan_load(project, plan_id)
         if state.get("status") == PLAN_STATUS_COMPLETED:
             raise ValueError(f"plan {plan_id!r} is already completed")
@@ -1143,28 +1390,29 @@ class Workspace:
         approved_by: str = "user",
     ) -> dict:
         """Grant a pending approval request through a user-owned API path."""
-        plan_doc, state = self.plan_load(project, plan_id)
-        phases = plan_doc.get("phases", [])
-        current_idx = int(state.get("current_phase", 0))
-        phase = phases[current_idx] if 0 <= current_idx < len(phases) else {}
-        if not phase.get("requires_approval"):
-            raise ValueError(f"current phase of plan {plan_id!r} does not require approval")
+        with self.write_lock(purpose="plan_grant_approval"):
+            plan_doc, state = self.plan_load(project, plan_id)
+            phases = plan_doc.get("phases", [])
+            current_idx = int(state.get("current_phase", 0))
+            phase = phases[current_idx] if 0 <= current_idx < len(phases) else {}
+            if not phase.get("requires_approval"):
+                raise ValueError(f"current phase of plan {plan_id!r} does not require approval")
 
-        pending = _current_pending_approval(state, current_idx)
-        if pending is None:
-            raise ValueError(f"plan {plan_id!r} has no pending approval request")
-        if pending.get("id") != approval_request_id:
-            raise ValueError("approval_request_id does not match the pending approval")
+            pending = _current_pending_approval(state, current_idx)
+            if pending is None:
+                raise ValueError(f"plan {plan_id!r} has no pending approval request")
+            if pending.get("id") != approval_request_id:
+                raise ValueError("approval_request_id does not match the pending approval")
 
-        now = datetime.now().isoformat(timespec="seconds")
-        pending["granted"] = True
-        pending["granted_at"] = now
-        pending["granted_by"] = str(approved_by or "user")[:80]
-        state["pending_approval"] = pending
-        state["status"] = PLAN_STATUS_AWAITING_APPROVAL
-        state["modified"] = now
-        self._save_run_state(_plan_run_state_path(self.project(project), plan_id), state)
-        return pending
+            now = datetime.now().isoformat(timespec="seconds")
+            pending["granted"] = True
+            pending["granted_at"] = now
+            pending["granted_by"] = str(approved_by or "user")[:80]
+            state["pending_approval"] = pending
+            state["status"] = PLAN_STATUS_AWAITING_APPROVAL
+            state["modified"] = now
+            self._save_run_state(_plan_run_state_path(self.project(project), plan_id), state)
+            return pending
 
     def _mark_plan_session_touched(self, state: dict) -> None:
         """Bump sessions_used when the current session first touches this plan.
@@ -1240,8 +1488,9 @@ class Workspace:
         return out
 
     def _save_run_state(self, state_path: Path, state: dict) -> None:
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        state_path.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
+        with self.write_lock(purpose="save_run_state"):
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
 
     def list_active_plans(self) -> "list[ActivePlan]":
         """Scan the workspace for plans with ``status == "active"``.

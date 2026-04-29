@@ -228,6 +228,33 @@ _sessions_lock = threading.Lock()
 _store: SessionStore | None = None
 _store_lock = threading.Lock()
 
+# Shared lane registry across every session this server hosts. Caps the
+# number of concurrent main / subagent runs across the whole process —
+# the seed of OpenClaw-style global lane caps if and when this server
+# becomes a real multi-tenant gateway. Lazily built on first use; caps
+# come from env vars (HARNESS_LANE_CAP_MAIN / HARNESS_LANE_CAP_SUBAGENT).
+_lanes_registry = None  # type: ignore[var-annotated]
+_lanes_lock = threading.Lock()
+
+
+def _get_lanes():
+    """Return the process-wide LaneRegistry, creating it on first call.
+
+    Caps are sourced from ``HARNESS_LANE_CAP_MAIN`` /
+    ``HARNESS_LANE_CAP_SUBAGENT`` via ``lane_cap_from_env``, which
+    silently falls back to the default (4) on missing, non-integer,
+    or sub-1 values — server boot must not be fragile to env typos.
+    """
+    from harness.lanes import LaneCaps, LaneRegistry, lane_cap_from_env
+
+    global _lanes_registry
+    with _lanes_lock:
+        if _lanes_registry is None:
+            main = lane_cap_from_env("HARNESS_LANE_CAP_MAIN", 4)
+            sub = lane_cap_from_env("HARNESS_LANE_CAP_SUBAGENT", 4)
+            _lanes_registry = LaneRegistry(LaneCaps(main=main, subagent=sub))
+        return _lanes_registry
+
 
 def _is_loopback_host(host: str) -> bool:
     return host.strip().lower() in _LOOPBACK_HOSTS
@@ -906,6 +933,7 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         extra_trace_sinks=[sse_trace, state_tracker],
         stream_sink_override=sse_stream,
         scope=scope,
+        lanes=_get_lanes(),
     )
 
     session = ManagedSession(

@@ -254,6 +254,27 @@ def _parse_args() -> argparse.Namespace:
         "1 disables parallelism (sequential execution).",
     )
     parser.add_argument(
+        "--lane-cap-main",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Cap on concurrent runs in the 'main' lane (parent run_until_idle "
+            "invocations). Default 4. Falls back to HARNESS_LANE_CAP_MAIN env var."
+        ),
+    )
+    parser.add_argument(
+        "--lane-cap-subagent",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Cap on concurrent runs in the 'subagent' lane. Children spawned "
+            "via spawn_subagent / spawn_subagents wait at this cap. Default 4. "
+            "Falls back to HARNESS_LANE_CAP_SUBAGENT env var."
+        ),
+    )
+    parser.add_argument(
         "--max-cost-usd",
         type=float,
         default=None,
