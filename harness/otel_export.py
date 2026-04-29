@@ -83,6 +83,8 @@ def _gen_ai_operation(span_type: str) -> str:
         return "chat"
     if span_type == "embeddings":
         return "embeddings"
+    if span_type == "agent_invocation":
+        return "invoke_agent"
     return span_type
 
 
@@ -192,11 +194,44 @@ def export_session_spans(
         model=model,
     )
 
+    root_ctx_for_children = _span_to_context(root_span)
+
+    # Multi-pass emission so subagent invoke_agent spans become OTel parents
+    # of their child execute_tool spans. Each pass emits spans whose parent
+    # is already known (no parent_span_id → root, or parent_span_id whose
+    # context we recorded in a prior pass). Loop until no progress is made;
+    # any remaining spans (orphaned by a missing parent — e.g. truncated
+    # subagent trace) get attached to the root as a graceful fallback.
+    span_contexts: dict[str, Any] = {}
+    pending: list[dict] = list(spans_raw)
     count = 0
-    child_ctx = _span_to_context(root_span)
-    for raw in spans_raw:
-        _emit_span(tracer, raw, child_ctx, span_ctx)
-        count += 1
+    while pending:
+        ready: list[dict] = []
+        not_ready: list[dict] = []
+        for raw in pending:
+            parent_sid = raw.get("parent_span_id")
+            if not parent_sid or str(parent_sid) in span_contexts:
+                ready.append(raw)
+            else:
+                not_ready.append(raw)
+        if not ready:
+            # No progress — orphan the remaining spans under the root.
+            ready = not_ready
+            not_ready = []
+        for raw in ready:
+            parent_sid = raw.get("parent_span_id")
+            parent_ctx = (
+                span_contexts.get(str(parent_sid), root_ctx_for_children)
+                if parent_sid
+                else root_ctx_for_children
+            )
+            emitted = _emit_span(tracer, raw, parent_ctx, span_ctx)
+            if emitted is not None:
+                sid = raw.get("span_id")
+                if sid:
+                    span_contexts[str(sid)] = _span_to_context(emitted)
+            count += 1
+        pending = not_ready
 
     root_span.end()
     provider.shutdown()
@@ -228,8 +263,13 @@ def _emit_span(
     raw: dict,
     parent_ctx,
     common: _SpanCommonContext | None = None,
-) -> None:
-    """Translate one JSONL span dict into an OTel span and export it."""
+):
+    """Translate one JSONL span dict into an OTel span and export it.
+
+    Returns the started OTel span (for callers that need to map
+    ``span_id`` → context for parent-child threading), or ``None`` when
+    span emission failed before reaching the tracer.
+    """
     from opentelemetry.trace import SpanKind, StatusCode
 
     if common is None:
@@ -249,6 +289,8 @@ def _emit_span(
     elif span_type == "embeddings":
         emb_model = metadata.get("model") or common.model or ""
         otel_name = f"embeddings {emb_model}".strip()
+    elif span_type == "agent_invocation":
+        otel_name = f"invoke_agent {name}"
     else:
         otel_name = f"harness.{span_type}"
 
@@ -295,6 +337,21 @@ def _emit_span(
             value = metadata.get(key)
             if isinstance(value, (int, float)):
                 _set_attr(span, attr, int(value))
+    elif span_type == "agent_invocation":
+        # Subagent metadata. Maps to the GenAI semconv invoke_agent attrs:
+        # gen_ai.agent.* identifies which agent instance, and the usage
+        # block carries the cumulative cost from the subagent's run.
+        _set_attr(span, "gen_ai.agent.name", name)
+        task = metadata.get("task")
+        if task:
+            _set_attr(span, "gen_ai.agent.description", str(task)[:500])
+        for key, attr in (
+            ("input_tokens", "gen_ai.usage.input_tokens"),
+            ("output_tokens", "gen_ai.usage.output_tokens"),
+        ):
+            value = metadata.get(key)
+            if isinstance(value, (int, float)):
+                _set_attr(span, attr, int(value))
 
     cost = raw.get("cost") or {}
     if isinstance(cost, dict) and "usd" in cost:
@@ -306,6 +363,7 @@ def _emit_span(
         span.set_status(StatusCode.OK)
 
     span.end(end_time=end_ns or None)
+    return span
 
 
 # ---------------------------------------------------------------------------

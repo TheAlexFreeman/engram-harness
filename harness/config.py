@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 from dataclasses import dataclass, field, fields, replace
 from datetime import datetime
 from enum import Enum
@@ -866,6 +867,57 @@ def build_session(
     )
 
 
+def _parent_trace_path(parent_tracer: Any) -> Path | None:
+    """Return the JSONL trace path of the parent tracer, or ``None``.
+
+    Walks ``CompositeTracer._children`` for a child with a ``.path`` attribute
+    so subagent traces land next to the parent's. ``ConsoleTracePrinter``-only
+    or ``NullTraceSink`` parents return ``None`` — without a path anchor we
+    can't write subagent traces, and PR 1 silently degrades to
+    ``NullTraceSink``.
+    """
+    direct = getattr(parent_tracer, "path", None)
+    if direct is not None:
+        return Path(direct)
+    children = getattr(parent_tracer, "_children", None)
+    if children:
+        for child in children:
+            child_path = getattr(child, "path", None)
+            if child_path is not None:
+                return Path(child_path)
+    return None
+
+
+def _parent_has_console_printer(parent_tracer: Any) -> bool:
+    """Return True when the parent tracer chain contains a ConsoleTracePrinter.
+
+    Used by PR 4 to decide whether to emit subagent tool calls live to
+    stderr. Server / non-interactive runs disable trace_live and so have
+    no console printer; subagent output should stay quiet there.
+    """
+    if isinstance(parent_tracer, ConsoleTracePrinter):
+        return True
+    children = getattr(parent_tracer, "_children", None)
+    if children:
+        return any(isinstance(c, ConsoleTracePrinter) for c in children)
+    return False
+
+
+def _derive_subagent_trace_path(parent_tracer: Any, seq: int) -> Path | None:
+    """Return ``<session_dir>/<stem>.subagent-NNN.jsonl`` next to the parent.
+
+    Returns ``None`` when the parent tracer has no JSONL anchor (live-only
+    consoles, NullTraceSink, etc.) — callers fall back to ``NullTraceSink``.
+    """
+    parent_path = _parent_trace_path(parent_tracer)
+    if parent_path is None:
+        return None
+    parent_path = Path(parent_path)
+    stem = parent_path.stem or parent_path.name or "session"
+    suffix = parent_path.suffix or ".jsonl"
+    return parent_path.parent / f"{stem}.subagent-{seq:03d}{suffix}"
+
+
 def _wire_subagent_spawn(
     tools: dict[str, Any],
     *,
@@ -881,10 +933,17 @@ def _wire_subagent_spawn(
 
     Sub-agents reuse the parent's provider client/config where possible, but
     rebuild the Mode against their filtered tool registry so advertised tool
-    schemas match the allowlist. They also get a ``NullMemory`` and
-    ``NullTraceSink`` to keep their internal state isolated from the parent's
-    session. The parent's tracer still sees a single ``subagent_run`` summary
-    event for each call.
+    schemas match the allowlist. They also get a ``NullMemory`` to keep their
+    memory state isolated from the parent's session.
+
+    Each subagent run writes its own JSONL trace next to the parent's at
+    ``<parent_stem>.subagent-NNN.jsonl`` so the trace bridge can later
+    surface nested spans (B1+ PR 2). The parent's tracer still sees a
+    single ``subagent_run`` summary event for each call, now augmented with
+    ``seq``, ``task``, and ``trace_path`` so consumers can locate the
+    sibling file. When the parent tracer has no JSONL anchor (console-only
+    runs), the subagent falls back to ``NullTraceSink`` — matches the
+    pre-PR-1 behavior.
 
     When ``lanes`` is supplied, both ``spawn_subagent`` (singular) and
     ``spawn_subagents`` (batch) route their dispatches through it so
@@ -903,10 +962,21 @@ def _wire_subagent_spawn(
         SpawnSubagent,
         SubagentResult,
     )
+    from harness.trace import Tracer
 
     parent_tools = tools
+    spawn_seq = 0
+    spawn_seq_lock = threading.Lock()
+    live_console = _parent_has_console_printer(parent_tracer)
+
+    def _next_seq() -> int:
+        nonlocal spawn_seq
+        with spawn_seq_lock:
+            spawn_seq += 1
+            return spawn_seq
 
     def spawn(*, task: str, allowed_tools: list[str], max_turns: int, depth: int) -> SubagentResult:
+        seq = _next_seq()
         # Filter parent registry by allowed names. Skip 'spawn_subagent' here —
         # nested spawning is handled below with its own depth bound.
         sub_tools = {
@@ -926,6 +996,33 @@ def _wire_subagent_spawn(
             )
             sub_tools["spawn_subagent"] = nested
 
+        sub_trace_path = _derive_subagent_trace_path(parent_tracer, seq)
+        if sub_trace_path is not None:
+            try:
+                sub_tracer: Any = Tracer(sub_trace_path)
+            except OSError:
+                sub_tracer = NullTraceSink()
+                sub_trace_path = None
+        else:
+            sub_tracer = NullTraceSink()
+
+        # PR 4: when the parent runs interactively (its tracer chain has a
+        # ConsoleTracePrinter), stream the subagent's tool calls to stderr
+        # too — prefixed and quiet so the operator sees what the subagent
+        # is doing in real time without drowning in per-turn token lines.
+        # Indentation tracks ``depth`` so nested subagents are visually
+        # distinguished.
+        if live_console:
+            indent = "  " * depth
+            sub_console = ConsoleTracePrinter(
+                prefix=f"{indent}[subagent-{seq:03d}] ",
+                quiet=True,
+            )
+            if isinstance(sub_tracer, NullTraceSink):
+                sub_tracer = sub_console
+            else:
+                sub_tracer = CompositeTracer([sub_tracer, sub_console])
+
         sub_mode = mode.for_tools(sub_tools) if hasattr(mode, "for_tools") else mode
         sub_messages = sub_mode.initial_messages(task=task, prior="", tools=sub_tools)
         # Subagents intentionally use isolated memory/tracing and single-tool
@@ -936,21 +1033,76 @@ def _wire_subagent_spawn(
             max_cost_usd=max_cost_usd,
             max_tool_calls=max_tool_calls,
         )
-        result = run_until_idle(
-            sub_messages,
-            sub_mode,
-            sub_tools,
-            NullMemory(),
-            NullTraceSink(),
-            pricing=pricing_loader(),
-            stream_sink=stream_sink,
-            **sub_policy.idle_kwargs(),
-        )
-        # Best-effort visibility on the parent's trace.
+        # Bracket the subagent's run_until_idle with session_start /
+        # session_usage / session_end events. ``run_until_idle`` only emits
+        # turn-level events; the bracketing makes the subagent trace
+        # format-identical to a top-level session trace, so the trace
+        # bridge's existing parser (`_extract_tool_calls`,
+        # `_aggregate_stats`) can consume it without special-casing.
+        try:
+            sub_tracer.event("session_start", task=task)
+        except Exception:  # noqa: BLE001
+            pass
+        result = None
+        try:
+            result = run_until_idle(
+                sub_messages,
+                sub_mode,
+                sub_tools,
+                NullMemory(),
+                sub_tracer,
+                pricing=pricing_loader(),
+                stream_sink=stream_sink,
+                **sub_policy.idle_kwargs(),
+            )
+        finally:
+            if result is not None:
+                try:
+                    sub_tracer.event("session_usage", **result.usage.as_trace_dict())
+                    end_reason: str | None = None
+                    if getattr(result, "max_turns_reached", False):
+                        end_reason = "max_turns"
+                    elif getattr(result, "stopped_by_loop_detection", False):
+                        end_reason = "loop_detected"
+                    elif getattr(result, "stopped_by_budget", False):
+                        end_reason = (
+                            getattr(result, "budget_reason", None) or "budget_exceeded"
+                        )
+                    if end_reason is None:
+                        sub_tracer.event("session_end", turns=result.turns_used)
+                    else:
+                        sub_tracer.event(
+                            "session_end", turns=result.turns_used, reason=end_reason
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                sub_tracer.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Best-effort visibility on the parent's trace. ``trace_path`` is
+        # stored relative to the parent's trace directory when possible —
+        # absolute fallback when the file lives outside that subtree.
+        rel_trace_path: str | None = None
+        if sub_trace_path is not None:
+            parent_path = _parent_trace_path(parent_tracer)
+            if parent_path is not None:
+                try:
+                    rel_trace_path = str(
+                        sub_trace_path.relative_to(parent_path.parent).as_posix()
+                    )
+                except ValueError:
+                    rel_trace_path = str(sub_trace_path)
+            else:
+                rel_trace_path = str(sub_trace_path)
         try:
             parent_tracer.event(
                 "subagent_run",
                 depth=depth,
+                seq=seq,
+                task=task[:200],
+                trace_path=rel_trace_path,
                 turns=result.turns_used,
                 max_turns_reached=result.max_turns_reached,
                 input_tokens=int(getattr(result.usage, "input_tokens", 0) or 0),
