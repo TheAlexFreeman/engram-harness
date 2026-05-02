@@ -429,6 +429,36 @@ def test_resume_one_relocate_validates_resolved_trace_path(
     assert "ses_x.jsonl" in err
 
 
+def test_resume_one_rejects_session_id_mismatch_with_from_checkpoint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Guard against a stray --from-checkpoint pointing at another session's
+    file. Without this check the resumed loop would run under the checkpoint's
+    identity while SessionStore writes target the CLI session_id row."""
+    repo = tmp_path / "engram"
+    repo.mkdir()
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    # Checkpoint belongs to ses_A …
+    cp_path = _write_v2_checkpoint(repo, session_id="ses_A", workspace=str(ws))
+
+    # … but the user types ses_B on the CLI.
+    rc = _resume_one(
+        session_id="ses_B",
+        reply_arg=None,
+        db_override=tmp_path / "sessions.db",
+        memory_repo_override=repo,
+        workspace_override=ws,
+        relocate=True,
+        from_checkpoint=cp_path,
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "does not match requested session_id" in err
+    assert "ses_A" in err
+    assert "ses_B" in err
+
+
 def test_resume_one_non_relocate_requires_existing_db(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

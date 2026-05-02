@@ -368,6 +368,21 @@ def _resume_one(
             print(f"harness resume: invalid checkpoint at {cp_path}: {exc}", file=sys.stderr)
             return 2
 
+    # The checkpoint's session_id MUST match the one the user typed on the
+    # CLI. Without this guard, a stray ``--from-checkpoint`` (or the
+    # ``--relocate`` auto-discovery against a hand-edited path) would let
+    # the resumed loop run under the checkpoint's identity while
+    # SessionStore writes (mark_resumed, complete_session) target the
+    # CLI's session_id — two different rows desynchronizing silently.
+    if checkpoint.session_id != session_id:
+        store.close()
+        print(
+            f"harness resume: checkpoint session_id {checkpoint.session_id!r} "
+            f"at {cp_path} does not match requested session_id {session_id!r}.",
+            file=sys.stderr,
+        )
+        return 2
+
     # Capture the originals BEFORE applying overrides — the v1 trace-path
     # re-anchor needs the original memory_repo to compute the relative segment.
     original_memory_repo = checkpoint.memory_repo
