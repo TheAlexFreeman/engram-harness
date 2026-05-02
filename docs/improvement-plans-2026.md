@@ -2,7 +2,7 @@
 title: Engram Harness — Improvement Plans (2026)
 status: draft
 audience: project maintainers + contributors
-last_updated: 2026-04-25
+last_updated: 2026-05-02
 ---
 
 # Engram Harness — Improvement Plans (2026)
@@ -28,7 +28,7 @@ sequencing is the recommendation that matters most.
 provenance/versioning layer, the integration seam (PRs #15–#19) between
 the harness loop, the workspace, and Engram memory.
 
-**Status as of 2026-04-28.** Of the contemporary-practice gaps this
+**Status as of 2026-05-02.** Of the contemporary-practice gaps this
 document identified at the start of April 2026, the following have shipped:
 A1 (hybrid retrieval), A2 (bi-temporal facts + invalidation), A3 (link
 graph), A4 (sleep-time consolidate), A5 (promotion/decay lifecycle), A6
@@ -38,11 +38,14 @@ all three layers), B3 (code-as-action sandboxed Python tool), B4
 GenAI conformance), C2 (eval harness skeleton), C3 (replay mode), C4 (drift
 detection), D1 (two-layer prompt-injection defense), D2 (human-in-the-loop
 approval). System-prompt template extraction
-(system-prompt-improvements-plan.md) also shipped end-to-end. 18 of 19
+(system-prompt-improvements-plan.md) also shipped end-to-end. 18 of 24
 themes complete.
 
 **What's left** (open at the time of this update): E1 (DSPy/GEPA prompt
-optimization). Per-theme detail follows.
+optimization), and the new Theme F — F1 (wire roles into the prompt
+and CLI), F2 (workspace-vs-codebase write boundary), F3 (subagent role
+inheritance), F4 (role as observability dimension), F5 (inference,
+mid-session transitions, plan-phase binding). Per-theme detail follows.
 
 ---
 
@@ -714,6 +717,245 @@ target); A1 (better retrieval gives better signal).
 the complexity. Defer until C2 is operational and we have ≥20 sessions
 of scored trajectory data.
 
+### Theme F — Roles and identity
+
+A *role* is a named, declarative bundle of constraints and behavioral
+expectations under which a session runs. This project already ships a
+prompt template at [roles.md](../harness/prompt_templates/roles.md)
+describing four roles — `chat`, `plan`, `research`, `build` — but the
+template is **inert**: `harness/prompts.py` does not load it, no
+`--role` flag exists in `cli.py`/`loop.py`/`runner.py`, and
+[harness/tools/subagent.py:31-32](../harness/tools/subagent.py) calls
+out the gap explicitly ("Per-sub-agent system-prompt rewrite (currently
+reuses parent's Mode and prompt; the model only sees the trimmed tool
+registry)"). Every primitive a mature roles feature needs already
+exists in some form (tool profiles, `memory_writes`/`work_writes`
+flags, `with_plan_context`, subagent `allowed_tools` allowlists, D2
+async approval, B4 resume, C4 drift) — Theme F is mostly about naming
+useful combinations, enforcing them at the right boundaries, and
+threading the name through observability.
+
+The theme is structured so each sub-item ships value on its own. F1
+makes the feature real but text-only. F2 enforces the most important
+constraint (workspace-vs-codebase write boundary). F3 propagates
+roles through the subagent surface. F4 makes roles a first-class
+observability dimension. F5 covers the richer integrations (inference,
+mid-session transitions, plan-phase binding) that are nice-to-have
+once F1–F4 are in place.
+
+**Design tension to flag up front.** Static named bundles vs.
+capability-based composition. Four named roles is legible and easy to
+teach but rigid — every new combination needs a new name. The
+alternative is exposing `--tool-profile`, `--memory-writes`, etc.
+directly and letting "roles" be presets. The recommendation: start
+with named roles (better for prompts, better for evals) but keep the
+underlying primitives composable so power users can override
+(`--role research --memory-writes=false`). This keeps the conceptual
+surface small without painting us into a corner.
+
+#### F1. Wire roles into the system prompt and the CLI
+
+**Why.** The roles concept is documentation today. Step 1 makes it
+real, even if behavior shaping is purely prompt-based at this stage.
+This is a no-brainer prerequisite for everything else in the theme:
+F2 enforces; F3 propagates; F4 observes — but only if the role
+*exists* on a session in the first place.
+
+**Proposed shape.**
+1. Add `--role {chat,plan,research,build}` to the `harness` CLI
+   (default *unset* in F1, so existing scripts see no behavior change).
+   Plumb through `SessionConfig.role` to `system_prompt_native(...)`
+   and the runner.
+2. Extend `system_prompt_native` to accept `role: str | None`. When
+   set, find the matching `## <role>` section in `roles.md`, render
+   it as an "Active role" block, and inject it between the rules and
+   output sections. When unset, prompt is unchanged (back-compat).
+3. Defer the "role binds primitive defaults" piece (e.g. `chat` →
+   `memory_writes=off`) to a follow-on once F2's enforcement layer
+   exists — F1 is prompt-only so we don't ship a half-enforced
+   contract.
+4. Tests in a new `test_role_selection.py`: each role renders, the
+   role text appears in the prompt, the unknown-role case raises,
+   the no-role-specified case matches the previous output exactly,
+   the role-section heuristic block at the bottom of `roles.md`
+   does not leak into a session's prompt.
+
+**Files:** `harness/prompts.py`, `harness/prompt_templates/roles.md`
+(possibly stable per-role anchors for the parser),
+`harness/cli.py`, `harness/config.py`, `harness/tests/test_prompts.py`,
+new `harness/tests/test_role_selection.py`.
+
+**Complexity:** small. ~1 PR.
+
+**Dependencies:** none (roles.md already exists; primitives already
+exist).
+
+**Risks:** none significant in F1 — the no-role default keeps
+existing scripts working byte-for-byte. The interesting risk question
+("what default should be set once F2 makes the contract enforceable?")
+is deferred to its own follow-on; `chat` looks safest in capability
+terms but is a behavior change for code-modifying scripts that
+previously omitted `--role`.
+
+#### F2. Workspace-vs-codebase write boundary
+
+**Why.** This is the most architecturally interesting boundary the
+roles concept introduces and the only one that can't be enforced by
+prompt alone. `plan` and `research` need *workspace writes allowed,
+codebase writes denied* — but today `Edit`/`Write` operate against
+any path inside the configured workspace scope, with no distinction
+between `workspace/` (the harness-owned working surface) and the
+user's codebase. The roles.md text says "Reads broadly but writes
+only to the workspace" for `plan`/`research`; F2 makes that
+enforceable, not aspirational.
+
+**Proposed shape.**
+1. Path-policy guard inside `Edit`/`Write` that consults the active
+   role. Two paths:
+   - `workspace_writes_only` roles: Edit/Write reject any path
+     outside `<harness_project_root>/workspace/` plus a small
+     allowlist (the agent's own scratch area). Reject is a structured
+     tool error, not a silent no-op.
+   - `full_writes` roles: today's behavior.
+2. The boundary is computed once at session start from
+   `(role, --memory-writes, --work-writes)` so the rule is
+   inspectable and stable for the session.
+3. Trace event `role_write_denied` for audit and so C4 can flag
+   sessions that would have benefited from a different role.
+4. Subagent inheritance handled in F3 — F2 is just the per-session
+   guard.
+
+**Files:** `harness/tools/file_ops.py` (or wherever Edit/Write live),
+new `harness/safety/role_guard.py` (or fold into existing
+`harness/safety/`), `harness/config.py`,
+`harness/tests/test_role_guard.py`.
+
+**Complexity:** medium. ~1–2 PRs (guard + audit; tests).
+
+**Dependencies:** F1.
+
+**Risks:** the workspace boundary is *path-shaped*, not
+*tool-shaped*, and tool authors who add a new write tool may forget
+to consult the guard. Centralize the guard in the tool dispatch
+path, not in each tool, so this can't be missed.
+
+#### F3. Subagent role inheritance with narrowing
+
+**Why.** [harness/tools/subagent.py:31-32](../harness/tools/subagent.py)
+already calls out the limitation: subagents reuse the parent's Mode
+and system prompt and only differ via the trimmed tool registry.
+Roles fix this cleanly: a `build` parent should be able to spawn a
+`research` child for information-gathering, with the child's prompt
+and write boundary actually narrowed to research-shaped behavior,
+not just relying on the trimmed `allowed_tools`.
+
+**Proposed shape.**
+1. Add optional `role` field to the `spawn_subagent` and
+   `spawn_subagents` tool input schemas (validated against the same
+   role list as F1). Default = inherit from parent.
+2. Narrowing-only enforcement: a `research` parent may not spawn a
+   `build` child. Order: `chat < research < plan < build` for
+   capability; `build` is widest. Reject widening with a structured
+   error, not a silent override.
+3. Child's system prompt is rebuilt for the child's role (not just
+   the parent's prompt with a tool list trim).
+4. Trace span carries `subagent.role` for observability.
+
+**Files:** `harness/tools/subagent.py`, `harness/runner.py`
+(spawn callback), `harness/trace.py` (new span field),
+`harness/tests/test_subagent.py`.
+
+**Complexity:** medium. ~1 PR.
+
+**Dependencies:** F1 (need roles to inherit), F2 (need write
+boundary to narrow).
+
+**Risks:** rebuilding the child's prompt invalidates the comment at
+[subagent.py:31-32](../harness/tools/subagent.py) — make sure the
+existing parent-prompt-reuse path still works for the no-role case
+so we don't regress sessions that don't opt in.
+
+#### F4. Role as observability dimension
+
+**Why.** A role is only as useful as it is *visible*. C4 drift
+detection already runs over rolling windows of session quality
+metrics; adding role as a dimension lets it flag mismatches that
+would otherwise be invisible — e.g. a `build` session that spent
+80% of its tokens reading without an Edit (likely should have been
+`research`), a `plan` session that wrote to a code file via some
+escape hatch (broken F2 guard), a `chat` session that escalated
+silently. C2 evals likewise benefit: per-role pass-rates expose
+whether prompt changes that helped `build` regressed `research`.
+
+**Proposed shape.**
+1. Trace records carry `session.role` (and `subagent.role` per F3).
+2. `cmd_eval` reports include per-role breakdowns alongside the
+   existing aggregate metrics.
+3. New C4 drift rule: "role/behavior mismatch" — if a session's
+   tool-call distribution diverges from the role's expected
+   distribution by more than a threshold, alert. Expected
+   distributions are learned from prior sessions (≥N per role)
+   not hand-coded.
+4. `harness status` includes the active role for live sessions and
+   recently completed ones.
+
+**Files:** `harness/trace.py`, `harness/trace_bridge.py`,
+`harness/cmd_eval.py`, `harness/cmd_drift.py`,
+`harness/cmd_status.py`, `harness/tests/test_drift_role.py`.
+
+**Complexity:** small–medium. ~1 PR (trace + status), ~1 PR (drift
++ eval).
+
+**Dependencies:** F1 for the role to exist on the session; C2 and
+C4 already shipped.
+
+**Risks:** the drift rule will produce false positives early
+(insufficient prior data per role). Make it advisory-only initially
+(same pattern as A5 v1, D1 v1).
+
+#### F5. Inference, mid-session transitions, and plan-phase binding
+
+**Why.** F1–F4 cover the explicit-role path. F5 covers the harder
+ergonomics: what happens when the user doesn't say `--role`, what
+happens when a `chat` session evolves into needing to build, and how
+multi-phase plans declare per-phase roles for B4 resume to land in
+the right one.
+
+**Proposed shape.**
+1. **Inference** (off by default, opt-in via `--role infer`). Use
+   the existing inference heuristic at the bottom of
+   [roles.md](../harness/prompt_templates/roles.md) ("Questions →
+   chat, 'figure out' → research, 'plan' → plan, 'fix/implement' →
+   build"). On infer-mode session start, log the chosen role and the
+   reason; never escalate silently mid-session.
+2. **Mid-session transitions** via a `request_role_change(target,
+   reason)` tool that piggybacks on the D2 async-approval plumbing.
+   The agent never self-promotes — it requests, the human approves
+   (or denies), the session continues under the new role from the
+   next turn. Trace event `role_transition_requested` /
+   `role_transition_resolved`.
+3. **Plan-phase binding.** Workspace plan phases optionally declare
+   `role: <name>`; B4 cross-machine resume reads it and starts the
+   resumed session in the declared role. Useful for plans that
+   alternate research → plan → build phases.
+
+**Files:** `harness/cli.py` (infer flag), new
+`harness/role_inference.py`, `harness/tools/role_change.py`
+(approval-gated tool), `harness/safety/approval.py` (extend), B4
+checkpoint schema (`harness/checkpoint.py`),
+`harness/tests/test_role_inference.py`,
+`harness/tests/test_role_transition.py`.
+
+**Complexity:** medium-high. ~3 PRs (infer; transition tool; plan
+binding).
+
+**Dependencies:** F1 (roles exist), D2 (async approval — for the
+transition gate), B4 (resume — for plan-phase binding).
+
+**Risks:** scope creep. Inference is the lowest-value of the three
+sub-features (the user can just say `--role`); transition is the
+highest. Consider shipping inference last or skipping it.
+
 ---
 
 ## Sequencing recommendation
@@ -743,6 +985,20 @@ of scored trajectory data.
 6. **B3 (code-as-action)** — shipped.
 7. **E1 (DSPy/GEPA optimization)** — defer until ≥20 scored sessions
    exist via C2. Heaviest dependency among the remaining items.
+
+**Theme F sequencing (newly opened 2026-05-02):**
+
+F1 → F2 → F3 → F4 → F5. F1 is a small, no-dependency PR that makes
+roles real; everything downstream needs it. F2 is the highest-value
+enforcement step (the workspace-vs-codebase write boundary is the
+architecturally interesting part, and is the only thing prompt text
+alone cannot enforce). F3 propagates roles through subagents,
+unblocking the long-standing parent-prompt-reuse limitation. F4
+makes roles a first-class observability dimension and enables the
+drift rule that catches role/behavior mismatches. F5 is the
+nice-to-have ergonomics (inference, mid-session transitions,
+plan-phase binding) — ship last and consider skipping inference
+entirely if the explicit-role path proves sufficient in practice.
 
 ---
 

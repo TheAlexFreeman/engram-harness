@@ -117,6 +117,11 @@ class SessionConfig:
     # Tool access control
     tool_profile: ToolProfile = ToolProfile.FULL
 
+    # F1: agent role for this session. ``None`` means no role section is
+    # injected into the system prompt (preserves pre-roles behavior). When
+    # set, must be one of :data:`harness.prompts.ROLES`.
+    role: str | None = None
+
     # Grok-specific
     grok_include: list[str] = field(default_factory=list)
     grok_encrypted_reasoning: bool = False
@@ -461,6 +466,7 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         # through to the SessionConfig default (True).
         reflect=reflect_arg if reflect_arg is not None else True,
         tool_profile=ToolProfile(getattr(args, "tool_profile", "full")),
+        role=getattr(args, "role", None),
         grok_include=list(args.grok_include or []),
         grok_encrypted_reasoning=args.grok_encrypted_reasoning,
     )
@@ -686,6 +692,7 @@ def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any
                 with_plan_context=_has_active_plan_context(tools, engram_memory),
                 memory_writes=memory_writes,
                 work_writes=work_writes,
+                role=config.role,
             ),
         )
 
@@ -707,6 +714,7 @@ def _build_mode(config: SessionConfig, tools: dict[str, Any], engram_memory: Any
                 with_plan_context=_has_active_plan_context(tools, engram_memory),
                 memory_writes=memory_writes,
                 work_writes=work_writes,
+                role=config.role,
             ),
         )
     raise AssertionError("unreachable")

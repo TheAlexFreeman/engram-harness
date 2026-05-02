@@ -480,6 +480,20 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--role",
+        choices=["chat", "plan", "research", "build"],
+        default=None,
+        dest="role",
+        help=(
+            "Agent role for this session — shapes behavioral expectations via "
+            "an additional system-prompt section sourced from "
+            "harness/prompt_templates/roles.md. 'chat': conversational, no edits. "
+            "'plan': designs in workspace, no code changes. 'research': investigates, "
+            "writes findings to workspace. 'build': implements changes, full tool "
+            "access. Default: unset (no role section, pre-F1 behavior)."
+        ),
+    )
+    parser.add_argument(
         "--grok-include",
         action="append",
         default=None,
