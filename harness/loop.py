@@ -955,6 +955,7 @@ def run(
     full_compaction_input_token_threshold: int | None = None,
     pause_handle: Any = None,
     resume_state: Any = None,
+    role: str | None = None,
 ) -> RunResult:
     """Top-level session driver.
 
@@ -987,7 +988,13 @@ def run(
     else:
         prior = memory.start_session(task)
         messages = mode.initial_messages(task=task, prior=prior, tools=tools)
-        tracer.event("session_start", task=task)
+        # F4: include the active role on session_start when set so the trace
+        # bridge / cmd_eval / cmd_drift can correlate metrics by role.
+        # ``role=None`` means no role section in the prompt — pre-F1 behavior.
+        if role is None:
+            tracer.event("session_start", task=task)
+        else:
+            tracer.event("session_start", task=task, role=role)
         resume_counters = None
         resume_usage = None
 

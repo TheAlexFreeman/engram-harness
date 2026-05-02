@@ -112,8 +112,9 @@ def _print_recent_sessions(db_path: Path, limit: int) -> None:
             sid = (r.session_id or "?")[:12]
             status = (r.status or "?")[:10]
             cost = f"${r.total_cost_usd:.4f}" if r.total_cost_usd else "  —    "
+            role_tag = f"  [{r.role}]" if r.role else ""
             task_preview = (r.task or "")[:50]
-            print(f"  {ts}  {sid}  {status:<10}  {cost}  {task_preview!r}")
+            print(f"  {ts}  {sid}  {status:<10}  {cost}{role_tag}  {task_preview!r}")
     else:
         print("Recent sessions: none recorded")
 

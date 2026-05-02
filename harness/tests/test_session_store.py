@@ -359,6 +359,26 @@ def test_backfill_from_trace(tmp_path, store):
     assert rec.tool_counts == {"read_file": 1, "edit_file": 1}
 
 
+def test_backfill_preserves_role_from_session_start(tmp_path, store):
+    trace_dir = tmp_path / "traces"
+    trace_path = trace_dir / "20260421-000000-native.jsonl"
+    _write_trace(
+        trace_path,
+        [
+            {
+                "ts": "2026-04-21T00:00:00.000",
+                "kind": "session_start",
+                "task": "Roleful task",
+                "role": "plan",
+            },
+            {"ts": "2026-04-21T00:00:01.000", "kind": "session_end", "turns": 1},
+        ],
+    )
+    assert store.backfill_from_traces(trace_dir) == 1
+    rec = store.list_sessions()[0]
+    assert rec.role == "plan"
+
+
 def test_backfill_idempotent(tmp_path, store):
     trace_dir = tmp_path / "traces"
     trace_path = trace_dir / "20260421-000000-native.jsonl"

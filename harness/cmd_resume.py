@@ -532,6 +532,7 @@ def _resume_one(
                     stream_sink=components.stream_sink,
                     skip_end_session_commit=True,
                     resume_state=resume_state,
+                    role=config.role,
                     **policy.run_kwargs(),
                 )
 
