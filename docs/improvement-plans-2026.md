@@ -937,33 +937,43 @@ escape hatch (broken F2 guard), a `chat` session that escalated
 silently. C2 evals likewise benefit: per-role pass-rates expose
 whether prompt changes that helped `build` regressed `research`.
 
-**Proposed shape.**
+**Proposed shape (as shipped — F4 v1 + deferred follow-ons).**
 
-1. Trace records carry `session.role` (and `subagent.role` per F3).
-2. `cmd_eval` reports include per-role breakdowns alongside the
-  existing aggregate metrics.
-3. New C4 drift rule: "role/behavior mismatch" — if a session's
-  tool-call distribution diverges from the role's expected
-   distribution by more than a threshold, alert. Expected
-   distributions are learned from prior sessions (≥N per role)
-   not hand-coded.
-4. `harness status` includes the active role for live sessions and
-  recently completed ones.
+1. ✅ **Trace records carry `session.role`** (F4 v1). `loop.run`
+   accepts `role: str | None`; when set, the `session_start` event
+   payload includes `role`. Runner's interactive paths use a small
+   `_emit_session_start` helper that omits the field when unset
+   (preserves pre-F1 trace format byte-for-byte). `subagent.role`
+   on the `subagent_run` event already landed in F3.
+2. ⏳ **`cmd_eval` per-role breakdowns** — deferred. Needs ≥N
+   sessions per role to produce meaningful baselines.
+3. ⏳ **C4 drift rule for role/behavior mismatch** — deferred,
+   same data prerequisite as #2. Make it advisory-only initially
+   when it ships (same pattern as A5 v1, D1 v1).
+4. ✅ **`harness status` shows role** (F4 v1). New `role` column
+   on `SessionRecord` (additive schema upgrade for older DBs);
+   `_insert_cli_session_row` writes `config.role`; `cmd_status`
+   prints a `[role]` tag per session line when set, no tag when
+   unset.
 
-**Files:** `harness/trace.py`, `harness/trace_bridge.py`,
-`harness/cmd_eval.py`, `harness/cmd_drift.py`,
-`harness/cmd_status.py`, `harness/tests/test_drift_role.py`.
+**Files (as shipped):** `harness/session_store.py` (role column +
+additive upgrade), `harness/cli.py` (populate role in CLI session
+row), `harness/cmd_status.py` (display role tag), `harness/loop.py`
+(role kwarg + conditional `session_start` payload),
+`harness/runner.py` (`_emit_session_start` helper + role threaded
+into both interactive paths and the `loop.run` call in
+`run_batch`), `harness/cmd_resume.py` (role from checkpoint config
+restored to resumed `loop.run`),
+`harness/tests/test_role_observability.py` (15 tests covering
+SessionRecord round-trip, schema upgrade, helper behavior, loop
+integration, cmd_status output, and the F3 subagent_run regression
+guard).
 
-**Complexity:** small–medium. ~1 PR (trace + status), ~1 PR (drift
-
-- eval).
+**Complexity:** small. F4 v1 = 1 PR. Per-role eval breakdown + drift
+rule = 1 follow-on PR each, after data accumulates.
 
 **Dependencies:** F1 for the role to exist on the session; C2 and
 C4 already shipped.
-
-**Risks:** the drift rule will produce false positives early
-(insufficient prior data per role). Make it advisory-only initially
-(same pattern as A5 v1, D1 v1).
 
 #### F5. Inference, mid-session transitions, and plan-phase binding
 

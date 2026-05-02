@@ -55,6 +55,9 @@ class SessionRecord:
     # both back to None.
     pause_checkpoint: str | None = None
     paused_at: str | None = None
+    # F4: agent role for the session (chat / plan / research / build / None).
+    # ``None`` means no role was set — pre-F1 behavior.
+    role: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         d = {
@@ -86,6 +89,7 @@ class SessionRecord:
             "active_plan_id": self.active_plan_id,
             "pause_checkpoint": self.pause_checkpoint,
             "paused_at": self.paused_at,
+            "role": self.role,
         }
         return d
 
@@ -126,6 +130,7 @@ class SessionRecord:
             active_plan_id=row.get("active_plan_id"),
             pause_checkpoint=row.get("pause_checkpoint"),
             paused_at=row.get("paused_at"),
+            role=row.get("role"),
         )
 
 
@@ -187,6 +192,7 @@ class SessionStore:
             ("active_plan_id", "TEXT"),
             ("pause_checkpoint", "TEXT"),
             ("paused_at", "TEXT"),
+            ("role", "TEXT"),  # F4
         ]
         for name, decl in additive:
             if name not in existing:

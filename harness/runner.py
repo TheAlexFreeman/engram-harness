@@ -47,6 +47,20 @@ def _bridge_enabled(components: "SessionComponents") -> bool:
     return trace_to_engram_enabled(components.config, components.engram_memory)
 
 
+def _emit_session_start(tracer, *, task: str, role: str | None = None, **extra) -> None:
+    """Emit a ``session_start`` trace event with ``role`` only when set (F4).
+
+    Keeping ``role`` out of the payload when it's ``None`` matches the
+    pre-F1 trace format byte-for-byte for sessions that haven't opted in.
+    Downstream consumers (trace bridge, cmd_eval, cmd_drift) read ``role``
+    from this event to correlate metrics by role.
+    """
+    payload: dict = {"task": task, **extra}
+    if role is not None:
+        payload["role"] = role
+    tracer.event("session_start", **payload)
+
+
 def _run_subtask(
     input_text: str,
     subtask_idx: int,
@@ -157,7 +171,7 @@ def run_interactive(
                 messages = components.mode.initial_messages(
                     task=opener, prior=prior, tools=components.tools
                 )
-                tracer.event("session_start", task=opener)
+                _emit_session_start(tracer, task=opener, role=components.config.role)
                 session_started = True
                 r0 = _run_subtask(
                     opener,
@@ -202,9 +216,10 @@ def run_interactive(
                     messages = components.mode.initial_messages(
                         task=first, prior=prior, tools=components.tools
                     )
-                    tracer.event(
-                        "session_start",
+                    _emit_session_start(
+                        tracer,
                         task=_INTERACTIVE_SESSION_LABEL,
+                        role=components.config.role,
                         opener=first,
                     )
                     session_started = True
@@ -321,6 +336,7 @@ def run_batch(args: "argparse.Namespace", components: "SessionComponents"):
                 tracer,
                 stream_sink=components.stream_sink,
                 skip_end_session_commit=bridge,
+                role=components.config.role,
                 **policy.run_kwargs(),
             )
 

@@ -801,6 +801,7 @@ def _insert_cli_session_row(store, session_id, args, config, components):
                 workspace=str(config.workspace),
                 created_at=datetime.now().isoformat(timespec="seconds"),
                 trace_path=str(components.trace_path),
+                role=config.role,
             )
         )
     except Exception:  # noqa: BLE001
