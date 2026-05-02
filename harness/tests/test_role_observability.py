@@ -59,9 +59,7 @@ def test_session_record_none_role_round_trips(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("role", ["chat", "plan", "research", "build"])
-def test_session_record_with_role_round_trips_through_db(
-    tmp_path: Path, role: str
-) -> None:
+def test_session_record_with_role_round_trips_through_db(tmp_path: Path, role: str) -> None:
     store = SessionStore(tmp_path / "sessions.db")
     record = SessionRecord(
         session_id=f"s-{role}",
@@ -312,9 +310,7 @@ def test_subagent_run_event_carries_role(monkeypatch) -> None:
     tracer = _Tracer()
     _wire_subagent_spawn(
         parent_tools,
-        mode=_ScriptedModeWithForTools(
-            [_ScriptedResponse(tool_calls=[], text="ok")]
-        ),
+        mode=_ScriptedModeWithForTools([_ScriptedResponse(tool_calls=[], text="ok")]),
         parent_tracer=tracer,
         pricing_loader=lambda: None,
         parent_role="research",
