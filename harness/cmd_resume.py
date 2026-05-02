@@ -6,10 +6,17 @@ existing conversation by mutating the placeholder ``tool_result`` block,
 restores ``EngramMemory`` buffered events, re-enters the loop, and lets
 the trace bridge run once the resumed session ends naturally.
 
-Same-machine, same-workspace only in v1: the checkpoint records absolute
-paths to the workspace and Engram repo, and we validate they still exist
-before resuming. Cross-machine resume is a deliberate follow-up (see
-docs/improvement-plans-2026.md §B4 — "deferred").
+Three resume modes:
+
+- **Same machine** (``harness resume <id>``): SessionStore looks up the
+  paused row; the recorded checkpoint path is read directly.
+- **Same-machine relocation** (``--workspace`` / ``--memory-repo``): the
+  workspace or engram repo moved on this machine since the pause; override
+  the recorded paths.
+- **Cross-machine** (``--relocate --workspace … --memory-repo …``): the
+  checkpoint and trace JSONL were copied from another host. Bypasses the
+  SessionStore lookup, registers a row on the target machine, warns on
+  hostname / git-SHA drift between recording and resume.
 """
 
 from __future__ import annotations
@@ -22,12 +29,17 @@ from datetime import datetime
 from pathlib import Path
 
 from harness.checkpoint import (
+    CHECKPOINT_FILENAME,
     Checkpoint,
     ResumeState,
+    encode_trace_path_token,
+    expand_path_tokens,
     mutate_pause_reply,
     read_checkpoint,
     restore_loop_state,
     restore_memory_state,
+    safe_git_head,
+    safe_hostname,
 )
 from harness.config import (
     RunPolicy,
@@ -93,6 +105,83 @@ def _validate_resume_paths(checkpoint: Checkpoint) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Trace-path resolution (v1 absolute paths + v2 ${memory_repo} tokens)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_trace_path(
+    template: str,
+    *,
+    anchors: dict[str, str],
+    original_memory_repo: str,
+    was_v1: bool,
+) -> str:
+    """Resolve the checkpoint's trace_path against the (possibly overridden) anchors.
+
+    Three cases:
+    1. v2 token string (``${memory_repo}/...``) → expand against ``anchors``.
+    2. v1 absolute path AND no relocation in effect → return unchanged.
+    3. v1 absolute path AND memory_repo override → re-anchor by computing
+       the relative segment from the original memory_repo and joining with
+       the new one. If the v1 trace path doesn't live inside the original
+       memory_repo (the no-Engram pause edge case), raise ValueError so the
+       caller can surface a clear error rather than producing a bogus path.
+    """
+    if "${" in template:
+        return expand_path_tokens(template, anchors)
+    new_repo = anchors.get("memory_repo", "")
+    if not was_v1 or not new_repo or not original_memory_repo:
+        return template
+    if Path(new_repo).resolve() == Path(original_memory_repo).resolve():
+        return template
+    # v1 absolute trace path with a memory_repo override → re-anchor.
+    try:
+        rel = Path(template).resolve().relative_to(Path(original_memory_repo).resolve())
+    except ValueError as exc:
+        raise ValueError(
+            f"v1 trace_path {template!r} is not inside its recorded memory_repo "
+            f"{original_memory_repo!r}; cannot relocate. Pass --from-checkpoint and "
+            f"adjust the trace path manually."
+        ) from exc
+    return str(Path(new_repo) / rel)
+
+
+# ---------------------------------------------------------------------------
+# Drift warnings (cross-machine resume — hostname + workspace/engram SHA)
+# ---------------------------------------------------------------------------
+
+
+def _warn_on_drift(checkpoint: Checkpoint, *, workspace: Path, memory_repo: Path) -> None:
+    """Print stderr warnings when the resume environment differs from where
+    the session paused. All warnings are advisory — never blocking — because
+    a deliberately diverged checkout is a normal cross-machine workflow.
+    """
+    current_host = safe_hostname()
+    if checkpoint.hostname and current_host and checkpoint.hostname != current_host:
+        print(
+            f"[warning] hostname drift: paused on {checkpoint.hostname!r}, "
+            f"resuming on {current_host!r}",
+            file=sys.stderr,
+        )
+    if checkpoint.workspace_sha:
+        local_ws_sha = safe_git_head(workspace)
+        if local_ws_sha and local_ws_sha != checkpoint.workspace_sha:
+            print(
+                f"[warning] workspace SHA drift: paused at "
+                f"{checkpoint.workspace_sha[:8]}, resuming at {local_ws_sha[:8]}",
+                file=sys.stderr,
+            )
+    if checkpoint.memory_repo_sha:
+        local_repo_sha = safe_git_head(memory_repo)
+        if local_repo_sha and local_repo_sha != checkpoint.memory_repo_sha:
+            print(
+                f"[warning] engram repo SHA drift: paused at "
+                f"{checkpoint.memory_repo_sha[:8]}, resuming at {local_repo_sha[:8]}",
+                file=sys.stderr,
+            )
+
+
+# ---------------------------------------------------------------------------
 # Config reconstruction
 # ---------------------------------------------------------------------------
 
@@ -136,7 +225,6 @@ def _re_pause(
     for the conversation snapshot. Returns the CLI exit code (0).
     """
     from harness.checkpoint import (
-        CHECKPOINT_FILENAME,
         serialize_checkpoint,
         serialize_memory_state,
         write_checkpoint,
@@ -144,6 +232,9 @@ def _re_pause(
 
     pause = result.paused
     cp_path = Path(checkpoint.trace_path).parent / CHECKPOINT_FILENAME
+    # Re-pause always writes v2: token-relative trace_path + fresh metadata.
+    # When the original was v1 this is the auto-upgrade boundary.
+    trace_token = encode_trace_path_token(checkpoint.trace_path, checkpoint.memory_repo)
     payload = serialize_checkpoint(
         session_id=checkpoint.session_id,
         task=checkpoint.task,
@@ -151,7 +242,7 @@ def _re_pause(
         mode=checkpoint.mode,
         workspace=checkpoint.workspace,
         memory_repo=checkpoint.memory_repo,
-        trace_path=checkpoint.trace_path,
+        trace_path=trace_token,
         messages=resume_state.messages,
         usage=result.usage,
         loop_state=pause.loop_state,
@@ -159,6 +250,9 @@ def _re_pause(
         pause=pause.pause_info,
         checkpoint_at=datetime.now().isoformat(timespec="seconds"),
         extra={**checkpoint.extra, "session_config": serialize_session_config(components.config)},
+        hostname=safe_hostname(),
+        workspace_sha=safe_git_head(checkpoint.workspace),
+        memory_repo_sha=safe_git_head(checkpoint.memory_repo) if checkpoint.memory_repo else None,
     )
     write_checkpoint(cp_path, payload)
 
@@ -191,59 +285,148 @@ def _resume_one(
     db_override: Path | None,
     memory_repo_override: Path | None,
     workspace_override: Path | None,
+    relocate: bool = False,
+    from_checkpoint: Path | None = None,
 ) -> int:
     db_env = os.getenv("HARNESS_DB_PATH")
     db_path = db_override or (Path(db_env) if db_env else None)
-    if db_path is None or not db_path.is_file():
+    if db_path is None:
+        print(
+            "harness resume: SessionStore database required (set HARNESS_DB_PATH or pass --db).",
+            file=sys.stderr,
+        )
+        return 2
+    # In --relocate mode the DB on the target machine may not exist yet —
+    # SessionStore's __init__ creates parent dirs and initializes the schema,
+    # so we accept a not-yet-existing path. Same-machine resume still requires
+    # the DB to exist (otherwise the session record can't be there).
+    if not relocate and not db_path.is_file():
         print(
             "harness resume: SessionStore database required (set HARNESS_DB_PATH or pass --db).",
             file=sys.stderr,
         )
         return 2
     store = SessionStore(db_path)
-    record = store.get_session(session_id)
-    if record is None:
-        store.close()
-        print(f"harness resume: no such session: {session_id}", file=sys.stderr)
-        return 2
-    if record.status != "paused":
-        store.close()
-        print(
-            f"harness resume: session {session_id} has status {record.status!r}, "
-            f"not 'paused' — refusing to resume.",
-            file=sys.stderr,
-        )
-        return 2
-    if not record.pause_checkpoint:
-        store.close()
-        print(
-            f"harness resume: session {session_id} has no checkpoint path recorded.",
-            file=sys.stderr,
-        )
-        return 2
 
-    cp_path = Path(record.pause_checkpoint)
-    try:
-        checkpoint = read_checkpoint(cp_path)
-    except FileNotFoundError as exc:
-        store.close()
-        print(f"harness resume: {exc}", file=sys.stderr)
-        return 2
-    except ValueError as exc:
-        store.close()
-        print(f"harness resume: invalid checkpoint at {cp_path}: {exc}", file=sys.stderr)
-        return 2
+    if relocate:
+        if memory_repo_override is None or workspace_override is None:
+            store.close()
+            print(
+                "harness resume --relocate: --workspace AND --memory-repo are required.",
+                file=sys.stderr,
+            )
+            return 2
+        if from_checkpoint is not None:
+            cp_path = from_checkpoint
+        else:
+            cp_path = memory_repo_override / "sessions" / session_id / CHECKPOINT_FILENAME
+        try:
+            checkpoint = read_checkpoint(cp_path)
+        except FileNotFoundError as exc:
+            store.close()
+            print(f"harness resume: {exc}", file=sys.stderr)
+            return 2
+        except ValueError as exc:
+            store.close()
+            print(
+                f"harness resume: invalid checkpoint at {cp_path}: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+        record = None  # no SessionStore row on this machine yet
+    else:
+        record = store.get_session(session_id)
+        if record is None:
+            store.close()
+            print(f"harness resume: no such session: {session_id}", file=sys.stderr)
+            return 2
+        if record.status != "paused":
+            store.close()
+            print(
+                f"harness resume: session {session_id} has status {record.status!r}, "
+                f"not 'paused' — refusing to resume.",
+                file=sys.stderr,
+            )
+            return 2
+        if not record.pause_checkpoint:
+            store.close()
+            print(
+                f"harness resume: session {session_id} has no checkpoint path recorded.",
+                file=sys.stderr,
+            )
+            return 2
 
+        cp_path = from_checkpoint or Path(record.pause_checkpoint)
+        try:
+            checkpoint = read_checkpoint(cp_path)
+        except FileNotFoundError as exc:
+            store.close()
+            print(f"harness resume: {exc}", file=sys.stderr)
+            return 2
+        except ValueError as exc:
+            store.close()
+            print(f"harness resume: invalid checkpoint at {cp_path}: {exc}", file=sys.stderr)
+            return 2
+
+    # Capture the originals BEFORE applying overrides — the v1 trace-path
+    # re-anchor needs the original memory_repo to compute the relative segment.
+    original_memory_repo = checkpoint.memory_repo
     if memory_repo_override is not None:
         checkpoint.memory_repo = str(memory_repo_override)
     if workspace_override is not None:
         checkpoint.workspace = str(workspace_override)
+
+    try:
+        checkpoint.trace_path = _resolve_trace_path(
+            checkpoint.trace_path,
+            anchors={
+                "workspace": checkpoint.workspace,
+                "memory_repo": checkpoint.memory_repo,
+            },
+            original_memory_repo=original_memory_repo,
+            was_v1=checkpoint.was_v1,
+        )
+    except (KeyError, ValueError) as exc:
+        store.close()
+        print(f"harness resume: {exc}", file=sys.stderr)
+        return 2
 
     err = _validate_resume_paths(checkpoint)
     if err is not None:
         store.close()
         print(f"harness resume: {err}", file=sys.stderr)
         return 2
+
+    _warn_on_drift(
+        checkpoint,
+        workspace=Path(checkpoint.workspace),
+        memory_repo=Path(checkpoint.memory_repo),
+    )
+
+    if relocate:
+        # Insert a paused row on this machine so the rest of the flow
+        # (mark_resumed, complete_session) operates against a real record.
+        store.register_relocated_session(
+            session_id=checkpoint.session_id,
+            task=checkpoint.task,
+            model=checkpoint.model,
+            mode=checkpoint.mode,
+            workspace=checkpoint.workspace,
+            trace_path=checkpoint.trace_path,
+            checkpoint_path=str(cp_path),
+            paused_at=checkpoint.checkpoint_at or datetime.now().isoformat(timespec="seconds"),
+        )
+        record = store.get_session(session_id)
+        if record is None:
+            # Should be unreachable — register_relocated_session just inserted
+            # the row — but surface defensively rather than crash on the
+            # `record.paused_at` access below.
+            store.close()
+            print(
+                "harness resume: failed to register relocated session in SessionStore.",
+                file=sys.stderr,
+            )
+            return 2
 
     print(
         f"\n[resume] session {session_id} (paused {record.paused_at})",
@@ -445,14 +628,36 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="memory_repo",
         help=(
             "Override the Engram repo path recorded in the checkpoint. Use "
-            "this only when the original repo has moved on the same machine; "
-            "cross-machine relocation is a deliberate follow-up."
+            "this when the original repo has moved on the same machine, OR "
+            "in combination with --relocate for cross-machine resume."
         ),
     )
     parser.add_argument(
         "--workspace",
         default=None,
         help="Override the workspace path recorded in the checkpoint.",
+    )
+    parser.add_argument(
+        "--relocate",
+        action="store_true",
+        help=(
+            "Cross-machine resume mode. Bypasses the SessionStore lookup "
+            "(no row required for this session_id), requires --workspace AND "
+            "--memory-repo, looks for the checkpoint at "
+            "<memory-repo>/sessions/<session_id>/checkpoint.json (or use "
+            "--from-checkpoint to override), registers a paused row in this "
+            "machine's SessionStore, and warns on hostname / git-SHA drift."
+        ),
+    )
+    parser.add_argument(
+        "--from-checkpoint",
+        default=None,
+        dest="from_checkpoint",
+        help=(
+            "Read the checkpoint from this explicit path instead of the one "
+            "recorded in SessionStore (or the convention path under "
+            "--memory-repo when --relocate is set)."
+        ),
     )
     return parser
 
@@ -466,12 +671,17 @@ def main() -> None:
         Path(args.memory_repo).expanduser().resolve() if args.memory_repo else None
     )
     workspace_override = Path(args.workspace).expanduser().resolve() if args.workspace else None
+    from_checkpoint = (
+        Path(args.from_checkpoint).expanduser().resolve() if args.from_checkpoint else None
+    )
     rc = _resume_one(
         session_id=args.session_id,
         reply_arg=args.reply,
         db_override=db_override,
         memory_repo_override=memory_repo_override,
         workspace_override=workspace_override,
+        relocate=bool(args.relocate),
+        from_checkpoint=from_checkpoint,
     )
     sys.exit(rc)
 

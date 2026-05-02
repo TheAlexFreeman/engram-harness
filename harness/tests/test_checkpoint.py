@@ -13,15 +13,20 @@ from harness.checkpoint import (
     CHECKPOINT_FILENAME,
     CHECKPOINT_VERSION,
     PAUSE_PLACEHOLDER,
+    SUPPORTED_CHECKPOINT_VERSIONS,
     Checkpoint,
     LoopCounters,
     PauseInfo,
     deserialize_checkpoint,
+    encode_trace_path_token,
+    expand_path_tokens,
     find_pause_tool_result,
     mutate_pause_reply,
     read_checkpoint,
     restore_loop_state,
     restore_memory_state,
+    safe_git_head,
+    safe_hostname,
     serialize_checkpoint,
     serialize_loop_state,
     serialize_memory_state,
@@ -489,3 +494,208 @@ def test_write_checkpoint_is_atomic(tmp_path: Path) -> None:
     siblings = list(tmp_path.iterdir())
     assert path in siblings
     assert all(p.suffix != ".tmp" for p in siblings)
+
+
+# ---------------------------------------------------------------------------
+# v2 schema: token expansion, encode helper, metadata round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_supported_versions_contains_current() -> None:
+    assert CHECKPOINT_VERSION in SUPPORTED_CHECKPOINT_VERSIONS
+    # v1 must remain readable for the auto-upgrade path.
+    assert 1 in SUPPORTED_CHECKPOINT_VERSIONS
+
+
+def test_expand_path_tokens_substitutes_known_anchors() -> None:
+    out = expand_path_tokens(
+        "${memory_repo}/sessions/abc/abc.jsonl",
+        {"memory_repo": "/data/engram", "workspace": "/data/ws"},
+    )
+    assert out == "/data/engram/sessions/abc/abc.jsonl"
+
+
+def test_expand_path_tokens_passes_through_when_no_tokens() -> None:
+    raw = "/abs/path/no/tokens.jsonl"
+    assert expand_path_tokens(raw, {"memory_repo": "/anything"}) == raw
+
+
+def test_expand_path_tokens_raises_on_unknown_anchor() -> None:
+    with pytest.raises(KeyError, match="unknown path-token"):
+        expand_path_tokens("${nope}/x", {"memory_repo": "/r"})
+
+
+def test_encode_trace_path_token_inside_memory_repo(tmp_path: Path) -> None:
+    repo = tmp_path / "engram"
+    repo.mkdir()
+    trace = repo / "sessions" / "abc" / "abc.jsonl"
+    trace.parent.mkdir(parents=True)
+    trace.touch()
+    token = encode_trace_path_token(trace, repo)
+    assert token == "${memory_repo}/sessions/abc/abc.jsonl"
+
+
+def test_encode_trace_path_token_outside_repo_returns_absolute(tmp_path: Path) -> None:
+    repo = tmp_path / "engram"
+    repo.mkdir()
+    outside = tmp_path / "elsewhere" / "trace.jsonl"
+    outside.parent.mkdir()
+    outside.touch()
+    token = encode_trace_path_token(outside, repo)
+    assert token == str(outside)
+
+
+def test_encode_trace_path_token_handles_empty_repo(tmp_path: Path) -> None:
+    trace = tmp_path / "trace.jsonl"
+    trace.touch()
+    # No engram backend → can't anchor → returns absolute string.
+    assert encode_trace_path_token(trace, "") == str(trace)
+
+
+def test_safe_git_head_returns_none_for_non_git_dir(tmp_path: Path) -> None:
+    assert safe_git_head(tmp_path) is None
+
+
+def test_safe_git_head_returns_none_for_missing_dir(tmp_path: Path) -> None:
+    assert safe_git_head(tmp_path / "does-not-exist") is None
+
+
+def test_safe_hostname_returns_string_or_none() -> None:
+    # Whatever the OS returns is fine — just verify the type contract.
+    host = safe_hostname()
+    assert host is None or isinstance(host, str)
+
+
+def test_serialize_checkpoint_writes_metadata_fields() -> None:
+    payload = serialize_checkpoint(
+        session_id="x",
+        task="t",
+        model="m",
+        mode="native",
+        workspace="/ws",
+        memory_repo="/repo",
+        trace_path="${memory_repo}/sessions/x/x.jsonl",
+        messages=_conversation_with_pause(),
+        usage={},
+        loop_state=_sample_loop_state(),
+        memory_state={},
+        pause=_sample_pause(),
+        hostname="HOST-A",
+        workspace_sha="abcdef0",
+        memory_repo_sha="1234567",
+    )
+    assert payload["version"] == CHECKPOINT_VERSION
+    assert payload["hostname"] == "HOST-A"
+    assert payload["workspace_sha"] == "abcdef0"
+    assert payload["memory_repo_sha"] == "1234567"
+    # Runtime-only ``was_v1`` must not leak to disk.
+    assert "was_v1" not in payload
+
+
+def test_v2_checkpoint_round_trip_preserves_metadata() -> None:
+    payload = serialize_checkpoint(
+        session_id="x",
+        task="t",
+        model="m",
+        mode="native",
+        workspace="/ws",
+        memory_repo="/repo",
+        trace_path="${memory_repo}/sessions/x/x.jsonl",
+        messages=_conversation_with_pause(),
+        usage={},
+        loop_state=_sample_loop_state(),
+        memory_state={},
+        pause=_sample_pause(),
+        hostname="HOST-A",
+        workspace_sha="abcdef0",
+        memory_repo_sha="1234567",
+    )
+    cp = deserialize_checkpoint(json.loads(json.dumps(payload)))
+    assert cp.version == 2
+    assert cp.was_v1 is False
+    assert cp.hostname == "HOST-A"
+    assert cp.workspace_sha == "abcdef0"
+    assert cp.memory_repo_sha == "1234567"
+    assert cp.trace_path == "${memory_repo}/sessions/x/x.jsonl"
+
+
+def test_v1_checkpoint_read_tolerantly() -> None:
+    """A v1-shaped on-disk payload (no metadata, absolute trace_path) is
+    accepted; ``was_v1`` is set so resume can re-anchor on relocate."""
+    payload = {
+        "version": 1,
+        "session_id": "x",
+        "task": "t",
+        "model": "m",
+        "mode": "native",
+        "workspace": "/old/ws",
+        "memory_repo": "/old/repo",
+        "trace_path": "/old/repo/sessions/x/x.jsonl",
+        "messages": _conversation_with_pause(),
+        "usage": {},
+        "loop_state": serialize_loop_state(_sample_loop_state()),
+        "memory_state": {},
+        "pause": {
+            "question": "ok?",
+            "context": None,
+            "tool_use_id": "toolu_pause",
+            "asked_at": "2026-04-27T20:00:00",
+        },
+        "checkpoint_at": "2026-04-27T20:00:01",
+    }
+    cp = deserialize_checkpoint(payload)
+    assert cp.version == 1
+    assert cp.was_v1 is True
+    assert cp.trace_path == "/old/repo/sessions/x/x.jsonl"
+    # No metadata recorded → all three fields None.
+    assert cp.hostname is None
+    assert cp.workspace_sha is None
+    assert cp.memory_repo_sha is None
+
+
+def test_v1_metadata_fields_default_to_none_when_absent() -> None:
+    """Older checkpoints with no hostname/SHA fields don't crash deserialize."""
+    payload = serialize_checkpoint(
+        session_id="x",
+        task="t",
+        model="m",
+        mode="native",
+        workspace="/ws",
+        memory_repo="/repo",
+        trace_path="/abs/tr.jsonl",
+        messages=_conversation_with_pause(),
+        usage={},
+        loop_state=_sample_loop_state(),
+        memory_state={},
+        pause=_sample_pause(),
+    )
+    # Strip the metadata fields and force version=1 to simulate an on-disk v1.
+    payload["version"] = 1
+    payload.pop("hostname", None)
+    payload.pop("workspace_sha", None)
+    payload.pop("memory_repo_sha", None)
+    cp = deserialize_checkpoint(payload)
+    assert cp.was_v1 is True
+    assert cp.hostname is None
+
+
+def test_to_dict_omits_was_v1_marker() -> None:
+    cp = Checkpoint(
+        version=2,
+        session_id="x",
+        task="t",
+        model="m",
+        mode="native",
+        workspace="/ws",
+        memory_repo="/repo",
+        trace_path="${memory_repo}/x.jsonl",
+        messages=[],
+        usage={},
+        loop_state={},
+        memory_state={},
+        pause=_sample_pause(),
+        checkpoint_at="2026-04-27T20:00:00",
+        was_v1=True,  # set by hand; should not surface
+    )
+    d = cp.to_dict()
+    assert "was_v1" not in d

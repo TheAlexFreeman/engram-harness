@@ -76,6 +76,24 @@ def _read_pause_question(checkpoint_path: str | None) -> str:
         return ""
 
 
+def _read_pause_hostname(checkpoint_path: str | None) -> str:
+    """Best-effort fetch of the pause-time hostname (v2 metadata).
+
+    Returns empty string when the checkpoint is missing, unreadable, or
+    pre-v2 (no hostname recorded). The caller folds an empty result into a
+    no-op formatting branch.
+    """
+    if not checkpoint_path:
+        return ""
+    try:
+        from harness.checkpoint import read_checkpoint
+
+        cp = read_checkpoint(Path(checkpoint_path))
+        return cp.hostname or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _print_recent_sessions(db_path: Path, limit: int) -> None:
     try:
         from harness.session_store import SessionStore
@@ -108,7 +126,9 @@ def _print_recent_sessions(db_path: Path, limit: int) -> None:
             cp = r.pause_checkpoint or "—"
             question = _read_pause_question(cp)
             preview = (question or r.task or "")[:60]
-            print(f"  {paused_at}  {sid}  {preview!r}")
+            host = _read_pause_hostname(cp)
+            host_tag = f"  @{host}" if host else ""
+            print(f"  {paused_at}  {sid}{host_tag}  {preview!r}")
 
     print(
         f"\nStats: {stats.get('total_sessions', 0)} sessions  "

@@ -457,6 +457,116 @@ def test_pause_loop_state_carries_correct_counters() -> None:
     assert counters.tool_error_streaks == {}
 
 
+def test_relocate_round_trip_resolves_paths_and_registers_row(tmp_path: Path, monkeypatch) -> None:
+    """End-to-end relocate scenario simulating two filesystems.
+
+    Machine A writes a v2 checkpoint with ``${memory_repo}`` token + trace.
+    The artifacts are copied into a parallel directory tree (machine B).
+    ``harness resume --relocate`` reads from B's tree, resolves anchors to
+    B's paths, and registers a paused row in B's SessionStore.
+
+    The test stops _resume_one short of actually running the loop by returning
+    a stub SessionComponents with ``engram_memory=None``, which exits with
+    code 2 after the row registration but before any loop work. That's enough
+    to verify the cross-machine wiring up to the boundary that requires real
+    Engram + loop scaffolding (covered by separate test files).
+    """
+    from types import SimpleNamespace
+
+    from harness.checkpoint import (
+        CHECKPOINT_FILENAME,
+        encode_trace_path_token,
+        write_checkpoint,
+    )
+    from harness.cmd_resume import _resume_one
+    from harness.session_store import SessionStore
+
+    # ----- Machine A: write a v2 checkpoint + trace -----
+    repo_a = tmp_path / "A" / "engram"
+    sess_dir_a = repo_a / "sessions" / "ses_relo"
+    sess_dir_a.mkdir(parents=True)
+    trace_a = sess_dir_a / "ses_relo.jsonl"
+    trace_a.write_text('{"event": "stub"}\n', encoding="utf-8")
+    ws_a = tmp_path / "A" / "ws"
+    ws_a.mkdir(parents=True)
+
+    payload = serialize_checkpoint(
+        session_id="ses_relo",
+        task="t",
+        model="m",
+        mode="native",
+        workspace=str(ws_a),
+        memory_repo=str(repo_a),
+        trace_path=encode_trace_path_token(trace_a, repo_a),
+        messages=[{"role": "user", "content": "hi"}],
+        usage={},
+        loop_state=LoopCounters(
+            prev_batch_sig=None,
+            repeat_streak=1,
+            tool_error_streaks={},
+            tool_seq=0,
+            output_limit_continuations=0,
+            total_tool_calls=0,
+        ),
+        memory_state={},
+        pause={
+            # PauseInfo dataclass — pass via dict here too, asdict path covers it.
+            "question": "continue?",
+            "context": None,
+            "tool_use_id": "toolu_relo",
+            "asked_at": "2026-05-01T12:00:00",
+        },
+        hostname="HOST-A",
+    )
+    # Sanity: the trace_path was encoded as a ${memory_repo} token.
+    assert payload["trace_path"].startswith("${memory_repo}/")
+    cp_a_path = sess_dir_a / CHECKPOINT_FILENAME
+    write_checkpoint(cp_a_path, payload)
+
+    # ----- "Copy" the artifacts into Machine B's tree -----
+    repo_b = tmp_path / "B" / "engram"
+    sess_dir_b = repo_b / "sessions" / "ses_relo"
+    sess_dir_b.mkdir(parents=True)
+    (sess_dir_b / "ses_relo.jsonl").write_bytes(trace_a.read_bytes())
+    (sess_dir_b / CHECKPOINT_FILENAME).write_bytes(cp_a_path.read_bytes())
+    ws_b = tmp_path / "B" / "ws"
+    ws_b.mkdir(parents=True)
+    db_b = tmp_path / "B" / "sessions.db"
+
+    # Stub build_session so _resume_one doesn't try to construct a real
+    # EngramMemory or run the loop. Returns components with engram_memory=None
+    # so _resume_one exits cleanly with code 2 after registration.
+    def fake_build_session(*_args, **_kwargs):
+        return SimpleNamespace(engram_memory=None)
+
+    monkeypatch.setattr("harness.cmd_resume.build_session", fake_build_session)
+
+    rc = _resume_one(
+        session_id="ses_relo",
+        reply_arg="please continue",
+        db_override=db_b,
+        memory_repo_override=repo_b,
+        workspace_override=ws_b,
+        relocate=True,
+        from_checkpoint=None,  # auto-discover at <memory_repo>/sessions/<id>/checkpoint.json
+    )
+    # Build short-circuited; we exited after registration but before the loop.
+    assert rc == 2
+
+    # ----- Verify the SessionStore on Machine B has the relocated row -----
+    store = SessionStore(db_b)
+    record = store.get_session("ses_relo")
+    store.close()
+    assert record is not None
+    assert record.status == "paused"
+    assert record.workspace == str(ws_b)
+    # trace_path should resolve to under Machine B's tree, not A's.
+    assert record.trace_path is not None
+    assert record.trace_path.startswith(str(repo_b))
+    assert "ses_relo.jsonl" in record.trace_path
+    assert record.pause_checkpoint == str(sess_dir_b / CHECKPOINT_FILENAME)
+
+
 def test_pause_handle_reset_between_uses() -> None:
     """Confirm that the loop calls handle.reset() so a subsequent
     run_until_idle invocation against a fresh agent doesn't re-trigger the
