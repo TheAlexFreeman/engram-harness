@@ -21,7 +21,6 @@ from harness.tools.subagent import (
 )
 from harness.usage import Usage
 
-
 # ---------------------------------------------------------------------------
 # narrows() — the lattice helper
 # ---------------------------------------------------------------------------
@@ -309,8 +308,8 @@ def test_wire_subagent_spawn_subagent_run_event_includes_role() -> None:
     }
 
     # Use a ScriptedMode-like object that has for_tools accepting system kwarg.
-    from harness.tools import Tool, ToolCall
     from harness.tests.test_parallel_tools import ScriptedMode
+    from harness.tools import Tool, ToolCall
 
     class _ScriptedModeWithForTools(ScriptedMode):
         def for_tools(

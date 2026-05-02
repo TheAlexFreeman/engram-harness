@@ -600,10 +600,14 @@ def _parse_trace_for_backfill(trace_path: Path) -> SessionRecord | None:
 
     u = session_usage or {}
 
+    role_raw = session_start.get("role")
+    role = role_raw if isinstance(role_raw, str) and role_raw else None
+
     return SessionRecord(
         session_id=session_id,
         task=session_start.get("task", ""),
         status=status,
+        role=role,
         created_at=session_start.get("ts", ""),
         ended_at=session_end.get("ts") if session_end else None,
         turns_used=session_end.get("turns") if session_end else None,

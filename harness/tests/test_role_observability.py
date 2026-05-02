@@ -14,16 +14,13 @@ been live long enough to accumulate data.
 
 from __future__ import annotations
 
-import io
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 from harness.runner import _emit_session_start
 from harness.session_store import SessionRecord, SessionStore
-
 
 # ---------------------------------------------------------------------------
 # SessionRecord — role round-trip through SQLite
@@ -293,7 +290,7 @@ def test_subagent_run_event_carries_role(monkeypatch) -> None:
     """``subagent_run`` carries ``role`` so cmd_eval per-role breakdowns
     can attribute subagent costs to the right role."""
     from harness.config import _wire_subagent_spawn
-    from harness.tests.test_parallel_tools import _ScriptedResponse, ScriptedMode
+    from harness.tests.test_parallel_tools import ScriptedMode, _ScriptedResponse
     from harness.tools.subagent import SpawnSubagent
 
     parent_tools = {"spawn_subagent": SpawnSubagent()}
