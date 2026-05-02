@@ -594,25 +594,23 @@ def main() -> None:
     extra_sinks = [SessionStateTrackerSink(tool_call_log)] if store is not None else None
 
     scope = WorkspaceScope(root=config.workspace)
-    if config.role is not None:
-        from harness.safety.role_guard import apply_role_denials
-
-        unfiltered = build_tools(scope, profile=config.tool_profile)
-        base_tools, denied = apply_role_denials(unfiltered, config.role)
-        denied_summary = ", ".join(sorted(denied)) if denied else "(none)"
-        print(
-            f"Active role: {config.role} "
-            f"(denied {len(denied)} tools: {denied_summary})",
-            file=sys.stderr,
-        )
-    else:
-        base_tools = build_tools(scope, profile=config.tool_profile)
+    base_tools = build_tools(scope, profile=config.tool_profile, role=config.role)
     components = build_session(
         config,
         tools=base_tools,
         extra_trace_sinks=extra_sinks,
         scope=scope,
     )
+
+    denied = components.role_denied_tools
+    if denied:
+        denied_summary = ", ".join(sorted(denied.keys()))
+        print(
+            f"Active role: {config.role} (denied {len(denied)} tools: {denied_summary})",
+            file=sys.stderr,
+        )
+    elif config.role is not None:
+        print(f"Active role: {config.role} (denied 0 tools: (none))", file=sys.stderr)
 
     if store is not None:
         _insert_cli_session_row(store, session_id, args, config, components)

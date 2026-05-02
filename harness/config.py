@@ -204,6 +204,9 @@ class SessionComponents:
     # in lanes.submit(Lane.MAIN, ...). Always present; defaults caps
     # come from SessionConfig (lane_cap_main / lane_cap_subagent).
     lanes: Any = None  # harness.lanes.LaneRegistry
+    # F2: tool names removed by apply_role_denials after the Engram
+    # extra_tools merge. Empty when role is unset or has no denials.
+    role_denied_tools: dict[str, str] = field(default_factory=dict)
 
 
 _RUN_POLICY_CONFIG_FIELDS = (
@@ -839,6 +842,12 @@ def build_session(
     if extra_tools:
         tools = {**tools, **{t.name: t for t in extra_tools}}
 
+    role_denied_tools: dict[str, str] = {}
+    if config.role is not None:
+        from harness.safety.role_guard import apply_role_denials
+
+        tools, role_denied_tools = apply_role_denials(tools, config.role)
+
     mode = _build_mode(config, tools, engram_memory)
     trace_path = _derive_trace_path(
         config,
@@ -873,6 +882,7 @@ def build_session(
         config=config,
         pause_handle=pause_handle,
         lanes=lanes,
+        role_denied_tools=role_denied_tools,
     )
 
 

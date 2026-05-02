@@ -109,10 +109,7 @@ def system_prompt_native(
     tail = ("\n\n" + "\n\n".join(extras)) if extras else ""
 
     role_block = f"\n\n{_render_role_block(role)}" if role else ""
-    return (
-        f"{_IDENTITY}\n\n{_CRITICAL_RULES}\n\n{_RULES}{role_block}\n\n"
-        f"{_OUTPUT_NATIVE}{tail}"
-    )
+    return f"{_IDENTITY}\n\n{_CRITICAL_RULES}\n\n{_RULES}{role_block}\n\n{_OUTPUT_NATIVE}{tail}"
 
 
 def system_prompt_text(tools: dict[str, Tool]) -> str:
