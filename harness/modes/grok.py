@@ -179,9 +179,7 @@ class GrokMode:
             {"role": "user", "content": user},
         ]
 
-    def for_tools(
-        self, tools: dict[str, Tool], *, system: str | None = None
-    ) -> "GrokMode":
+    def for_tools(self, tools: dict[str, Tool], *, system: str | None = None) -> "GrokMode":
         """Return an equivalent mode with tool schemas rebuilt from ``tools``.
 
         ``system`` (F3): optional system-prompt override for subagent role
