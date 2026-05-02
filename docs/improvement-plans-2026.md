@@ -983,37 +983,55 @@ happens when a `chat` session evolves into needing to build, and how
 multi-phase plans declare per-phase roles for B4 resume to land in
 the right one.
 
-**Proposed shape.**
+**Proposed shape (split: F5 v1 ships inference; transition + plan
+binding deferred).**
 
-1. **Inference** (off by default, opt-in via `--role infer`). Use
-  the existing inference heuristic at the bottom of
-   [roles.md](../harness/prompt_templates/roles.md) ("Questions →
-   chat, 'figure out' → research, 'plan' → plan, 'fix/implement' →
-   build"). On infer-mode session start, log the chosen role and the
-   reason; never escalate silently mid-session.
-2. **Mid-session transitions** via a `request_role_change(target,
-  reason)`tool that piggybacks on the D2 async-approval plumbing.  The agent never self-promotes — it requests, the human approves  (or denies), the session continues under the new role from the  next turn. Trace event`role_transition_requested`/` role_transition_resolved`.
-3. **Plan-phase binding.** Workspace plan phases optionally declare
-  `role: <name>`; B4 cross-machine resume reads it and starts the
-   resumed session in the declared role. Useful for plans that
-   alternate research → plan → build phases.
+1. ✅ **Inference (F5 v1, shipped).** `--role infer` runs the
+   heuristic from the "Role selection heuristic" section at the
+   bottom of [roles.md](../harness/prompt_templates/roles.md) and
+   replaces the `infer` sentinel with a concrete role at session
+   start, printing the chosen role and matched signal to stderr —
+   never silent. New `harness/role_inference.py` with `infer_role`
+   and `RoleInference` dataclass; two-pass match (leading-verb
+   first, phrase-anywhere as fallback) so "fix the bug" → build but
+   "what is the best way to fix the bug" → chat. Empty / no-signal
+   tasks fall back to chat (per roles.md "ambiguous → chat").
+2. ⏳ **Mid-session transitions** — deferred. A
+   `request_role_change(target, reason)` tool that piggybacks on D2
+   async-approval. The agent never self-promotes — it requests, the
+   human approves (or denies), the session continues under the new
+   role from the next turn. Trace events
+   `role_transition_requested` / `role_transition_resolved`. The
+   actual transition rebuilds prompt + tool registry + lane state,
+   which is most cleanly done via the B4 pause/resume pipeline —
+   pulls in non-trivial integration with both D2 and B4.
+3. ⏳ **Plan-phase binding** — deferred. Workspace plan phases
+   optionally declare `role: <name>`; B4 cross-machine resume reads
+   it and starts the resumed session in the declared role. Useful
+   for plans that alternate research → plan → build phases. Adds
+   plan-schema surface that needs its own design pass (per-phase
+   role validation, narrowing across phase transitions).
 
-**Files:** `harness/cli.py` (infer flag), new
-`harness/role_inference.py`, `harness/tools/role_change.py`
-(approval-gated tool), `harness/safety/approval.py` (extend), B4
-checkpoint schema (`harness/checkpoint.py`),
-`harness/tests/test_role_inference.py`,
-`harness/tests/test_role_transition.py`.
+**Files (as shipped in F5 v1):** new `harness/role_inference.py`
+(`RoleInference`, `infer_role` two-pass heuristic, `is_known_role_or_infer`
+CLI validator), `harness/cli.py` (added `infer` to `--role` choices,
+resolved sentinel after `config_from_args`),
+`harness/tests/test_role_inference.py` (37 tests covering the
+heuristic table, leading-verb vs. phrase-anywhere fallback,
+ambiguous-task fallback, CLI integration).
 
-**Complexity:** medium-high. ~3 PRs (infer; transition tool; plan
-binding).
+**Complexity:** small for F5 v1. Transition tool + plan binding =
+medium-high each, separate PRs after F5 v1 has been live.
 
-**Dependencies:** F1 (roles exist), D2 (async approval — for the
-transition gate), B4 (resume — for plan-phase binding).
+**Dependencies:** F1 (roles exist) for v1; D2 + B4 for transition;
+B4 for plan-phase binding.
 
-**Risks:** scope creep. Inference is the lowest-value of the three
-sub-features (the user can just say `--role`); transition is the
-highest. Consider shipping inference last or skipping it.
+**Risks (F5 v1):** the heuristic is unavoidably fuzzy. Some tasks
+match multiple signals; the two-pass design favors leading-verb
+matches but real tasks vary. The reason string is always printed
+so the user can re-run with an explicit `--role` if inference
+picked wrong. Watch for systematic miscategorizations once the
+data accumulates — that becomes the regression-test corpus.
 
 ---
 
