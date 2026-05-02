@@ -18,7 +18,6 @@ import pytest
 from harness.prompts import ROLES
 from harness.role_inference import RoleInference, infer_role, is_known_role_or_infer
 
-
 # ---------------------------------------------------------------------------
 # infer_role — heuristic table coverage
 # ---------------------------------------------------------------------------
@@ -117,6 +116,14 @@ def test_infer_role_polite_phrase_falls_through_to_anywhere_match() -> None:
     assert result.role == "research"
 
 
+def test_infer_role_explanation_with_embedded_fix_is_chat() -> None:
+    """Explanation framing wins over embedded implementation verbs in the
+    phrase-anywhere pass (roles.md: questions/explanations → chat)."""
+    result = infer_role("could you explain how to fix the bug")
+    assert result.role == "chat"
+    assert "explain" in result.reason
+
+
 def test_infer_role_leading_verb_with_secondary_signal() -> None:
     """'investigate the auth path and propose a fix' — leading
     'investigate' wins (research)."""
@@ -163,10 +170,10 @@ def test_is_known_role_or_infer_rejects_unknown() -> None:
 
 def test_cli_role_infer_resolves_in_argparse_choices() -> None:
     """The CLI should advertise 'infer' as a valid --role choice."""
-    from harness.cli import _parse_args
-
     import sys
     from unittest.mock import patch
+
+    from harness.cli import _parse_args
 
     with patch.object(
         sys, "argv", ["harness", "investigate auth", "--workspace", ".", "--role", "infer"]
@@ -180,6 +187,7 @@ def test_cli_role_infer_resolves_to_concrete_role_in_main(tmp_path, capsys, monk
     role before calling build_session and prints the inference reason to stderr."""
     import sys
     from unittest.mock import MagicMock, patch
+
     from harness.loop import RunResult
     from harness.usage import Usage
 

@@ -129,8 +129,10 @@ def infer_role(task: str) -> RoleInference:
     Two-pass match:
     1. Leading-verb pass — the task's first word fully drives role
        selection (catches "propose a fix" as plan, not build).
-    2. Phrase-anywhere pass — fall through if no leading verb matched
-       (catches "could you investigate the X" as research).
+    2. Phrase-anywhere pass — fall through if no leading verb matched.
+       Chat/explanation signals are checked before build/research/plan so
+       prompts like "explain how to fix the bug" stay ``chat``, matching
+       roles.md (questions/explanations → chat).
 
     Empty / whitespace-only tasks fall through to the ambiguous
     default (``chat``) with a generic explanation.
@@ -154,10 +156,19 @@ def infer_role(task: str) -> RoleInference:
                 )
 
     # Pass 2: signal anywhere in the task. Catches polite phrasings
-    # ("could you investigate X") and embedded clauses.
-    for role, signals in _SIGNALS:
+    # ("could you investigate X") and embedded clauses. Chat signals run
+    # first here so embedded implementation verbs don't override explanations.
+    padded = f" {text} "
+    chat_role, chat_signals = _SIGNALS[-1]
+    for signal in chat_signals:
+        if f" {signal} " in padded:
+            return RoleInference(
+                role=chat_role,
+                reason=f"matched signal {signal!r} → {chat_role}",
+            )
+    for role, signals in _SIGNALS[:-1]:
         for signal in signals:
-            if f" {signal} " in f" {text} ":
+            if f" {signal} " in padded:
                 return RoleInference(
                     role=role,
                     reason=f"matched signal {signal!r} → {role}",
