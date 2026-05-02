@@ -482,7 +482,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--role",
-        choices=["chat", "plan", "research", "build"],
+        choices=["chat", "plan", "research", "build", "infer"],
         default=None,
         dest="role",
         help=(
@@ -491,7 +491,9 @@ def _parse_args() -> argparse.Namespace:
             "harness/prompt_templates/roles.md. 'chat': conversational, no edits. "
             "'plan': designs in workspace, no code changes. 'research': investigates, "
             "writes findings to workspace. 'build': implements changes, full tool "
-            "access. Default: unset (no role section, pre-F1 behavior)."
+            "access. 'infer' (F5): pick a role from the task string using the "
+            "heuristic in roles.md, print which role was chosen and why. "
+            "Default: unset (no role section, pre-F1 behavior)."
         ),
     )
     parser.add_argument(
@@ -577,6 +579,18 @@ def main() -> None:
         sys.exit(2)
 
     config = config_from_args(args)
+    # F5: resolve --role infer to a concrete role using the task heuristic.
+    # Done before workspace setup so downstream code only ever sees a
+    # concrete role or None — the "infer" sentinel doesn't leak.
+    if config.role == "infer":
+        from harness.role_inference import infer_role
+
+        inference = infer_role(args.task or "")
+        print(
+            f"Inferred role: {inference.role} ({inference.reason})",
+            file=sys.stderr,
+        )
+        config.role = inference.role
     config.workspace.mkdir(parents=True, exist_ok=True)
     if config.auto_ignore_workspace:
         _ensure_workspace_in_gitignore(config.workspace)
