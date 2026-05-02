@@ -406,6 +406,46 @@ def test_build_session_tools_merged(tmp_path):
     assert "existing_tool" in components.tools
 
 
+def test_build_session_chat_role_denies_extra_engram_tools_after_merge(tmp_path):
+    """F2: apply_role_denials runs after merging Engram extra_tools, not before."""
+
+    class FakeTool:
+        def __init__(self, name: str, *, mutates: bool = False):
+            self.name = name
+            self.mutates = mutates
+
+    extra = [
+        FakeTool("memory_remember", mutates=True),
+        FakeTool("work_thread", mutates=True),
+        FakeTool("read_file", mutates=False),
+    ]
+    base = {"read_file": FakeTool("read_file", mutates=False)}
+    config = SessionConfig(
+        workspace=tmp_path,
+        memory_backend="file",
+        trace_live=False,
+        stream=False,
+        role="chat",
+        tool_profile=ToolProfile.READ_ONLY,
+    )
+    fake_memory = MagicMock()
+    with (
+        patch("harness.config._build_mode") as mock_mode,
+        patch(
+            "harness.config._build_memory",
+            return_value=(fake_memory, None, extra),
+        ),
+    ):
+        mock_mode.return_value = MagicMock()
+        components = build_session(config, tools=base)
+
+    assert "memory_remember" not in components.tools
+    assert "work_thread" not in components.tools
+    assert "memory_remember" in components.role_denied_tools
+    assert "work_thread" in components.role_denied_tools
+    assert "read_file" in components.tools
+
+
 def test_build_session_trace_path_file_memory(tmp_path):
     """File memory → trace path under 'traces/' directory."""
     config = SessionConfig(
