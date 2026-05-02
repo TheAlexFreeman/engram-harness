@@ -684,6 +684,9 @@ def _handle_paused_session(
     finishes on resume."""
     from harness.checkpoint import (
         CHECKPOINT_FILENAME,
+        encode_trace_path_token,
+        safe_git_head,
+        safe_hostname,
         serialize_checkpoint,
         serialize_memory_state,
         write_checkpoint,
@@ -704,15 +707,22 @@ def _handle_paused_session(
         cp_path = components.trace_path.parent / CHECKPOINT_FILENAME
         memory_repo = str(engram.repo_root)
 
+    workspace_str = str(components.config.workspace)
+    # v2 trace_path is ``${memory_repo}/<rel>`` when the trace lives inside
+    # the engram repo (the default layout) — that lets ``harness resume
+    # --relocate`` re-anchor on a different machine. Falls back to the
+    # absolute path string when there's no engram backend.
+    trace_token = encode_trace_path_token(components.trace_path, memory_repo)
+
     pause = result.paused
     payload = serialize_checkpoint(
         session_id=session_id,
         task=task,
         model=components.config.model,
         mode=components.config.mode,
-        workspace=str(components.config.workspace),
+        workspace=workspace_str,
         memory_repo=memory_repo,
-        trace_path=str(components.trace_path),
+        trace_path=trace_token,
         # The PauseOutcome carries a live ``messages`` reference; serialize
         # it directly — the resume side will mutate the placeholder
         # tool_result content in this exact list shape.
@@ -723,6 +733,9 @@ def _handle_paused_session(
         pause=pause.pause_info,
         checkpoint_at=datetime.now().isoformat(timespec="seconds"),
         extra={"session_config": serialize_session_config(components.config)},
+        hostname=safe_hostname(),
+        workspace_sha=safe_git_head(workspace_str),
+        memory_repo_sha=safe_git_head(memory_repo) if memory_repo else None,
     )
     write_checkpoint(cp_path, payload)
 

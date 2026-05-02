@@ -299,6 +299,75 @@ class SessionStore:
                 )
             self._conn.commit()
 
+    def register_relocated_session(
+        self,
+        *,
+        session_id: str,
+        task: str,
+        model: str,
+        mode: str,
+        workspace: str,
+        trace_path: str,
+        checkpoint_path: str,
+        paused_at: str,
+    ) -> None:
+        """Insert a paused row for a session whose checkpoint came from another
+        machine (B4 cross-machine resume).
+
+        Idempotent at the row level via ``INSERT OR IGNORE`` — if a row with
+        this session_id already exists, the existing row's pause sidecar
+        fields are updated instead. Subsequent ``mark_resumed`` and
+        ``complete_session`` calls then operate against the row exactly like
+        a same-machine resume.
+        """
+        with self._write_lock:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO sessions
+                    (session_id, task, status, model, mode, workspace,
+                     created_at, trace_path, pause_checkpoint, paused_at)
+                VALUES
+                    (:session_id, :task, 'paused', :model, :mode, :workspace,
+                     :created_at, :trace_path, :checkpoint_path, :paused_at)
+                """,
+                {
+                    "session_id": session_id,
+                    "task": task,
+                    "model": model,
+                    "mode": mode,
+                    "workspace": workspace,
+                    "created_at": paused_at,
+                    "trace_path": trace_path,
+                    "checkpoint_path": checkpoint_path,
+                    "paused_at": paused_at,
+                },
+            )
+            # If the row already existed (re-relocate, or relocate after a
+            # failed prior attempt) bring its pause sidecar fields up to date.
+            self._conn.execute(
+                """
+                UPDATE sessions SET
+                    status = 'paused',
+                    pause_checkpoint = :checkpoint_path,
+                    paused_at = :paused_at,
+                    workspace = :workspace,
+                    trace_path = :trace_path
+                WHERE session_id = :session_id
+                """,
+                {
+                    "session_id": session_id,
+                    "workspace": workspace,
+                    "trace_path": trace_path,
+                    "checkpoint_path": checkpoint_path,
+                    "paused_at": paused_at,
+                },
+            )
+            self._conn.execute(
+                "INSERT OR IGNORE INTO sessions_fts(session_id, task, final_text) VALUES (?, ?, ?)",
+                (session_id, task, None),
+            )
+            self._conn.commit()
+
     def mark_paused(
         self,
         session_id: str,

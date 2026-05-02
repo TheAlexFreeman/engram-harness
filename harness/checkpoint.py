@@ -32,6 +32,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import socket
+import subprocess
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -39,7 +42,12 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
-CHECKPOINT_VERSION = 1
+# v1 — workspace, memory_repo, trace_path all absolute strings.
+# v2 — trace_path is a token string like ``${memory_repo}/sessions/<sid>/<sid>.jsonl``
+#      and the checkpoint carries optional hostname / workspace_sha / memory_repo_sha
+#      metadata so cross-machine resumes can warn on environment drift.
+CHECKPOINT_VERSION = 2
+SUPPORTED_CHECKPOINT_VERSIONS = (1, 2)
 CHECKPOINT_FILENAME = "checkpoint.json"
 
 # Placeholder content the pause tool returns. Resume mutates the tool_result
@@ -79,11 +87,107 @@ class Checkpoint:
     pause: PauseInfo
     checkpoint_at: str  # ISO8601
     extra: dict[str, Any] = field(default_factory=dict)
+    # v2 metadata. Optional so v1 checkpoints round-trip without forging
+    # values they never had. None means "not recorded" — resume handles that
+    # gracefully by skipping the corresponding mismatch warning.
+    hostname: str | None = None
+    workspace_sha: str | None = None
+    memory_repo_sha: str | None = None
+    # Runtime-only flag (not serialized): True when this view was loaded from
+    # a v1 on-disk checkpoint. Resume uses it to decide whether the trace_path
+    # needs token-relative re-anchoring during a cross-machine relocate.
+    was_v1: bool = field(default=False, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         # asdict handles PauseInfo → dict automatically.
+        # ``was_v1`` is a runtime-only marker; never write it to disk.
+        d.pop("was_v1", None)
         return d
+
+
+# ---------------------------------------------------------------------------
+# Path token expansion (v2 trace_path encoding)
+# ---------------------------------------------------------------------------
+
+
+_TOKEN_RE = re.compile(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+
+def expand_path_tokens(template: str, anchors: dict[str, str]) -> str:
+    """Substitute ``${name}`` tokens in ``template`` against ``anchors``.
+
+    Used to resolve the v2 ``trace_path`` field, which is stored as e.g.
+    ``${memory_repo}/sessions/<sid>/<sid>.jsonl`` so a checkpoint can be
+    transported between machines and re-anchored without rewriting the file.
+    Strings without tokens (v1 absolute paths, custom paths) pass through
+    unchanged. Unknown tokens raise ``KeyError`` so a typo surfaces loudly
+    instead of silently leaving a literal ``${foo}`` in a filesystem path.
+    """
+
+    def _sub(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in anchors:
+            raise KeyError(f"unknown path-token ${{{name}}} in {template!r}")
+        return anchors[name]
+
+    return _TOKEN_RE.sub(_sub, template)
+
+
+def encode_trace_path_token(trace_path: str | Path, memory_repo: str | Path) -> str:
+    """Express ``trace_path`` as ``${memory_repo}/<rel>`` when it lives inside
+    ``memory_repo``; otherwise return the absolute path string unchanged.
+
+    Forward slashes in the relative segment for cross-OS portability — the
+    expansion side joins with the local memory_repo prefix at resolve-time.
+    """
+    if not memory_repo:
+        return str(trace_path)
+    try:
+        rel = Path(trace_path).resolve().relative_to(Path(memory_repo).resolve())
+    except (ValueError, OSError):
+        return str(trace_path)
+    return "${memory_repo}/" + rel.as_posix()
+
+
+def safe_hostname() -> str | None:
+    """Return ``socket.gethostname()`` or ``None`` if it raises.
+
+    Trivial wrapper, but having all three v2-metadata helpers in one place
+    keeps the cli pause-write call site uniform.
+    """
+    try:
+        host = socket.gethostname()
+    except OSError:
+        return None
+    return host or None
+
+
+def safe_git_head(path: str | Path) -> str | None:
+    """Return the ``HEAD`` SHA for ``path`` if it's a git checkout, else None.
+
+    Best-effort: any git invocation failure (not a repo, git missing, detached
+    HEAD with weird refs, permission error) yields ``None`` rather than
+    propagating. The SHA is metadata-only — used to warn on environment drift
+    during cross-machine resume — so a missing value is not an error.
+    """
+    p = Path(path)
+    if not p.is_dir():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(p), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    sha = result.stdout.strip()
+    return sha or None
 
 
 # ---------------------------------------------------------------------------
@@ -375,11 +479,24 @@ def serialize_checkpoint(
     pause: PauseInfo,
     checkpoint_at: str | None = None,
     extra: dict[str, Any] | None = None,
+    hostname: str | None = None,
+    workspace_sha: str | None = None,
+    memory_repo_sha: str | None = None,
 ) -> dict[str, Any]:
     """Build the on-disk dict from already-prepared inputs.
 
     ``usage`` may be a ``Usage`` dataclass or a pre-converted dict — we accept
     either to keep the call site at the loop level uncluttered.
+
+    ``trace_path`` is written as-is. Callers that want the v2 ``${memory_repo}``
+    encoding (which is what enables cross-machine resume) should pass the
+    output of ``encode_trace_path_token(trace_path, memory_repo)`` here. The
+    cli pause boundary and the resume re-pause boundary both do that; tests
+    that pass absolute paths are accepted unchanged and behave like v1.
+
+    ``hostname`` / ``workspace_sha`` / ``memory_repo_sha`` default to ``None``
+    because not every call site has the context to capture them (notably
+    test fixtures). Production checkpoint writers fill them in.
     """
     if hasattr(usage, "as_dict"):
         usage_dict = usage.as_dict()
@@ -406,18 +523,30 @@ def serialize_checkpoint(
         pause=pause,
         checkpoint_at=checkpoint_at or datetime.now().isoformat(timespec="seconds"),
         extra=dict(extra or {}),
+        hostname=hostname,
+        workspace_sha=workspace_sha,
+        memory_repo_sha=memory_repo_sha,
     )
     return cp.to_dict()
 
 
 def deserialize_checkpoint(raw: dict[str, Any]) -> Checkpoint:
-    """Validate version + required fields and return a typed view."""
+    """Validate version + required fields and return a typed view.
+
+    Accepts both v1 (absolute trace_path, no metadata) and v2 (token-relative
+    trace_path, optional hostname / SHA metadata) checkpoints. The returned
+    ``Checkpoint`` carries a ``was_v1`` runtime marker so resume code can
+    re-anchor v1 absolute trace paths during cross-machine relocate; on a
+    same-machine resume the absolute path passes ``expand_path_tokens``
+    unchanged (no tokens to substitute) and the legacy code path applies.
+    """
     if not isinstance(raw, dict):
         raise ValueError("checkpoint must be a JSON object")
     version = raw.get("version")
-    if version != CHECKPOINT_VERSION:
+    if version not in SUPPORTED_CHECKPOINT_VERSIONS:
         raise ValueError(
-            f"unsupported checkpoint version {version!r}; expected {CHECKPOINT_VERSION}"
+            f"unsupported checkpoint version {version!r}; "
+            f"supported: {SUPPORTED_CHECKPOINT_VERSIONS}"
         )
     required = (
         "session_id",
@@ -465,6 +594,10 @@ def deserialize_checkpoint(raw: dict[str, Any]) -> Checkpoint:
         ),
         checkpoint_at=str(raw.get("checkpoint_at", "")),
         extra=dict(raw.get("extra") or {}),
+        hostname=raw.get("hostname"),
+        workspace_sha=raw.get("workspace_sha"),
+        memory_repo_sha=raw.get("memory_repo_sha"),
+        was_v1=(version == 1),
     )
 
 
@@ -503,17 +636,22 @@ __all__ = [
     "CHECKPOINT_FILENAME",
     "CHECKPOINT_VERSION",
     "PAUSE_PLACEHOLDER",
+    "SUPPORTED_CHECKPOINT_VERSIONS",
     "Checkpoint",
     "LoopCounters",
     "PauseInfo",
     "PauseOutcome",
     "ResumeState",
     "deserialize_checkpoint",
+    "encode_trace_path_token",
+    "expand_path_tokens",
     "find_pause_tool_result",
     "mutate_pause_reply",
     "read_checkpoint",
     "restore_loop_state",
     "restore_memory_state",
+    "safe_git_head",
+    "safe_hostname",
     "serialize_checkpoint",
     "serialize_loop_state",
     "serialize_memory_state",
