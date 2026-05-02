@@ -866,6 +866,7 @@ def build_session(
         max_cost_usd=config.max_cost_usd,
         max_tool_calls=config.max_tool_calls,
         lanes=lanes,
+        parent_role=config.role,
     )
 
     _wire_injection_classifier(config, tracer=tracer)
@@ -990,6 +991,7 @@ def _wire_subagent_spawn(
     max_cost_usd: float | None = None,
     max_tool_calls: int | None = None,
     lanes: Any | None = None,
+    parent_role: str | None = None,
 ) -> None:
     """Late-bind the spawn callback on any ``SpawnSubagent`` tool in ``tools``.
 
@@ -1043,8 +1045,22 @@ def _wire_subagent_spawn(
             spawn_seq += 1
             return spawn_seq
 
-    def spawn(*, task: str, allowed_tools: list[str], max_turns: int, depth: int) -> SubagentResult:
+    def spawn(
+        *,
+        task: str,
+        allowed_tools: list[str],
+        max_turns: int,
+        depth: int,
+        role: str | None = None,
+    ) -> SubagentResult:
         seq = _next_seq()
+
+        # F3: ``role`` is already resolved (inherited or explicit) and
+        # narrowing-validated by SpawnSubagent.run / SpawnSubagents.run when
+        # they invoke the closure. None means no role section in the child's
+        # prompt and no role-based denials — matches the F1 default.
+        effective_role = role
+
         # Filter parent registry by allowed names. Skip 'spawn_subagent' here —
         # nested spawning is handled below with its own depth bound.
         sub_tools = {
@@ -1053,7 +1069,10 @@ def _wire_subagent_spawn(
             if n in allowed_tools and n not in ("spawn_subagent", "spawn_subagents")
         }
         # Allow nested spawns (within the depth budget) when the caller
-        # explicitly opted in via allowed_tools.
+        # explicitly opted in via allowed_tools. The nested SpawnSubagent's
+        # ``parent_role`` is ``effective_role`` so a deeper grandchild's
+        # narrowing check fires against the immediate parent, not the
+        # original session role.
         if "spawn_subagent" in allowed_tools and isinstance(spawn_tool, SpawnSubagent):
             nested = SpawnSubagent(
                 spawn,
@@ -1061,8 +1080,17 @@ def _wire_subagent_spawn(
                 current_depth=depth,
                 lanes=lanes,
                 tracer=parent_tracer,
+                parent_role=effective_role,
             )
             sub_tools["spawn_subagent"] = nested
+
+        # F3: apply role-based denials to the child's tool set. Runs after
+        # the nested-spawn attach step so e.g. a chat child correctly drops
+        # its nested spawn_subagent (chat denies the subagent category).
+        if effective_role is not None:
+            from harness.safety.role_guard import apply_role_denials
+
+            sub_tools, _ = apply_role_denials(sub_tools, effective_role)
 
         sub_trace_path = _derive_subagent_trace_path(parent_tracer, seq)
         if sub_trace_path is not None:
@@ -1091,7 +1119,25 @@ def _wire_subagent_spawn(
             else:
                 sub_tracer = CompositeTracer([sub_tracer, sub_console])
 
-        sub_mode = mode.for_tools(sub_tools) if hasattr(mode, "for_tools") else mode
+        # F3: rebuild the child's system prompt to match the (a) child role
+        # and (b) actual filtered tool set. Without this, a child whose
+        # role/profile narrowed the tool set would still see prompt sections
+        # describing tools it can't call.
+        if effective_role is not None and hasattr(mode, "for_tools"):
+            from harness.prompts import system_prompt_native
+
+            sub_with_mt, sub_with_wt, sub_mw, sub_ww = _tool_prompt_flags(sub_tools)
+            child_system = system_prompt_native(
+                with_memory_tools=sub_with_mt,
+                with_work_tools=sub_with_wt,
+                with_plan_context=False,
+                memory_writes=sub_mw,
+                work_writes=sub_ww,
+                role=effective_role,
+            )
+            sub_mode = mode.for_tools(sub_tools, system=child_system)
+        else:
+            sub_mode = mode.for_tools(sub_tools) if hasattr(mode, "for_tools") else mode
         sub_messages = sub_mode.initial_messages(task=task, prior="", tools=sub_tools)
         # Subagents intentionally use isolated memory/tracing and single-tool
         # dispatch, but budget fields still flow through the shared policy type.
@@ -1164,6 +1210,7 @@ def _wire_subagent_spawn(
                 depth=depth,
                 seq=seq,
                 task=task[:200],
+                role=effective_role,
                 trace_path=rel_trace_path,
                 turns=result.turns_used,
                 max_turns_reached=result.max_turns_reached,
@@ -1184,10 +1231,14 @@ def _wire_subagent_spawn(
     _ = DEFAULT_ALLOWED_TOOLS  # imported for visibility; consumed by the tool itself
     if spawn_tool is not None and hasattr(spawn_tool, "set_spawn_fn"):
         spawn_tool.set_spawn_fn(spawn)
+        if hasattr(spawn_tool, "set_parent_role"):
+            spawn_tool.set_parent_role(parent_role)
         if lanes is not None and hasattr(spawn_tool, "set_lanes"):
             spawn_tool.set_lanes(lanes, tracer=parent_tracer)
     if batch_tool is not None and hasattr(batch_tool, "set_spawn_fn"):
         batch_tool.set_spawn_fn(spawn)
+        if hasattr(batch_tool, "set_parent_role"):
+            batch_tool.set_parent_role(parent_role)
         if lanes is not None and hasattr(batch_tool, "set_lanes"):
             batch_tool.set_lanes(lanes, tracer=parent_tracer)
 

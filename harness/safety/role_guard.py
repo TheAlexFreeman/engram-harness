@@ -126,6 +126,35 @@ def apply_role_denials(
     return kept, denied
 
 
+def narrows(parent: str | None, child: str | None) -> bool:
+    """Return True iff ``child`` is the same as or a strict narrowing of ``parent``.
+
+    Used by F3 to enforce narrowing-only on subagent role inheritance: a
+    ``research`` parent may not spawn a ``build`` child. Narrowing means
+    the child denies a strict superset of the parent's denied categories.
+
+    Edge cases:
+    - ``parent=None`` (no role): always narrows — a no-role parent has the
+      maximum capability set, so any explicit role on the child is a
+      (proper) narrowing.
+    - ``child=None`` with ``parent`` set: not a narrowing — the child
+      would claim no-role (= max capability), widening the parent.
+      In practice the SpawnSubagent dispatch resolves an unspecified
+      child role to the parent's, so this branch only fires if the
+      caller passes an explicit None.
+    - ``parent == child``: trivially a narrowing.
+    """
+    if parent is None:
+        return True
+    if child is None:
+        return False
+    if parent == child:
+        return True
+    parent_denied = ROLE_DENIED_CATEGORIES.get(parent, frozenset())
+    child_denied = ROLE_DENIED_CATEGORIES.get(child, frozenset())
+    return parent_denied.issubset(child_denied)
+
+
 __all__ = [
     "CATEGORY_CODE_WRITES",
     "CATEGORY_MEMORY_WRITES",
@@ -137,4 +166,5 @@ __all__ = [
     "ROLE_DENIED_CATEGORIES",
     "apply_role_denials",
     "categorize_tool",
+    "narrows",
 ]

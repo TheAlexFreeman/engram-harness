@@ -85,7 +85,7 @@ def test_spawn_validates_max_turns_type() -> None:
 def test_spawn_max_turns_clamped() -> None:
     captured: dict[str, int] = {}
 
-    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+    def spawn(*, task, allowed_tools, max_turns, depth, role=None):  # noqa: ARG001
         captured["max_turns"] = max_turns
         return _result()
 
@@ -107,7 +107,7 @@ def test_set_spawn_fn_late_binding() -> None:
     tool = SpawnSubagent(spawn_fn=None)
     called: list[str] = []
 
-    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+    def spawn(*, task, allowed_tools, max_turns, depth, role=None):  # noqa: ARG001
         called.append(task)
         return _result()
 
@@ -145,7 +145,7 @@ def test_depth_passed_to_spawn_fn() -> None:
     """Each spawn increments depth so nested spawns can enforce the bound."""
     received: list[int] = []
 
-    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+    def spawn(*, task, allowed_tools, max_turns, depth, role=None):  # noqa: ARG001
         received.append(depth)
         return _result()
 
@@ -162,7 +162,7 @@ def test_depth_passed_to_spawn_fn() -> None:
 def test_default_allowed_tools_used_when_none_given() -> None:
     received: list[list[str]] = []
 
-    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+    def spawn(*, task, allowed_tools, max_turns, depth, role=None):  # noqa: ARG001
         received.append(list(allowed_tools))
         return _result()
 
@@ -174,7 +174,7 @@ def test_default_allowed_tools_used_when_none_given() -> None:
 def test_custom_allowed_tools_passes_through() -> None:
     received: list[list[str]] = []
 
-    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+    def spawn(*, task, allowed_tools, max_turns, depth, role=None):  # noqa: ARG001
         received.append(list(allowed_tools))
         return _result()
 
@@ -360,13 +360,17 @@ def test_wire_subagent_rebuilds_mode_for_allowed_tools() -> None:
             self.tools = tools
             self._clone_calls = clone_calls
 
-        def for_tools(self, tools: dict[str, Tool]) -> "CloneTrackingMode":
+        def for_tools(
+            self, tools: dict[str, Tool], *, system: str | None = None
+        ) -> "CloneTrackingMode":
             self._clone_calls.append(set(tools.keys()))
-            return CloneTrackingMode(
+            clone = CloneTrackingMode(
                 [_ScriptedResponse(tool_calls=[], text="ok")],
                 tools,
                 self._clone_calls,
             )
+            clone._last_system = system  # F3: tests inspect this
+            return clone
 
         def complete(self, messages: list[dict], *, stream: Any = None) -> Any:  # noqa: ARG002
             assert set(self.tools) == {"noop"}
