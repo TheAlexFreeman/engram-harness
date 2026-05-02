@@ -53,6 +53,7 @@ def test_main_reconfigures_stdout_to_utf8(tmp_path):
         cfg = MagicMock()
         cfg.workspace = tmp_path
         cfg.tool_profile = MagicMock()
+        cfg.role = None  # F2: skip role-denial logging on the mock path
         cfg.interactive = False
         cfg.auto_ignore_workspace = False
         mock_cfg.return_value = cfg
@@ -93,6 +94,7 @@ def test_main_handles_non_reconfigurable_stdout(tmp_path, capsys):
         cfg = MagicMock()
         cfg.workspace = tmp_path
         cfg.tool_profile = MagicMock()
+        cfg.role = None  # F2: skip role-denial logging on the mock path
         cfg.interactive = False
         cfg.auto_ignore_workspace = False
         mock_cfg.return_value = cfg

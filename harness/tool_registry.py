@@ -34,9 +34,17 @@ def build_tools(
     scope: WorkspaceScope,
     *,
     profile: ToolProfile = ToolProfile.FULL,
+    role: str | None = None,
     extra: list[Tool] | None = None,
 ) -> dict[str, Tool]:
-    """Build the tool registry for a session."""
+    """Build the tool registry for a session.
+
+    ``role`` (F2): when set, role-denied tool categories are stripped from
+    the final registry. ``None`` is a no-op for back-compat with callers
+    that haven't opted in. Profile filtering happens first, then role
+    filtering on top — so e.g. ``--tool-profile read_only --role plan``
+    yields read-only's allowed list (the role's denials don't widen).
+    """
     read_only: list[Tool] = [
         ReadFile(scope),
         ListFiles(scope),
@@ -90,7 +98,13 @@ def build_tools(
 
     if extra:
         base.extend(extra)
-    return {t.name: t for t in base}
+    tools = {t.name: t for t in base}
+
+    if role is not None:
+        from harness.safety.role_guard import apply_role_denials
+
+        tools, _denied = apply_role_denials(tools, role)
+    return tools
 
 
 __all__ = ["build_tools"]

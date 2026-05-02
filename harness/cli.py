@@ -40,12 +40,13 @@ def build_tools(
     scope: WorkspaceScope,
     *,
     profile: ToolProfile = ToolProfile.FULL,
+    role: str | None = None,
     extra: list | None = None,
 ) -> dict[str, object]:
     """Compatibility wrapper for callers that still import from cli."""
     from harness.tool_registry import build_tools as _build_tools
 
-    return _build_tools(scope, profile=profile, extra=extra)
+    return _build_tools(scope, profile=profile, role=role, extra=extra)
 
 
 def _find_git_root(start: Path) -> Path | None:
@@ -593,7 +594,19 @@ def main() -> None:
     extra_sinks = [SessionStateTrackerSink(tool_call_log)] if store is not None else None
 
     scope = WorkspaceScope(root=config.workspace)
-    base_tools = build_tools(scope, profile=config.tool_profile)
+    if config.role is not None:
+        from harness.safety.role_guard import apply_role_denials
+
+        unfiltered = build_tools(scope, profile=config.tool_profile)
+        base_tools, denied = apply_role_denials(unfiltered, config.role)
+        denied_summary = ", ".join(sorted(denied)) if denied else "(none)"
+        print(
+            f"Active role: {config.role} "
+            f"(denied {len(denied)} tools: {denied_summary})",
+            file=sys.stderr,
+        )
+    else:
+        base_tools = build_tools(scope, profile=config.tool_profile)
     components = build_session(
         config,
         tools=base_tools,
