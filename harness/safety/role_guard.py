@@ -109,9 +109,7 @@ def apply_role_denials(
     if role is None:
         return tools, {}
     if role not in ROLE_DENIED_CATEGORIES:
-        raise ValueError(
-            f"unknown role {role!r}; must be one of {sorted(ROLE_DENIED_CATEGORIES)}"
-        )
+        raise ValueError(f"unknown role {role!r}; must be one of {sorted(ROLE_DENIED_CATEGORIES)}")
 
     denied_categories = ROLE_DENIED_CATEGORIES[role]
     if not denied_categories:

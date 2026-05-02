@@ -615,8 +615,7 @@ def main() -> None:
         base_tools, denied = apply_role_denials(unfiltered, config.role)
         denied_summary = ", ".join(sorted(denied)) if denied else "(none)"
         print(
-            f"Active role: {config.role} "
-            f"(denied {len(denied)} tools: {denied_summary})",
+            f"Active role: {config.role} (denied {len(denied)} tools: {denied_summary})",
             file=sys.stderr,
         )
     else:

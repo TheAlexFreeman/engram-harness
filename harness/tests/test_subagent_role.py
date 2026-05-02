@@ -391,9 +391,7 @@ def test_wire_subagent_spawn_rebuilds_prompt_for_child_role() -> None:
         parent_role="plan",
     )
 
-    parent_tools["spawn_subagent"].run(
-        {"task": "investigate", "allowed_tools": ["noop"]}
-    )
+    parent_tools["spawn_subagent"].run({"task": "investigate", "allowed_tools": ["noop"]})
 
     assert len(captured_systems) == 1
     rebuilt_system = captured_systems[0]
@@ -439,9 +437,7 @@ def test_wire_subagent_spawn_no_role_preserves_parent_prompt() -> None:
         # parent_role omitted — defaults to None
     )
 
-    parent_tools["spawn_subagent"].run(
-        {"task": "investigate", "allowed_tools": ["noop"]}
-    )
+    parent_tools["spawn_subagent"].run({"task": "investigate", "allowed_tools": ["noop"]})
 
     # Without a role, F3's prompt-rebuild branch is skipped: for_tools is
     # called WITHOUT system override (the kwarg defaults to None).

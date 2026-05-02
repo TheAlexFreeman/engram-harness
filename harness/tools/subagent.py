@@ -89,8 +89,7 @@ def _resolve_child_role(args: dict, parent_role: str | None) -> str | None:
         raise ValueError(f"role must be one of {list(ROLES)}; got {raw!r}")
     if not narrows(parent_role, raw):
         raise ValueError(
-            f"role {raw!r} would widen parent role {parent_role!r}; "
-            "narrowing-only enforced (F3)"
+            f"role {raw!r} would widen parent role {parent_role!r}; narrowing-only enforced (F3)"
         )
     return raw
 
