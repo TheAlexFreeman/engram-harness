@@ -40,13 +40,20 @@ class NativeMode:
         )
         return [{"role": "user", "content": user}]
 
-    def for_tools(self, tools: dict[str, Tool]) -> "NativeMode":
-        """Return an equivalent mode with tool schemas rebuilt from ``tools``."""
+    def for_tools(
+        self, tools: dict[str, Tool], *, system: str | None = None
+    ) -> "NativeMode":
+        """Return an equivalent mode with tool schemas rebuilt from ``tools``.
+
+        ``system`` (F3): optional system-prompt override used when subagents
+        are rebuilt for a different role than the parent. ``None`` (default)
+        preserves the parent's prompt for backward compatibility.
+        """
         return NativeMode(
             client=self.client,
             model=self.model,
             tools=tools,
-            system=self._system,
+            system=system if system is not None else self._system,
             max_output_tokens=self.max_output_tokens,
         )
 

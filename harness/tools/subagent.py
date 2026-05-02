@@ -28,8 +28,12 @@ Design
 Out of scope for this PR (call out as follow-ups):
 - Trace-bridge nested spans matching OTel GenAI semconv.
 - Cost budget propagation beyond the result text.
-- Per-sub-agent system-prompt rewrite (currently reuses parent's
-  Mode and prompt; the model only sees the trimmed tool registry).
+
+F3 closes the per-sub-agent system-prompt rewrite gap: when the parent
+session has a role (or the subagent specifies one), the child's system
+prompt is rebuilt for the child's role and tool set rather than reusing
+the parent's. Narrowing-only is enforced — a research parent may not
+spawn a build child.
 """
 
 from __future__ import annotations
@@ -40,6 +44,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from harness.lanes import Lane, LaneRegistry
+from harness.prompts import ROLES
+from harness.safety.role_guard import narrows
 from harness.tools import CAP_SUBAGENT
 from harness.usage import Usage
 
@@ -65,6 +71,28 @@ MIN_MAX_TURNS = 1
 MAX_MAX_TURNS = 50
 
 DEFAULT_MAX_DEPTH = 2
+
+
+def _resolve_child_role(args: dict, parent_role: str | None) -> str | None:
+    """Resolve and validate the child's role from tool args (F3).
+
+    - Absent ``role`` field → inherit ``parent_role``.
+    - Explicit ``role`` field → must be a known role and must narrow ``parent_role``.
+
+    Raises ``ValueError`` with a structured message on validation failure.
+    Used by both ``SpawnSubagent.run`` and ``SpawnSubagents.run``.
+    """
+    raw = args.get("role")
+    if raw is None:
+        return parent_role
+    if not isinstance(raw, str) or raw not in ROLES:
+        raise ValueError(f"role must be one of {list(ROLES)}; got {raw!r}")
+    if not narrows(parent_role, raw):
+        raise ValueError(
+            f"role {raw!r} would widen parent role {parent_role!r}; "
+            "narrowing-only enforced (F3)"
+        )
+    return raw
 
 
 @dataclass
@@ -155,6 +183,16 @@ class SpawnSubagent:
                     f"clamped to [{MIN_MAX_TURNS}, {MAX_MAX_TURNS}]."
                 ),
             },
+            "role": {
+                "type": "string",
+                "enum": list(ROLES),
+                "description": (
+                    "F3: optional role for the sub-agent. Inherits the parent's role "
+                    "by default. Narrowing-only — a research parent may not spawn a "
+                    "build child. The child's system prompt and tool registry are "
+                    "rebuilt for its role."
+                ),
+            },
         },
         "required": ["task"],
     }
@@ -168,6 +206,7 @@ class SpawnSubagent:
         lanes: LaneRegistry | None = None,
         tracer: Any | None = None,
         parent_run_id: str | None = None,
+        parent_role: str | None = None,
     ):
         self._spawn_fn = spawn_fn
         self.max_depth = max_depth
@@ -175,6 +214,7 @@ class SpawnSubagent:
         self._lanes = lanes
         self._tracer = tracer
         self._parent_run_id = parent_run_id
+        self._parent_role = parent_role
 
     def set_spawn_fn(self, spawn_fn: SpawnFn) -> None:
         """Late-bind the spawn callback.
@@ -185,6 +225,14 @@ class SpawnSubagent:
         a wired callback raises a clear error.
         """
         self._spawn_fn = spawn_fn
+
+    def set_parent_role(self, parent_role: str | None) -> None:
+        """Late-bind the parent session's role (F3).
+
+        ``_wire_subagent_spawn`` calls this after ``build_session`` so the
+        tool can validate child-role narrowing against the parent's role.
+        """
+        self._parent_role = parent_role
 
     def set_lanes(
         self,
@@ -236,12 +284,15 @@ class SpawnSubagent:
             raise ValueError("max_turns must be an integer") from e
         max_turns = max(MIN_MAX_TURNS, min(max_turns, MAX_MAX_TURNS))
 
+        child_role = _resolve_child_role(args, self._parent_role)
+
         def _do_spawn() -> SubagentResult:
             return self._spawn_fn(
                 task=task.strip(),
                 allowed_tools=allowed_tools,
                 max_turns=max_turns,
                 depth=self.current_depth + 1,
+                role=child_role,
             )
 
         # Nested calls (current_depth > 0) bypass the lane: the outer
@@ -318,6 +369,14 @@ class SpawnSubagents:
                                 f"clamped to [{MIN_MAX_TURNS}, {MAX_MAX_TURNS}]."
                             ),
                         },
+                        "role": {
+                            "type": "string",
+                            "enum": list(ROLES),
+                            "description": (
+                                "F3: optional per-child role. Inherits the parent's role "
+                                "by default. Narrowing-only enforcement."
+                            ),
+                        },
                     },
                     "required": ["task"],
                 },
@@ -345,6 +404,7 @@ class SpawnSubagents:
         lanes: LaneRegistry | None = None,
         tracer: Any | None = None,
         parent_run_id: str | None = None,
+        parent_role: str | None = None,
     ):
         self._spawn_fn = spawn_fn
         self.max_depth = max_depth
@@ -352,9 +412,13 @@ class SpawnSubagents:
         self._lanes = lanes
         self._tracer = tracer
         self._parent_run_id = parent_run_id
+        self._parent_role = parent_role
 
     def set_spawn_fn(self, spawn_fn: SpawnFn) -> None:
         self._spawn_fn = spawn_fn
+
+    def set_parent_role(self, parent_role: str | None) -> None:
+        self._parent_role = parent_role
 
     def set_lanes(
         self,
@@ -416,11 +480,16 @@ class SpawnSubagents:
             except (TypeError, ValueError) as e:
                 raise ValueError(f"tasks[{i}].max_turns must be an integer") from e
             max_turns = max(MIN_MAX_TURNS, min(max_turns, MAX_MAX_TURNS))
+            try:
+                child_role = _resolve_child_role(raw, self._parent_role)
+            except ValueError as exc:
+                raise ValueError(f"tasks[{i}].{exc}") from exc
             normalized.append(
                 {
                     "task": task.strip(),
                     "allowed_tools": allowed_tools,
                     "max_turns": max_turns,
+                    "role": child_role,
                 }
             )
 
@@ -444,6 +513,7 @@ class SpawnSubagents:
                     allowed_tools=spec["allowed_tools"],
                     max_turns=spec["max_turns"],
                     depth=self.current_depth + 1,
+                    role=spec["role"],
                 )
 
             try:

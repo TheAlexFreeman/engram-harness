@@ -111,7 +111,7 @@ def test_recording_forwards_unknown_attrs(tmp_path: Path) -> None:
     """
 
     class _ModeWithExtra(ScriptedMode):
-        def for_tools(self, tools):
+        def for_tools(self, tools, *, system: str | None = None):  # noqa: ARG002
             return "called for_tools"
 
     inner = _ModeWithExtra([_ScriptedResponse(tool_calls=[], text="x")])

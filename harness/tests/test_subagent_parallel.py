@@ -41,7 +41,7 @@ def test_spawn_subagent_routes_through_lane() -> None:
     r = LaneRegistry(LaneCaps(main=4, subagent=4))
     calls: list[str] = []
 
-    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+    def spawn(*, task, allowed_tools, max_turns, depth, role=None):  # noqa: ARG001
         calls.append(task)
         return _result(text=f"finished-{task}")
 
@@ -56,7 +56,7 @@ def test_spawn_subagent_routes_through_lane() -> None:
 def test_spawn_subagent_without_lane_still_works() -> None:
     """Backwards-compatible fallback: no lane wired → direct call."""
 
-    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+    def spawn(*, task, allowed_tools, max_turns, depth, role=None):  # noqa: ARG001
         return _result(text="ok")
 
     tool = SpawnSubagent(spawn, lanes=None)
@@ -126,7 +126,7 @@ def test_spawn_subagents_8_with_cap_4_completes_all() -> None:
     state_lock = threading.Lock()
     hold = 0.05  # 50ms per child
 
-    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+    def spawn(*, task, allowed_tools, max_turns, depth, role=None):  # noqa: ARG001
         nonlocal in_flight, peak
         with state_lock:
             in_flight += 1
@@ -168,7 +168,7 @@ def test_spawn_subagents_records_lane_events_on_tracer() -> None:
 
     tracer = _Sink()
 
-    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+    def spawn(*, task, allowed_tools, max_turns, depth, role=None):  # noqa: ARG001
         time.sleep(0.02)
         return _result()
 
@@ -193,7 +193,7 @@ def test_spawn_subagents_fail_fast_skips_remaining_after_error() -> None:
     seen: list[str] = []
     seen_lock = threading.Lock()
 
-    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+    def spawn(*, task, allowed_tools, max_turns, depth, role=None):  # noqa: ARG001
         with seen_lock:
             seen.append(task)
         if task == "explode":
@@ -226,7 +226,7 @@ def test_spawn_subagents_default_no_fail_fast_runs_all() -> None:
     """Without fail_fast, every child runs even if some raise."""
     r = LaneRegistry(LaneCaps(main=4, subagent=4))
 
-    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+    def spawn(*, task, allowed_tools, max_turns, depth, role=None):  # noqa: ARG001
         if task == "bad":
             raise ValueError("nope")
         return _result(text=f"ok:{task}")
@@ -268,7 +268,7 @@ def test_nested_spawn_subagent_bypasses_lane() -> None:
     """
     r = LaneRegistry(LaneCaps(main=4, subagent=1))
 
-    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+    def spawn(*, task, allowed_tools, max_turns, depth, role=None):  # noqa: ARG001
         return _result(text=f"nested-result:{task}")
 
     nested = SpawnSubagent(spawn, lanes=r, current_depth=1, max_depth=2)
@@ -316,7 +316,7 @@ def test_nested_spawn_subagents_bypasses_lane() -> None:
     """
     r = LaneRegistry(LaneCaps(main=4, subagent=1))
 
-    def spawn(*, task, allowed_tools, max_turns, depth):  # noqa: ARG001
+    def spawn(*, task, allowed_tools, max_turns, depth, role=None):  # noqa: ARG001
         return _result(text=f"ok:{task}")
 
     nested = SpawnSubagents(spawn, lanes=r, current_depth=1, max_depth=2)
