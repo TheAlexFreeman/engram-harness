@@ -17,6 +17,9 @@ Draft detailed integration proposal as a working note; identify concrete fronten
 ### memory-viz-features [active] (project: memory-visualization)
 Brainstorm and document interesting visualization features for Engram memory using Better Base
 
+### development-directions [active] (project: psychotechnologies-software)
+Six detailed development direction notes from a comprehensive knowledge-base review: session retrospective (self-improving harness), narrative-aware retrieval, memory debugger via Better Base, reconsolidation as first-class operation, role-aware memory partitioning, Deacon emergent dynamics as architectural guide. Overview with prioritization in development-directions-overview.md.
+
 ## Closed
 
 ### deacon-ideas — project archived: Completed research and synthesis. Produced four detailed working notes in notes/ (research overview, teleodynamics & absentials, symbolic species & Peircean reference, FEP/active inference bridges, and integrative Engram implications). All five original open questions resolved with high-quality syntheses. Files are ready for review and promotion to memory/knowledge/cognitive-science/deacon/ (or philosophy/mind/). This significantly enriches the existing biosemiotics, dynamical systems, active inference, McGilchrist, and LLM cognition files with Deacon's emergentist, semiotic, and constraint-based framework. Strong alignment with user's core questions on intelligence, extended mind, and value persistence. (2026-04-26)
