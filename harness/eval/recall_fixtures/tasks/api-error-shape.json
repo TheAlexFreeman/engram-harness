@@ -1,0 +1,7 @@
+{
+  "id": "api-error-shape",
+  "query": "error response shape validation_failed code message details request_id",
+  "k": 3,
+  "expected_files": ["memory/knowledge/api/error-responses.md"],
+  "tags": ["api"]
+}

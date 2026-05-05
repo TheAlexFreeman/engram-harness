@@ -1,0 +1,7 @@
+{
+  "id": "deploy-kubernetes-rollout",
+  "query": "kubernetes helm rolling update strategy deploys",
+  "k": 5,
+  "expected_files": ["memory/knowledge/deploy/kubernetes-rollout.md"],
+  "tags": ["deploy"]
+}

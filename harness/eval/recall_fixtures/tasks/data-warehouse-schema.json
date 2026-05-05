@@ -1,0 +1,7 @@
+{
+  "id": "data-warehouse-schema",
+  "query": "snowflake star schema dim fact tables dbt",
+  "k": 3,
+  "expected_files": ["memory/knowledge/data/warehouse-schema.md"],
+  "tags": ["data"]
+}

@@ -1,0 +1,7 @@
+{
+  "id": "deploy-environment-config",
+  "query": "vault secret injection helm values environment variable APP_",
+  "k": 3,
+  "expected_files": ["memory/knowledge/deploy/environment-config.md"],
+  "tags": ["deploy"]
+}

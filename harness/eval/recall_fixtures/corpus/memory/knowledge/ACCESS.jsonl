@@ -1,0 +1,23 @@
+{"file":"memory/knowledge/auth/session-tokens.md","date":"2026-04-10","task":"investigate session token validation","helpfulness":0.95,"note":"recall: read after surfacing","session_id":"act-fixture-001"}
+{"file":"memory/knowledge/auth/session-tokens.md","date":"2026-04-15","task":"add session token rotation","helpfulness":0.9,"note":"recall: read after surfacing","session_id":"act-fixture-002"}
+{"file":"memory/knowledge/auth/session-tokens.md","date":"2026-04-22","task":"debug session expiry bug","helpfulness":0.85,"note":"recall: read after surfacing","session_id":"act-fixture-003"}
+{"file":"memory/knowledge/auth/old-session-model.md","date":"2026-04-10","task":"investigate session token validation","helpfulness":0.1,"note":"recall: surfaced; not read","session_id":"act-fixture-001"}
+{"file":"memory/knowledge/auth/password-hashing.md","date":"2026-04-12","task":"audit password hashing","helpfulness":0.9,"note":"recall: read after surfacing","session_id":"act-fixture-004"}
+{"file":"memory/knowledge/auth/oauth-providers.md","date":"2026-04-18","task":"add Google sign-in","helpfulness":0.8,"note":"recall: read after surfacing","session_id":"act-fixture-005"}
+{"file":"memory/knowledge/deploy/kubernetes-rollout.md","date":"2026-04-20","task":"diagnose failed rollout","helpfulness":0.9,"note":"recall: read after surfacing","session_id":"act-fixture-006"}
+{"file":"memory/knowledge/deploy/kubernetes-rollout.md","date":"2026-04-25","task":"tune rollout parameters","helpfulness":0.85,"note":"recall: read after surfacing","session_id":"act-fixture-007"}
+{"file":"memory/knowledge/deploy/environment-config.md","date":"2026-04-21","task":"add new env variable","helpfulness":0.8,"note":"recall: read after surfacing","session_id":"act-fixture-008"}
+{"file":"memory/knowledge/deploy/ci-pipeline.md","date":"2026-04-23","task":"speed up CI","helpfulness":0.7,"note":"recall: read after surfacing","session_id":"act-fixture-009"}
+{"file":"memory/knowledge/deploy/monitoring.md","date":"2026-04-24","task":"add a new alert","helpfulness":0.85,"note":"recall: read after surfacing","session_id":"act-fixture-010"}
+{"file":"memory/knowledge/data/ingestion-pipeline.md","date":"2026-04-26","task":"investigate consumer lag","helpfulness":0.9,"note":"recall: read after surfacing","session_id":"act-fixture-011"}
+{"file":"memory/knowledge/data/warehouse-schema.md","date":"2026-04-27","task":"add new dim table","helpfulness":0.85,"note":"recall: read after surfacing","session_id":"act-fixture-012"}
+{"file":"memory/knowledge/data/old-pipeline-airflow.md","date":"2026-04-26","task":"investigate consumer lag","helpfulness":0.05,"note":"recall: surfaced; not read","session_id":"act-fixture-011"}
+{"file":"memory/knowledge/data/backfill-procedure.md","date":"2026-04-28","task":"plan a backfill","helpfulness":0.8,"note":"recall: read after surfacing","session_id":"act-fixture-013"}
+{"file":"memory/knowledge/api/rest-conventions.md","date":"2026-04-29","task":"design new endpoint","helpfulness":0.95,"note":"recall: read after surfacing","session_id":"act-fixture-014"}
+{"file":"memory/knowledge/api/rest-conventions.md","date":"2026-05-01","task":"review API spec","helpfulness":0.9,"note":"recall: read after surfacing","session_id":"act-fixture-015"}
+{"file":"memory/knowledge/api/rate-limiting.md","date":"2026-04-30","task":"customer report of throttling","helpfulness":0.85,"note":"recall: read after surfacing","session_id":"act-fixture-016"}
+{"file":"memory/knowledge/api/error-responses.md","date":"2026-05-02","task":"standardize error shape","helpfulness":0.95,"note":"recall: read after surfacing","session_id":"act-fixture-017"}
+{"file":"memory/knowledge/api/webhooks.md","date":"2026-05-03","task":"add webhook delivery","helpfulness":0.75,"note":"recall: read after surfacing","session_id":"act-fixture-018"}
+{"file":"memory/knowledge/auth/session-validation-misc.md","date":"2026-04-08","task":"investigate session token validation","helpfulness":0.05,"note":"recall: surfaced; not read","session_id":"act-fixture-019"}
+{"file":"memory/knowledge/auth/session-validation-misc.md","date":"2026-04-14","task":"add session token rotation","helpfulness":0.05,"note":"recall: surfaced; not read","session_id":"act-fixture-020"}
+{"file":"memory/knowledge/auth/session-validation-misc.md","date":"2026-04-21","task":"debug session expiry bug","helpfulness":0.1,"note":"recall: surfaced; briefly skimmed","session_id":"act-fixture-021"}

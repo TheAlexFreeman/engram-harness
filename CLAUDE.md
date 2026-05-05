@@ -21,7 +21,9 @@ Subcommand modules: `harness/cmd_consolidate.py` (A4 sleep-time SUMMARY refresh)
 `harness/cmd_decay.py` (A5 promote/demote candidates), `harness/cmd_drift.py` (C4
 rolling-window quality alerts), `harness/cmd_eval.py` (C2 eval harness),
 `harness/cmd_replay.py` (C3 deterministic replay), `harness/cmd_recall_debug.py`
-(A6 candidate-set inspection), `harness/cmd_resume.py` (B4 paused-session resume),
+(A6 candidate-set inspection), `harness/cmd_recall_eval.py` (recall eval suite
+over the fixture corpus at `harness/eval/recall_fixtures/`),
+`harness/cmd_resume.py` (B4 paused-session resume),
 `harness/cmd_status.py` (active plans + paused sessions). `ROADMAP.md` has the
 original phase plan with shipped state annotated; **`docs/improvement-plans-2026.md`
 is the active development plan** with per-theme status.
@@ -83,6 +85,7 @@ harness "<task>" --workspace ~/proj --memory engram          # Engram-backed ses
 harness resume <session_id>                                  # resume a paused session (B4)
 harness consolidate --really-run                             # sleep-time SUMMARY.md refresh (A4)
 harness decay-sweep --really-run                             # promote/demote candidate sweep (A5)
+harness recall-eval --really-run                            # recall regression suite over the fixture corpus
 harness drift                                                # rolling-window quality alerts (C4)
 harness status                                               # active plans + paused sessions
 ```

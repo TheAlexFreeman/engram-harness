@@ -1,0 +1,7 @@
+{
+  "id": "deploy-monitoring-alerts",
+  "query": "prometheus grafana alerting on-call slack runbook",
+  "k": 3,
+  "expected_files": ["memory/knowledge/deploy/monitoring.md"],
+  "tags": ["deploy"]
+}

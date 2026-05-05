@@ -22,6 +22,24 @@ Follow-ups (each its own PR):
 from __future__ import annotations
 
 from harness.eval.dataset import EvalTask, load_tasks
+from harness.eval.recall_runner import (
+    RecallCandidate,
+    RecallEvalReport,
+    RecallEvalTask,
+    RecallRunRecord,
+    RecallTaskOutcome,
+    load_recall_tasks,
+    run_recall_eval,
+)
+from harness.eval.recall_scorers import (
+    RecallExclusionScorer,
+    RecallHitScorer,
+    RecallMRRScorer,
+    RecallOrderScorer,
+    RecallScorer,
+    RecallScoreResult,
+    default_recall_scorers,
+)
 from harness.eval.runner import EvalReport, RunRecord, TaskOutcome, run_eval
 from harness.eval.scorers import (
     CompletesWithoutErrorScorer,
@@ -45,4 +63,18 @@ __all__ = [
     "TaskOutcome",
     "EvalReport",
     "run_eval",
+    "RecallEvalTask",
+    "RecallCandidate",
+    "RecallRunRecord",
+    "RecallTaskOutcome",
+    "RecallEvalReport",
+    "load_recall_tasks",
+    "run_recall_eval",
+    "RecallScorer",
+    "RecallScoreResult",
+    "RecallHitScorer",
+    "RecallExclusionScorer",
+    "RecallOrderScorer",
+    "RecallMRRScorer",
+    "default_recall_scorers",
 ]

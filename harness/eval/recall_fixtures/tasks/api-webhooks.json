@@ -1,0 +1,7 @@
+{
+  "id": "api-webhooks",
+  "query": "webhook delivery hmac signature exponential backoff dlq",
+  "k": 3,
+  "expected_files": ["memory/knowledge/api/webhooks.md"],
+  "tags": ["api"]
+}

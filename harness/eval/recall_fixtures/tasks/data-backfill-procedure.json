@@ -1,0 +1,7 @@
+{
+  "id": "data-backfill-procedure",
+  "query": "backfill procedure quarantine schema swap promotion",
+  "k": 3,
+  "expected_files": ["memory/knowledge/data/backfill-procedure.md"],
+  "tags": ["data"]
+}
