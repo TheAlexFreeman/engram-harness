@@ -1,0 +1,7 @@
+{
+  "id": "api-rate-limiting",
+  "query": "rate limiting token bucket 429 retry-after",
+  "k": 3,
+  "expected_files": ["memory/knowledge/api/rate-limiting.md"],
+  "tags": ["api"]
+}

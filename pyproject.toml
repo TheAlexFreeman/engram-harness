@@ -72,7 +72,20 @@ harness = "harness"
 [tool.setuptools.package-data]
 harness = ["pricing.json", "py.typed"]
 "harness.prompt_templates" = ["*.md"]
-"harness.eval" = ["builtin/*.json"]
+"harness.eval" = [
+    "builtin/*.json",
+    "recall_fixtures/_README.md",
+    "recall_fixtures/tasks/*.json",
+    "recall_fixtures/corpus/memory/HOME.md",
+    "recall_fixtures/corpus/memory/users/*.md",
+    "recall_fixtures/corpus/memory/activity/*.md",
+    "recall_fixtures/corpus/memory/knowledge/*.jsonl",
+    "recall_fixtures/corpus/memory/knowledge/auth/*.md",
+    "recall_fixtures/corpus/memory/knowledge/deploy/*.md",
+    "recall_fixtures/corpus/memory/knowledge/data/*.md",
+    "recall_fixtures/corpus/memory/knowledge/api/*.md",
+    "recall_fixtures/corpus/memory/skills/*.md",
+]
 
 [tool.ruff]
 line-length = 100

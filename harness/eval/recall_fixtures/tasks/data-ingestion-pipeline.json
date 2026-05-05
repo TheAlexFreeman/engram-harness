@@ -1,0 +1,8 @@
+{
+  "id": "data-ingestion-pipeline",
+  "query": "kafka events ingestion parquet s3 schema validation",
+  "k": 5,
+  "expected_files": ["memory/knowledge/data/ingestion-pipeline.md"],
+  "excluded_files": ["memory/knowledge/data/old-pipeline-airflow.md"],
+  "tags": ["data", "superseded"]
+}

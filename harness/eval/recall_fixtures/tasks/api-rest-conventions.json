@@ -1,0 +1,7 @@
+{
+  "id": "api-rest-conventions",
+  "query": "rest conventions resource paths cursor pagination versioning",
+  "k": 3,
+  "expected_files": ["memory/knowledge/api/rest-conventions.md"],
+  "tags": ["api"]
+}

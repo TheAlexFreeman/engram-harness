@@ -1,0 +1,8 @@
+{
+  "id": "auth-superseded-included",
+  "query": "old opaque token session redis ttl",
+  "k": 5,
+  "include_superseded": true,
+  "expected_files": ["memory/knowledge/auth/old-session-model.md"],
+  "tags": ["auth", "superseded"]
+}

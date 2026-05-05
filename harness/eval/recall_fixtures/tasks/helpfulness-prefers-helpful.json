@@ -1,0 +1,10 @@
+{
+  "id": "helpfulness-prefers-helpful",
+  "query": "session token validation",
+  "k": 3,
+  "expected_order": [
+    "memory/knowledge/auth/session-tokens.md"
+  ],
+  "expected_files": ["memory/knowledge/auth/session-tokens.md"],
+  "tags": ["helpfulness", "auth"]
+}

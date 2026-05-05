@@ -1,0 +1,8 @@
+{
+  "id": "skills-writing-migrations",
+  "query": "database migration additive nullable backfill release",
+  "k": 3,
+  "namespace": "skills",
+  "expected_files": ["memory/skills/writing-migrations.md"],
+  "tags": ["namespace", "skills"]
+}

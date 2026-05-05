@@ -1,0 +1,8 @@
+{
+  "id": "auth-session-tokens",
+  "query": "how are session tokens stored and validated",
+  "k": 5,
+  "expected_files": ["memory/knowledge/auth/session-tokens.md"],
+  "excluded_files": ["memory/knowledge/auth/old-session-model.md"],
+  "tags": ["auth", "superseded"]
+}

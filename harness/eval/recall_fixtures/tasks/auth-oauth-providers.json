@@ -1,0 +1,7 @@
+{
+  "id": "auth-oauth-providers",
+  "query": "google github oauth third-party sign-in callback",
+  "k": 3,
+  "expected_files": ["memory/knowledge/auth/oauth-providers.md"],
+  "tags": ["auth"]
+}

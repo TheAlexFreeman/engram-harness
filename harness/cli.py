@@ -12,6 +12,7 @@ from harness.cmd_decay import main as _decay_main
 from harness.cmd_drift import main as _drift_main
 from harness.cmd_eval import main as _eval_main
 from harness.cmd_recall_debug import main as _recall_debug_main
+from harness.cmd_recall_eval import main as _recall_eval_main
 from harness.cmd_replay import main as _replay_main
 from harness.cmd_resume import main as _resume_main
 from harness.cmd_serve import main as _serve_main
@@ -562,6 +563,10 @@ def main() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] == "recall-debug":
         _recall_debug_main()
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "recall-eval":
+        _recall_eval_main()
         return
 
     if len(sys.argv) > 1 and sys.argv[1] == "replay":

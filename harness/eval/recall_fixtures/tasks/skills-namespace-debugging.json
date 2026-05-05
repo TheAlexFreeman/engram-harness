@@ -1,0 +1,8 @@
+{
+  "id": "skills-namespace-debugging",
+  "query": "asyncio task hang debugging coroutine event loop",
+  "k": 3,
+  "namespace": "skills",
+  "expected_files": ["memory/skills/debugging-async.md"],
+  "tags": ["namespace", "skills"]
+}
