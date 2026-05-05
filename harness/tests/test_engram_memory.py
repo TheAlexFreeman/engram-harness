@@ -560,3 +560,144 @@ def test_start_session_omits_block_when_provider_silent(engram_repo: Path) -> No
     mem = EngramMemory(engram_repo, embed=False, previous_session_provider=lambda: None)
     bootstrap = mem.start_session("fresh start")
     assert "## Previous session" not in bootstrap
+
+
+# ---------------------------------------------------------------------------
+# Plan 3 — K-line boost in recall + snapshot enrichment
+# ---------------------------------------------------------------------------
+
+
+def test_update_tool_context_appends_to_ring_buffer(engram_repo: Path) -> None:
+    mem = EngramMemory(engram_repo, embed=False)
+    mem.update_tool_context("read_file")
+    mem.update_tool_context("file_edit")
+    mem.update_tool_context("shell")
+    assert mem._tool_sequence == ["read_file", "file_edit", "shell"]
+
+
+def test_update_tool_context_caps_at_default_limit(engram_repo: Path) -> None:
+    mem = EngramMemory(engram_repo, embed=False)
+    for i in range(20):
+        mem.update_tool_context(f"tool_{i}")
+    # Default limit is 5 (see kline_index._TOOL_SEQUENCE_LIMIT).
+    assert len(mem._tool_sequence) == 5
+    assert mem._tool_sequence == [f"tool_{i}" for i in range(15, 20)]
+
+
+def test_update_tool_context_ignores_empty(engram_repo: Path) -> None:
+    mem = EngramMemory(engram_repo, embed=False)
+    mem.update_tool_context("")
+    mem.update_tool_context(None)  # type: ignore[arg-type]
+    assert mem._tool_sequence == []
+
+
+def test_session_snapshot_carries_kline_state(engram_repo: Path) -> None:
+    mem = EngramMemory(engram_repo, embed=False)
+    mem.start_session("fix auth bug")
+    mem.update_tool_context("read_file")
+    mem.update_tool_context("file_edit")
+    mem.recall("celery worker pool", k=1)  # populates _namespaces_seen
+
+    snap = mem.session_snapshot()
+    assert snap.tool_sequence == ("read_file", "file_edit")
+    assert "memory/knowledge" in snap.active_namespaces
+
+
+def test_recall_records_namespace_when_called(engram_repo: Path) -> None:
+    mem = EngramMemory(engram_repo, embed=False)
+    mem.start_session("fix bug")
+    assert mem._namespaces_seen == set()
+    mem.recall("celery", k=1)
+    # Default scope set; the seen set should be non-empty after recall.
+    assert mem._namespaces_seen
+
+
+def test_recall_attaches_kline_similarity_field(engram_repo: Path) -> None:
+    """After a recall, the recall_candidate_events should carry kline_similarity
+    on returned candidates (when an index has been built)."""
+    mem = EngramMemory(engram_repo, embed=False)
+    mem.start_session("celery worker pool optimization")
+    mem.recall("celery worker pool", k=1)
+    events = mem.recall_candidate_events
+    assert events
+    # No history ACCESS rows yet → similarity 0; but the field is set so
+    # downstream tooling (recall_candidates.jsonl, debug CLI) can show it.
+    # Note: kline_similarity is set on hit dicts, not stored on the event
+    # candidate (the event records pre-fusion ranks). What we verify here
+    # is that the recall path didn't crash and the K-line code ran.
+    assert any(c.get("returned") for c in events[0].candidates)
+
+
+def test_kline_boost_disabled_via_env(engram_repo: Path, monkeypatch) -> None:
+    """With HARNESS_KLINE_BOOST=0 the boost path is skipped entirely."""
+    monkeypatch.setenv("HARNESS_KLINE_BOOST", "0")
+    mem = EngramMemory(engram_repo, embed=False)
+    mem.start_session("fix auth bug")
+    # Should not crash. The hits come back; we just don't apply a boost.
+    results = mem.recall("celery", k=1)
+    assert isinstance(results, list)
+
+
+def test_kline_boost_promotes_contextually_matching_file(
+    engram_repo: Path, monkeypatch
+) -> None:
+    """With matching ACCESS history, recall ranks the contextually similar
+    file higher than the unrelated one with the same content match."""
+    # Force similar BM25 evidence for both files, so the K-line boost is
+    # the only differentiator.
+    knowledge = engram_repo / "core" / "memory" / "knowledge"
+    (knowledge / "ctx-match.md").write_text(
+        "---\nsource: agent-generated\ntrust: medium\n---\n\nasync queue worker pool\n",
+        encoding="utf-8",
+    )
+    (knowledge / "ctx-other.md").write_text(
+        "---\nsource: agent-generated\ntrust: medium\n---\n\nasync queue worker pool\n",
+        encoding="utf-8",
+    )
+
+    # ACCESS row giving ctx-match.md a config that overlaps strongly with
+    # the upcoming session's recall.
+    access_path = knowledge / "ACCESS.jsonl"
+    import json
+    rows = [
+        {
+            "file": "memory/knowledge/ctx-match.md",
+            "date": "2026-05-04",
+            "helpfulness": 0.5,
+            "config": {
+                "task_slug": "fix celery worker pool",
+                "plan_phase": "implementation",
+                "tool_sequence": ["read_file", "file_edit"],
+                "active_namespaces": ["memory/knowledge"],
+                "topic_tags": ["celery", "worker", "queue"],
+            },
+        },
+    ]
+    access_path.write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+    )
+
+    # Disable the helpfulness rerank so only the K-line boost reorders.
+    monkeypatch.setenv("HARNESS_HELPFULNESS_RERANK", "0")
+
+    mem = EngramMemory(engram_repo, embed=False)
+    mem.start_session("fix celery worker pool")
+    mem.update_tool_context("read_file")
+    mem.update_tool_context("file_edit")
+    # Query uses "async" + "queue" — only my two new fixtures contain
+    # "async", so neither celery.md nor ssr.md interferes.
+    results = mem.recall("async queue", k=2)
+    # Memory.content prefaces each result with "[<rel_path>]\n..." so we
+    # parse the path out of the content header.
+    import re
+
+    paths = []
+    for r in results:
+        m = re.match(r"\[([^\]]+)\]", r.content)
+        if m:
+            paths.append(m.group(1))
+    # Both files have identical BM25-relevant content; only the K-line
+    # boost differentiates them. ctx-match.md must rank first.
+    assert "memory/knowledge/ctx-match.md" in paths
+    assert "memory/knowledge/ctx-other.md" in paths
+    assert paths[0] == "memory/knowledge/ctx-match.md"

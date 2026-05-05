@@ -1246,3 +1246,97 @@ def test_reflection_flags_high_subagent_error_rate(
     reflection = result.reflection_path.read_text(encoding="utf-8")
     assert "high tool-error rate" in reflection
     assert "subagent-001" in reflection
+
+
+# ---------------------------------------------------------------------------
+# Plan 3 — config field on ACCESS rows
+# ---------------------------------------------------------------------------
+
+
+def test_trace_bridge_writes_kline_config_on_access_row(
+    repo: Path, memory: EngramMemory, tmp_path: Path
+) -> None:
+    """ACCESS.jsonl rows should carry a ``config`` field reflecting the
+    session's K-line configuration vector."""
+    # Stamp the memory with a session config: tool sequence, namespaces,
+    # a recall (which seeds active_namespaces), and a task.
+    memory.update_tool_context("read_file")
+    memory.update_tool_context("file_edit")
+    memory.recall("celery worker", k=1)  # populates active_namespaces
+
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    events: list[dict] = [
+        {"ts": ts, "kind": "session_start", "task": "test trace bridge"},
+        {"ts": ts, "kind": "model_response", "turn": 0},
+        {
+            "ts": ts,
+            "kind": "tool_call",
+            "name": "memory_review",
+            "args": {"path": "knowledge/celery.md"},
+        },
+        {
+            "ts": ts,
+            "kind": "tool_result",
+            "name": "memory_review",
+            "is_error": False,
+            "content_preview": "celery...",
+        },
+    ]
+    _write_trace(trace, events)
+    run_trace_bridge(trace, memory, commit=False)
+
+    access_path = repo / "core" / "memory" / "knowledge" / "ACCESS.jsonl"
+    rows = [
+        json.loads(line) for line in access_path.read_text(encoding="utf-8").splitlines() if line
+    ]
+    # Recall and tool-read both produce ACCESS rows; both should carry a
+    # ``config`` field with the session's task/tool/namespace fingerprint.
+    rows_with_config = [r for r in rows if "config" in r]
+    assert rows_with_config, "expected ACCESS rows to carry the K-line config field"
+    cfg = rows_with_config[0]["config"]
+    assert isinstance(cfg, dict)
+    assert cfg.get("task_slug")
+    assert "read_file" in cfg.get("tool_sequence", [])
+    assert "file_edit" in cfg.get("tool_sequence", [])
+
+
+def test_trace_bridge_omits_config_when_session_state_empty(
+    repo: Path, tmp_path: Path
+) -> None:
+    """A session with no task / no tool sequence / no namespaces should
+    not write a noisy ``config: {}`` field on its ACCESS rows."""
+    mem = EngramMemory(repo, embed=False)
+    # Don't call start_session — task stays None; no update_tool_context;
+    # no recall — so the snapshot's tool_sequence/active_namespaces are empty.
+
+    trace = tmp_path / "trace.jsonl"
+    ts = _now_iso()
+    events: list[dict] = [
+        {"ts": ts, "kind": "session_start", "task": ""},
+        {"ts": ts, "kind": "model_response", "turn": 0},
+        {
+            "ts": ts,
+            "kind": "tool_call",
+            "name": "memory_review",
+            "args": {"path": "knowledge/celery.md"},
+        },
+        {
+            "ts": ts,
+            "kind": "tool_result",
+            "name": "memory_review",
+            "is_error": False,
+            "content_preview": "celery...",
+        },
+    ]
+    _write_trace(trace, events)
+    run_trace_bridge(trace, mem, commit=False)
+
+    access_path = repo / "core" / "memory" / "knowledge" / "ACCESS.jsonl"
+    if not access_path.is_file():
+        return  # No ACCESS row written at all is also fine
+    rows = [
+        json.loads(line) for line in access_path.read_text(encoding="utf-8").splitlines() if line
+    ]
+    # Should be no ``config`` keys when session state is empty.
+    assert all("config" not in r for r in rows)

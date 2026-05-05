@@ -177,6 +177,17 @@ class MemorySessionSnapshot:
     recall_events: list[_RecallEvent]
     recall_candidate_events: list[_RecallCandidateEvent]
     trace_events: list[_TraceEvent]
+    # Plan 3 (K-line tagging): the running configuration state at end-of-session.
+    # ``tool_sequence`` is the last-N tool ring buffer; ``active_namespaces``
+    # is the union of namespaces this session recalled from; ``plan_phase``
+    # is the active workspace plan's current phase title (or None). The
+    # trace bridge composes these into a per-row config field on
+    # ACCESS.jsonl entries — recall rows additionally pull topic_tags
+    # from each recall event's query so per-event topic proximity is
+    # preserved.
+    tool_sequence: tuple[str, ...] = ()
+    active_namespaces: tuple[str, ...] = ()
+    plan_phase: str | None = None
 
 
 # Soft per-need character budgets for `memory: context` by tier.
@@ -306,6 +317,16 @@ class EngramMemory:
         # scopes; reused for the rest of the session. Stays None when the
         # rerank is disabled so we don't pay the build cost.
         self._helpfulness_index = None
+        # Plan 3 (K-line tagging): per-session reasoning context. Maintained
+        # by ``update_tool_context`` (loop calls after each tool dispatch);
+        # snapshotted into a ConfigurationVector at recall time. The K-line
+        # index is built once on first recall, then reused for the session.
+        self._tool_sequence: list[str] = []
+        self._kline_index = None
+        # ``_namespaces_seen`` accumulates the set of namespace prefixes
+        # the agent has recalled from. Used as the active_namespaces
+        # field in the session config.
+        self._namespaces_seen: set[str] = set()
 
     # ------------------------------------------------------------------
     # Session lifecycle (the protocol)
@@ -418,6 +439,24 @@ class EngramMemory:
             self._get_helpfulness_index().rerank(
                 hits, score_key="rrf_score" if fused_hybrid else "score"
             )
+
+        # Track which namespaces this session has recalled from so the
+        # K-line config carries the active_namespaces field. Done after
+        # the helpfulness rerank and before the K-line boost so the boost
+        # sees the up-to-date set.
+        for scope in scopes:
+            self._namespaces_seen.add(scope)
+
+        # Plan 3: K-line boost. After helpfulness rerank, boost candidates
+        # whose historical configuration vectors overlap with the current
+        # session's. No-op when no ACCESS rows carry config fields. Disable
+        # with ``HARNESS_KLINE_BOOST=0``.
+        from harness._engram_fs.kline_index import kline_boost_enabled
+
+        if kline_boost_enabled() and hits:
+            current_cfg = self._current_session_config(query=q)
+            if not current_cfg.is_empty:
+                self._get_kline_index().boost(hits, current=current_cfg)
 
         # A2: filter out superseded / expired files unless the caller
         # explicitly asks to see them. Done after the rerank so any
@@ -929,6 +968,9 @@ class EngramMemory:
             recall_events=self.recall_events,
             recall_candidate_events=self.recall_candidate_events,
             trace_events=self.trace_events,
+            tool_sequence=tuple(self._tool_sequence),
+            active_namespaces=tuple(sorted(self._namespaces_seen)),
+            plan_phase=self._active_plan_phase(),
         )
 
     def _tag_last_recall_phase(self, n: int, phase: str) -> None:
@@ -1009,6 +1051,36 @@ class EngramMemory:
                         continue
                     if (day_dir / session_id).is_dir():
                         return (year_dir.name, month_dir.name, day_dir.name)
+        return None
+
+    def _active_plan_phase(self) -> str | None:
+        """Return the active plan's current phase title, or ``None``.
+
+        Used by Plan 3 (K-line tagging) as the ``plan_phase`` field of
+        the session ConfigurationVector. Returns ``None`` when no
+        workspace is wired in or no plan is active so the K-line vector
+        omits the field.
+        """
+        if self.workspace_dir is None:
+            return None
+        try:
+            from harness.workspace import Workspace
+        except Exception:  # noqa: BLE001
+            return None
+        try:
+            workspace = Workspace(self.workspace_dir.parent, workspace_path=self.workspace_dir)
+            active = workspace.list_active_plans()
+        except Exception:  # noqa: BLE001
+            return None
+        if not active:
+            return None
+        ap = active[0]
+        phases: list[dict] = ap.plan_doc.get("phases", []) or []
+        current_idx = int(ap.run_state.get("current_phase", 0))
+        if 0 <= current_idx < len(phases):
+            title = phases[current_idx].get("title")
+            if isinstance(title, str) and title.strip():
+                return title.strip()
         return None
 
     def _active_plan_briefing(self, max_chars: int = 2000) -> str:
@@ -1338,6 +1410,58 @@ class EngramMemory:
                 content_prefix=self.content_prefix,
             )
         return self._helpfulness_index
+
+    def _get_kline_index(self):
+        """Build (or return cached) the per-session K-line configuration index.
+
+        Loads the ``config`` field from every ACCESS.jsonl row across the
+        search scopes once per session. The index is stable for the
+        session because new ACCESS rows are buffered in memory and only
+        flushed at ``end_session`` via the trace bridge.
+
+        Empty corpora and rows without ``config`` produce an empty
+        index, in which case the boost is a no-op (graceful degradation).
+        """
+        if self._kline_index is None:
+            from harness._engram_fs.kline_index import build_kline_index
+
+            self._kline_index = build_kline_index(
+                self.content_root,
+                namespaces=_SEARCH_SCOPES,
+                content_prefix=self.content_prefix,
+            )
+        return self._kline_index
+
+    def update_tool_context(self, tool_name: str) -> None:
+        """Record the most-recent tool dispatch for the K-line config vector.
+
+        The loop calls this after each tool dispatch. The recent-tool
+        ring buffer is part of the configuration fingerprint at the next
+        recall call. No-op when ``tool_name`` is empty.
+        """
+        if not tool_name:
+            return
+        from harness._engram_fs.kline_index import _TOOL_SEQUENCE_LIMIT
+
+        self._tool_sequence.append(tool_name)
+        if len(self._tool_sequence) > _TOOL_SEQUENCE_LIMIT:
+            del self._tool_sequence[: len(self._tool_sequence) - _TOOL_SEQUENCE_LIMIT]
+
+    def _current_session_config(self, *, query: str | None = None):
+        """Build the live ConfigurationVector for the current session.
+
+        Used both for boosting recall (with the active query as the
+        topic-tag source) and for stamping new ACCESS rows at end-of-session.
+        """
+        from harness._engram_fs.kline_index import build_session_config
+
+        return build_session_config(
+            task=self.task,
+            plan_phase=self._active_plan_phase(),
+            tool_sequence=self._tool_sequence,
+            active_namespaces=self._namespaces_seen,
+            query=query,
+        )
 
     def _bm25_recall(
         self, query: str, *, k: int, scopes: tuple[str, ...] = _SEARCH_SCOPES

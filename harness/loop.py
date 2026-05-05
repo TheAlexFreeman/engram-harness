@@ -611,6 +611,12 @@ def run_until_idle(
             pause_handle=pause_handle,
         )
 
+        # Plan 3 (K-line tagging): inform the memory backend of each tool
+        # dispatch so the per-session ConfigurationVector's tool_sequence
+        # field stays current. The backend may not implement
+        # ``update_tool_context`` (FileMemory fallback / older custom
+        # backends) — guard with ``getattr``.
+        update_tool_context = getattr(memory, "update_tool_context", None)
         for i, result in enumerate(results):
             tracer.event(
                 "tool_result",
@@ -619,6 +625,11 @@ def run_until_idle(
                 content_preview=result.content[:200],
                 seq=fn_seqs[i],
             )
+            if update_tool_context is not None:
+                try:
+                    update_tool_context(result.call.name)
+                except Exception:  # noqa: BLE001
+                    pass
             if result.is_error:
                 memory.record(
                     f"{result.call.name} failed: {result.content[:200]}",

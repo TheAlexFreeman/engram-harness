@@ -139,6 +139,11 @@ class _AccessObservation:
     file: str
     helpfulness: float
     note: str
+    # Plan 3 (K-line tagging): the session's ConfigurationVector at the
+    # time of the event, serialised to a JSON-safe dict. Optional —
+    # callers that don't compute one (or sessions whose vectors are
+    # empty) get no ``config`` field on the resulting ACCESS row.
+    config: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1084,12 +1089,41 @@ def _access_paths(
     return sorted(seen)
 
 
+def _build_session_config_dict(
+    memory: MemorySessionSnapshot, *, query: str | None
+) -> dict[str, Any] | None:
+    """Plan 3: build the per-row K-line config dict for an ACCESS entry.
+
+    Returns ``None`` when the resulting vector would be empty (no task,
+    no plan phase, no tool sequence, no namespaces, no topic tags) so
+    we don't emit a noisy ``"config": {}`` field on every row.
+    """
+    try:
+        from harness._engram_fs.kline_index import build_session_config
+    except Exception:  # noqa: BLE001
+        return None
+    cfg = build_session_config(
+        task=memory.task,
+        plan_phase=memory.plan_phase,
+        tool_sequence=memory.tool_sequence,
+        active_namespaces=memory.active_namespaces,
+        query=query,
+    )
+    if cfg.is_empty:
+        return None
+    return cfg.to_dict()
+
+
 def _access_observations(
     memory: MemorySessionSnapshot,
     tool_calls: list[_ToolCall],
     content_prefix: str,
 ) -> list[_AccessObservation]:
     observations: list[_AccessObservation] = []
+    # Reused for tool-read observations — those don't carry a recall
+    # query, so the topic_tags fall back to the task text once.
+    tool_read_config = _build_session_config_dict(memory, query=None)
+
     for idx, tc in enumerate(tool_calls):
         if tc.is_error:
             continue
@@ -1106,6 +1140,7 @@ def _access_observations(
                 file=_normalize_for_access(str(arg_path), content_prefix),
                 helpfulness=helpfulness,
                 note=note,
+                config=tool_read_config,
             )
         )
 
@@ -1116,12 +1151,17 @@ def _access_observations(
         if not namespace:
             continue
         helpfulness, note = _derive_recall_helpfulness(ev.file_path, ev.timestamp, tool_calls)
+        # Recall events carry their own query — pass it so the row's
+        # topic_tags reflect what the agent was actually looking for at
+        # that moment, not just the session task.
+        recall_config = _build_session_config_dict(memory, query=getattr(ev, "query", None))
         observations.append(
             _AccessObservation(
                 namespace=namespace,
                 file=_normalize_for_access(ev.file_path, content_prefix),
                 helpfulness=helpfulness,
                 note=f"recall: {note}",
+                config=recall_config,
             )
         )
     return observations
@@ -1146,7 +1186,7 @@ def _emit_access_entries(
     )
 
     for observation in _access_observations(memory, tool_calls, content_prefix):
-        entry = {
+        entry: dict[str, Any] = {
             "file": observation.file,
             "date": access_date,
             "task": task_slug,
@@ -1154,6 +1194,11 @@ def _emit_access_entries(
             "note": observation.note,
             "session_id": canonical_session_id,
         }
+        # Plan 3: stamp the K-line configuration vector when available.
+        # Old ACCESS rows have no ``config`` field; the K-line index
+        # treats the absence as "no historical context to compare to."
+        if observation.config:
+            entry["config"] = observation.config
         access_path = memory.content_root / observation.namespace / "ACCESS.jsonl"
         entries_by_file[access_path].append(entry)
 
