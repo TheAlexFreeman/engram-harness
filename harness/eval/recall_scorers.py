@@ -37,7 +37,9 @@ class RecallScorer(Protocol):
     def score(self, task: "RecallEvalTask", run: "RecallRunRecord") -> RecallScoreResult: ...
 
 
-def _exception_failure(name: str, task: "RecallEvalTask", run: "RecallRunRecord") -> RecallScoreResult | None:
+def _exception_failure(
+    name: str, task: "RecallEvalTask", run: "RecallRunRecord"
+) -> RecallScoreResult | None:
     """Common short-circuit: if the recall call raised, every scorer fails."""
     if run.exception:
         return RecallScoreResult(
@@ -229,9 +231,7 @@ class RecallMRRScorer:
             per_file_rr.append(1.0 / rank if rank > 0 else 0.0)
         mrr = sum(per_file_rr) / len(per_file_rr)
         all_present = all(rr > 0 for rr in per_file_rr)
-        positions_str = ", ".join(
-            f"{fp}@{positions.get(fp, '?')}" for fp in task.expected_files
-        )
+        positions_str = ", ".join(f"{fp}@{positions.get(fp, '?')}" for fp in task.expected_files)
         return RecallScoreResult(
             scorer=self.name,
             task_id=task.id,

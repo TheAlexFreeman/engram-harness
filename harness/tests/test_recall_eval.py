@@ -85,9 +85,7 @@ def test_task_from_dict_requires_id_query_and_expectation() -> None:
 
 
 def test_task_k_clamped_to_hard_max() -> None:
-    t = RecallEvalTask.from_dict(
-        {"id": "t", "query": "q", "k": 9999, "expected_files": ["a.md"]}
-    )
+    t = RecallEvalTask.from_dict({"id": "t", "query": "q", "k": 9999, "expected_files": ["a.md"]})
     assert t.k <= 50
 
 
@@ -337,9 +335,7 @@ def test_bundled_fixture_namespace_scoping() -> None:
     outcome = report.outcomes[0]
     assert outcome.run.exception is None
     for fp in outcome.run.returned_paths:
-        assert fp.startswith("memory/skills/"), (
-            f"namespace=skills should not return {fp!r}"
-        )
+        assert fp.startswith("memory/skills/"), f"namespace=skills should not return {fp!r}"
 
 
 def test_bundled_fixture_include_superseded() -> None:
@@ -361,6 +357,29 @@ def test_bundled_fixture_captures_per_backend_candidates() -> None:
     sources = {c.source for c in outcome.run.candidates}
     assert "bm25" in sources
     assert any(c.returned for c in outcome.run.candidates)
+
+
+def test_helpfulness_order_task_actually_bites(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The helpfulness order task must depend on the rerank to pass.
+
+    Disabling the rerank should flip the order so the synthetic
+    ``session-validation-misc.md`` competitor (keyword-saturated, low
+    historical helpfulness) ranks above the truly-helpful
+    ``session-tokens.md``. The order scorer should then fail. If this
+    test ever passes with the rerank disabled, the fixture has lost its
+    teeth and the order check is vacuous.
+    """
+    monkeypatch.setenv("HARNESS_HELPFULNESS_RERANK", "0")
+    tasks = [t for t in load_recall_tasks() if t.id == "helpfulness-prefers-helpful"]
+    assert len(tasks) == 1
+    report = run_recall_eval(tasks, embed=False)
+    outcome = report.outcomes[0]
+    assert outcome.run.exception is None
+    order_score = next(s for s in outcome.scores if s.scorer == "recall_order")
+    assert not order_score.passed, (
+        "helpfulness order task passed with rerank disabled — fixture is vacuous. "
+        f"Returned: {outcome.run.returned_paths}"
+    )
 
 
 def test_from_trace_emits_drafts_and_flagged(tmp_path: Path) -> None:

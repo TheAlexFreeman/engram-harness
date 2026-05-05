@@ -270,9 +270,7 @@ def materialize_corpus(source: Path, dest: Path) -> Path:
     if not source.is_dir():
         raise FileNotFoundError(f"recall corpus source not found: {source}")
     if not (source / "memory" / "HOME.md").is_file():
-        raise FileNotFoundError(
-            f"recall corpus source missing memory/HOME.md (looked at {source})"
-        )
+        raise FileNotFoundError(f"recall corpus source missing memory/HOME.md (looked at {source})")
     dest.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, dest, dirs_exist_ok=True)
     _git_init(dest)

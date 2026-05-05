@@ -18,3 +18,6 @@
 {"file":"memory/knowledge/api/rate-limiting.md","date":"2026-04-30","task":"customer report of throttling","helpfulness":0.85,"note":"recall: read after surfacing","session_id":"act-fixture-016"}
 {"file":"memory/knowledge/api/error-responses.md","date":"2026-05-02","task":"standardize error shape","helpfulness":0.95,"note":"recall: read after surfacing","session_id":"act-fixture-017"}
 {"file":"memory/knowledge/api/webhooks.md","date":"2026-05-03","task":"add webhook delivery","helpfulness":0.75,"note":"recall: read after surfacing","session_id":"act-fixture-018"}
+{"file":"memory/knowledge/auth/session-validation-misc.md","date":"2026-04-08","task":"investigate session token validation","helpfulness":0.05,"note":"recall: surfaced; not read","session_id":"act-fixture-019"}
+{"file":"memory/knowledge/auth/session-validation-misc.md","date":"2026-04-14","task":"add session token rotation","helpfulness":0.05,"note":"recall: surfaced; not read","session_id":"act-fixture-020"}
+{"file":"memory/knowledge/auth/session-validation-misc.md","date":"2026-04-21","task":"debug session expiry bug","helpfulness":0.1,"note":"recall: surfaced; briefly skimmed","session_id":"act-fixture-021"}

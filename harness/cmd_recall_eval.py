@@ -211,8 +211,7 @@ def _run_from_trace(args: argparse.Namespace) -> None:
 
     if not drafts and not flagged:
         print(
-            "harness recall-eval: no usable recall calls found in "
-            f"{candidates_path}",
+            f"harness recall-eval: no usable recall calls found in {candidates_path}",
             file=sys.stderr,
         )
         sys.exit(0)
@@ -321,9 +320,7 @@ def main() -> None:
         return
 
     tasks_dir = Path(args.tasks_dir).expanduser() if args.tasks_dir else builtin_tasks_dir()
-    corpus_dir = (
-        Path(args.corpus_dir).expanduser() if args.corpus_dir else builtin_corpus_dir()
-    )
+    corpus_dir = Path(args.corpus_dir).expanduser() if args.corpus_dir else builtin_corpus_dir()
     tag_list = [t.strip() for t in args.tags.split(",")] if args.tags else None
     try:
         tasks = load_recall_tasks(tasks_dir, tags=tag_list)
