@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -12,15 +13,21 @@ from harness._engram_fs.frontmatter_policy import is_user_stated
 from harness._engram_fs.frontmatter_utils import write_with_frontmatter
 from harness._engram_fs.trust_decay import (
     DEFAULT_HALF_LIFE_DAYS,
+    DEFAULT_TRUST_WEIGHTS,
     CandidateThresholds,
     FileLifecycle,
+    TrustComponents,
+    TrustWeights,
     aggregate_access,
+    composite_trust,
+    compute_components,
     compute_lifecycle_view,
     decay_factor,
     effective_trust,
     partition_candidates,
     render_candidates_md,
     render_lifecycle_jsonl,
+    render_urgency_section,
     thresholds_from_yaml,
     thresholds_to_yaml,
     trust_score,
@@ -498,3 +505,377 @@ def test_render_candidates_md_lists_each_row() -> None:
 def test_render_candidates_md_rejects_invalid_kind() -> None:
     with pytest.raises(ValueError):
         render_candidates_md([], kind="archive", today=_today())
+
+
+# ---------------------------------------------------------------------------
+# Plan 2 — Trust component decomposition
+# ---------------------------------------------------------------------------
+
+
+def test_compute_components_neutral_defaults_for_unknown_signals() -> None:
+    """Without cross-ref / dep-health / accuracy data, components default neutral."""
+    today = _today()
+    c = compute_components(
+        base_trust="medium",
+        source="agent-generated",
+        last_access=today,
+        today=today,
+        access_count=0,
+        mean_helpfulness=None,
+    )
+    assert c.source_reliability == 0.6
+    assert c.freshness == 1.0
+    assert c.historical_accuracy == 0.5  # neutral default
+    assert c.cross_reference == 0.5  # neutral default
+    assert c.dependency_health == 1.0  # neutral default for leaves
+
+
+def test_compute_components_user_stated_floor() -> None:
+    """user-stated source bumps reliability to >= 0.8 even when base trust is low."""
+    today = _today()
+    c = compute_components(
+        base_trust="low",
+        source="user-stated",
+        last_access=today,
+        today=today,
+        access_count=0,
+        mean_helpfulness=None,
+    )
+    assert c.source_reliability == pytest.approx(0.8)
+
+
+def test_compute_components_freshness_decays() -> None:
+    today = _today()
+    one_half_ago = today - timedelta(days=DEFAULT_HALF_LIFE_DAYS)
+    c = compute_components(
+        base_trust="medium",
+        source="agent-generated",
+        last_access=one_half_ago,
+        today=today,
+        access_count=5,
+        mean_helpfulness=0.8,
+    )
+    assert c.freshness == pytest.approx(0.5)
+
+
+def test_compute_components_historical_accuracy_uses_mean_helpfulness() -> None:
+    today = _today()
+    c = compute_components(
+        base_trust="medium",
+        source="agent-generated",
+        last_access=today,
+        today=today,
+        access_count=10,
+        mean_helpfulness=0.42,
+    )
+    assert c.historical_accuracy == pytest.approx(0.42)
+
+
+def test_compute_components_retrieval_urgency_sigmoid_shape() -> None:
+    today = _today()
+    base = dict(
+        base_trust="medium",
+        source="agent-generated",
+        last_access=today,
+        today=today,
+        mean_helpfulness=0.5,
+    )
+    zero = compute_components(access_count=0, **base).retrieval_urgency
+    centered = compute_components(access_count=10, **base).retrieval_urgency
+    high = compute_components(access_count=30, **base).retrieval_urgency
+    # Sigmoid: 0 → < 0.2, 10 → ~0.5, 30+ → near 1.0
+    assert zero < 0.2
+    assert centered == pytest.approx(0.5, abs=0.01)
+    assert high > 0.95
+
+
+def test_compute_components_cross_reference_passed_through() -> None:
+    today = _today()
+    c = compute_components(
+        base_trust="medium",
+        source="agent-generated",
+        last_access=today,
+        today=today,
+        access_count=5,
+        mean_helpfulness=0.7,
+        cross_reference_density=0.4,
+    )
+    assert c.cross_reference == pytest.approx(0.4)
+
+
+def test_compute_components_dependency_health_passed_through() -> None:
+    today = _today()
+    c = compute_components(
+        base_trust="medium",
+        source="agent-generated",
+        last_access=today,
+        today=today,
+        access_count=5,
+        mean_helpfulness=0.7,
+        dependency_health_score=0.25,
+    )
+    assert c.dependency_health == pytest.approx(0.25)
+
+
+def test_composite_trust_excludes_urgency() -> None:
+    """Two components identical except for urgency → identical composite."""
+    base_kwargs = dict(
+        source_reliability=0.6,
+        freshness=0.9,
+        historical_accuracy=0.7,
+        cross_reference=0.5,
+        dependency_health=1.0,
+    )
+    low_urgency = TrustComponents(retrieval_urgency=0.05, **base_kwargs)
+    high_urgency = TrustComponents(retrieval_urgency=0.95, **base_kwargs)
+    assert composite_trust(low_urgency) == pytest.approx(composite_trust(high_urgency))
+
+
+def test_composite_trust_geometric_mean_penalises_low_components() -> None:
+    """A single near-zero component pulls the composite below the arithmetic mean."""
+    components = TrustComponents(
+        source_reliability=0.9,
+        freshness=0.9,
+        historical_accuracy=0.05,  # very low
+        cross_reference=0.9,
+        retrieval_urgency=0.5,
+        dependency_health=0.9,
+    )
+    # The geometric mean (with our weights) should land far below the
+    # arithmetic mean of the contributing factors (~0.73).
+    score = composite_trust(components)
+    assert score < 0.5
+
+
+def test_composite_trust_all_high_returns_high_score() -> None:
+    components = TrustComponents(
+        source_reliability=1.0,
+        freshness=1.0,
+        historical_accuracy=1.0,
+        cross_reference=1.0,
+        retrieval_urgency=0.5,
+        dependency_health=1.0,
+    )
+    assert composite_trust(components) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_composite_trust_zero_floor_does_not_explode() -> None:
+    """A literal-zero component should not produce -inf/NaN."""
+    components = TrustComponents(
+        source_reliability=0.5,
+        freshness=0.5,
+        historical_accuracy=0.0,
+        cross_reference=0.5,
+        retrieval_urgency=0.5,
+        dependency_health=0.5,
+    )
+    score = composite_trust(components)
+    assert math.isfinite(score)
+    assert 0.0 <= score < 0.1  # very low but bounded
+
+
+def test_composite_trust_default_weights_emphasize_accuracy() -> None:
+    """The 1.5× weight on accuracy means accuracy moves the composite more than freshness."""
+    drop_acc = TrustComponents(
+        source_reliability=0.8,
+        freshness=0.8,
+        historical_accuracy=0.4,
+        cross_reference=0.8,
+        retrieval_urgency=0.5,
+        dependency_health=0.8,
+    )
+    drop_fresh = TrustComponents(
+        source_reliability=0.8,
+        freshness=0.4,
+        historical_accuracy=0.8,
+        cross_reference=0.8,
+        retrieval_urgency=0.5,
+        dependency_health=0.8,
+    )
+    # accuracy at 0.4 should drag composite lower than freshness at 0.4.
+    assert composite_trust(drop_acc) < composite_trust(drop_fresh)
+
+
+def test_composite_trust_custom_weights() -> None:
+    """Equal weights produce a different score than default-weighted."""
+    components = TrustComponents(
+        source_reliability=0.5,
+        freshness=1.0,
+        historical_accuracy=0.5,
+        cross_reference=1.0,
+        retrieval_urgency=0.5,
+        dependency_health=1.0,
+    )
+    even = TrustWeights(
+        source_reliability=1.0,
+        freshness=1.0,
+        historical_accuracy=1.0,
+        cross_reference=1.0,
+        dependency_health=1.0,
+    )
+    default = composite_trust(components, weights=DEFAULT_TRUST_WEIGHTS)
+    flat = composite_trust(components, weights=even)
+    assert default != pytest.approx(flat)
+
+
+# ---------------------------------------------------------------------------
+# compute_lifecycle_view — components plumbed through
+# ---------------------------------------------------------------------------
+
+
+def test_lifecycle_view_components_default_to_neutral_without_lookups(tmp_path: Path) -> None:
+    ns = tmp_path / "memory" / "knowledge"
+    ns.mkdir(parents=True)
+    today = _today()
+    _write_md(
+        ns / "a.md",
+        {
+            "source": "agent-generated",
+            "trust": "medium",
+            "created": today.isoformat(),
+            "origin_session": "act-001",
+        },
+    )
+    view = compute_lifecycle_view(ns, today, namespace_rel="memory/knowledge")
+    assert len(view) == 1
+    row = view[0]
+    assert row.components is not None
+    assert row.components.cross_reference == 0.5  # neutral
+    assert row.components.dependency_health == 1.0  # neutral
+    assert row.composite_trust is not None and row.composite_trust > 0
+
+
+def test_lifecycle_view_passes_lookups_through(tmp_path: Path) -> None:
+    ns = tmp_path / "memory" / "knowledge"
+    ns.mkdir(parents=True)
+    today = _today()
+    _write_md(
+        ns / "a.md",
+        {
+            "source": "agent-generated",
+            "trust": "medium",
+            "created": today.isoformat(),
+            "origin_session": "act-001",
+        },
+    )
+
+    def cross_ref(rel: str) -> float | None:
+        if rel == "memory/knowledge/a.md":
+            return 0.8
+        return None
+
+    def dep_health(rel: str) -> float | None:
+        if rel == "memory/knowledge/a.md":
+            return 0.3
+        return None
+
+    view = compute_lifecycle_view(
+        ns,
+        today,
+        namespace_rel="memory/knowledge",
+        cross_reference_lookup=cross_ref,
+        dependency_health_lookup=dep_health,
+    )
+    assert len(view) == 1
+    row = view[0]
+    assert row.components is not None
+    assert row.components.cross_reference == pytest.approx(0.8)
+    assert row.components.dependency_health == pytest.approx(0.3)
+
+
+def test_lifecycle_view_to_dict_includes_components(tmp_path: Path) -> None:
+    ns = tmp_path / "memory" / "knowledge"
+    ns.mkdir(parents=True)
+    today = _today()
+    _write_md(
+        ns / "a.md",
+        {
+            "source": "agent-generated",
+            "trust": "medium",
+            "created": today.isoformat(),
+            "origin_session": "act-001",
+        },
+    )
+    view = compute_lifecycle_view(ns, today, namespace_rel="memory/knowledge")
+    d = view[0].to_dict()
+    assert "components" in d
+    assert "composite_trust" in d
+    assert "historical_accuracy" in d["components"]
+
+
+# ---------------------------------------------------------------------------
+# render_urgency_section
+# ---------------------------------------------------------------------------
+
+
+def _row_with_components(
+    rel_path: str,
+    *,
+    urgency: float,
+    accuracy: float,
+    accesses: int = 12,
+) -> FileLifecycle:
+    return FileLifecycle(
+        rel_path=rel_path,
+        base_trust="medium",
+        source="agent-generated",
+        last_access=_today(),
+        access_count=accesses,
+        mean_helpfulness=accuracy,
+        effective_trust=0.6,
+        components=TrustComponents(
+            source_reliability=0.6,
+            freshness=1.0,
+            historical_accuracy=accuracy,
+            cross_reference=0.5,
+            retrieval_urgency=urgency,
+            dependency_health=1.0,
+        ),
+        composite_trust=0.55,
+    )
+
+
+def test_render_urgency_section_empty_when_no_qualifying_files() -> None:
+    rows = [_row_with_components("a.md", urgency=0.95, accuracy=0.9)]
+    assert render_urgency_section(rows) == ""
+
+
+def test_render_urgency_section_lists_high_urgency_low_accuracy() -> None:
+    rows = [
+        _row_with_components("memory/knowledge/hot-bad.md", urgency=0.9, accuracy=0.2),
+        _row_with_components("memory/knowledge/cool.md", urgency=0.1, accuracy=0.2),
+        _row_with_components("memory/knowledge/hot-good.md", urgency=0.9, accuracy=0.9),
+    ]
+    body = render_urgency_section(rows)
+    assert "## High urgency files" in body
+    assert "memory/knowledge/hot-bad.md" in body
+    assert "memory/knowledge/cool.md" not in body
+    assert "memory/knowledge/hot-good.md" not in body
+
+
+def test_render_urgency_section_orders_by_urgency_descending() -> None:
+    rows = [
+        _row_with_components("low.md", urgency=0.71, accuracy=0.2),
+        _row_with_components("high.md", urgency=0.99, accuracy=0.2),
+        _row_with_components("mid.md", urgency=0.85, accuracy=0.2),
+    ]
+    body = render_urgency_section(rows)
+    # The high.md entry should appear before mid.md, mid.md before low.md.
+    h = body.index("high.md")
+    m = body.index("mid.md")
+    lo = body.index("low.md")
+    assert h < m < lo
+
+
+def test_render_candidates_md_includes_urgency_when_provided() -> None:
+    rows = [
+        _row_with_components("memory/knowledge/cand.md", urgency=0.1, accuracy=0.9),
+    ]
+    urgency_rows = [
+        _row_with_components("memory/knowledge/hot-bad.md", urgency=0.9, accuracy=0.2),
+    ]
+    body = render_candidates_md(
+        rows, kind="promote", today=_today(), urgency_rows=urgency_rows
+    )
+    assert "## High urgency files" in body
+    assert "memory/knowledge/hot-bad.md" in body

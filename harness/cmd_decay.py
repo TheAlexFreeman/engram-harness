@@ -26,7 +26,9 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from harness._engram_fs.frontmatter_utils import write_with_frontmatter
+from harness._engram_fs.frontmatter_policy import is_superseded
+from harness._engram_fs.frontmatter_utils import read_with_frontmatter, write_with_frontmatter
+from harness._engram_fs.link_graph import co_retrieval_density, dependency_health
 from harness._engram_fs.trust_decay import (
     DEFAULT_DEMOTE_MAX_EFFECTIVE,
     DEFAULT_DEMOTE_MAX_HELPFULNESS,
@@ -94,6 +96,41 @@ class SweepResult:
 # ---------------------------------------------------------------------------
 
 
+def _build_validity_predicate(content_root: Path, today: date) -> Any:
+    """Return ``is_valid(rel_path) -> bool`` based on supersession state.
+
+    A file is "valid" when it exists and its frontmatter does not flag
+    it as superseded (per ``frontmatter_policy.is_superseded``). Missing
+    files are treated as invalid — a reference pointing nowhere is a
+    broken dependency.
+
+    Lookups are cached so ``dependency_health`` runs in O(unique paths).
+    """
+    cache: dict[str, bool] = {}
+
+    def is_valid(rel_path: str) -> bool:
+        if rel_path in cache:
+            return cache[rel_path]
+        target = (content_root / rel_path).resolve()
+        try:
+            target.relative_to(content_root.resolve())
+        except ValueError:
+            cache[rel_path] = False
+            return False
+        if not target.is_file():
+            cache[rel_path] = False
+            return False
+        try:
+            fm, _ = read_with_frontmatter(target)
+        except Exception:  # noqa: BLE001
+            cache[rel_path] = False
+            return False
+        cache[rel_path] = not is_superseded(fm, today=today)
+        return cache[rel_path]
+
+    return is_valid
+
+
 def _sweep_namespace(
     content_root: Path,
     namespace: str,
@@ -102,6 +139,8 @@ def _sweep_namespace(
     half_life_days: int,
     thresholds: CandidateThresholds,
     dry_run: bool,
+    cross_reference_lookup: Any | None = None,
+    dependency_health_lookup: Any | None = None,
 ) -> tuple[NamespaceOutcome, list[FileLifecycle], CandidatePartition]:
     """Compute the view + partition for one namespace, optionally write the sidecars."""
     namespace_root = (content_root / namespace).resolve()
@@ -139,6 +178,8 @@ def _sweep_namespace(
         today,
         namespace_rel=namespace,
         half_life_days=half_life_days,
+        cross_reference_lookup=cross_reference_lookup,
+        dependency_health_lookup=dependency_health_lookup,
     )
     partition = partition_candidates(view, thresholds=thresholds)
 
@@ -176,7 +217,12 @@ def _sweep_namespace(
     ):
         if rows:
             fm = render_candidates_frontmatter(today, kind=kind)
-            body = render_candidates_md(rows, kind=kind, today=today)
+            # Plan 2: thread the full lifecycle view in as ``urgency_rows`` so the
+            # rendered markdown includes the high-urgency section when at least
+            # one file qualifies. Passing ``view`` (not ``rows``) ensures the
+            # section captures urgent files even when they are neither
+            # promote nor demote candidates.
+            body = render_candidates_md(rows, kind=kind, today=today, urgency_rows=view)
             try:
                 write_with_frontmatter(path, fm, body)
             except OSError as exc:
@@ -220,6 +266,19 @@ def sweep(
     today = today or date.today()
     thresholds = thresholds or CandidateThresholds()
 
+    # Plan 2: build the cross-reference + dependency-health lookups ONCE
+    # over the whole content root. Both functions walk every LINKS.jsonl
+    # under the root, so per-namespace re-walking would be wasteful.
+    cross_ref_map = co_retrieval_density(content_root)
+    is_valid = _build_validity_predicate(content_root, today)
+    dep_health_map = dependency_health(content_root, is_valid=is_valid)
+
+    def cross_reference_lookup(rel_path: str) -> float | None:
+        return cross_ref_map.get(rel_path)
+
+    def dependency_health_lookup(rel_path: str) -> float | None:
+        return dep_health_map.get(rel_path)
+
     result = SweepResult()
     written_paths: list[Path] = []
     removed_paths: list[Path] = []
@@ -232,6 +291,8 @@ def sweep(
             half_life_days=half_life_days,
             thresholds=thresholds,
             dry_run=dry_run,
+            cross_reference_lookup=cross_reference_lookup,
+            dependency_health_lookup=dependency_health_lookup,
         )
         result.outcomes.append(outcome)
         written_paths.extend(outcome.written_paths)

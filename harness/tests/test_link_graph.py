@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from harness._engram_fs.link_graph import (
+    CROSS_REFERENCE_EDGE_CAP,
     EDGE_KINDS,
     EDGE_SOURCES,
     ROOT_LINKS_NAMESPACE,
@@ -19,6 +20,8 @@ from harness._engram_fs.link_graph import (
     _path_namespace,
     append_edges,
     append_new_edges,
+    co_retrieval_density,
+    dependency_health,
     derive_co_retrieval_edges,
     group_edges_by_namespace,
     links_path_for_namespace,
@@ -493,3 +496,253 @@ def test_trace_bridge_link_paths_in_artifact_list(engram_repo: Path) -> None:
             assert any(
                 str(art).endswith("LINKS.jsonl") and p.name in str(art) for art in result.artifacts
             )
+
+
+# ---------------------------------------------------------------------------
+# Plan 2 — co_retrieval_density + dependency_health
+# ---------------------------------------------------------------------------
+
+
+def _write_links(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = "\n".join(json.dumps(row) for row in rows) + "\n"
+    path.write_text(text, encoding="utf-8")
+
+
+def _coret(src: str, dst: str, score: float = 1.0, ns: str = "memory/knowledge") -> dict:
+    return {
+        "from": src,
+        "to": dst,
+        "kind": "co-retrieved",
+        "score": score,
+        "source": "access-log",
+        "session_id": "test",
+        "namespace": ns,
+        "ts": "2026-05-05T00:00:00",
+    }
+
+
+def test_co_retrieval_density_returns_normalised_partner_count(tmp_path: Path) -> None:
+    """A file with N qualifying partners → density = min(1.0, N / cap)."""
+    knowledge = tmp_path / "memory" / "knowledge"
+    _write_links(
+        knowledge / "LINKS.jsonl",
+        [
+            _coret("memory/knowledge/a.md", "memory/knowledge/b.md", 1.0),
+            _coret("memory/knowledge/a.md", "memory/knowledge/c.md", 1.0),
+            _coret("memory/knowledge/a.md", "memory/knowledge/d.md", 1.0),
+        ],
+    )
+    density = co_retrieval_density(tmp_path)
+    assert density["memory/knowledge/a.md"] == pytest.approx(3 / CROSS_REFERENCE_EDGE_CAP)
+    assert density["memory/knowledge/b.md"] == pytest.approx(1 / CROSS_REFERENCE_EDGE_CAP)
+
+
+def test_co_retrieval_density_below_threshold_is_excluded(tmp_path: Path) -> None:
+    """A pair with cumulative score below the threshold is filtered out."""
+    _write_links(
+        tmp_path / "memory" / "knowledge" / "LINKS.jsonl",
+        [
+            _coret("memory/knowledge/a.md", "memory/knowledge/b.md", 0.1),  # below default 0.3
+        ],
+    )
+    density = co_retrieval_density(tmp_path)
+    assert density == {}
+
+
+def test_co_retrieval_density_aggregates_scores_across_rows(tmp_path: Path) -> None:
+    """Multiple sessions with sub-threshold scores accumulate to cross it."""
+    _write_links(
+        tmp_path / "memory" / "knowledge" / "LINKS.jsonl",
+        [
+            _coret("memory/knowledge/a.md", "memory/knowledge/b.md", 0.2),
+            _coret("memory/knowledge/a.md", "memory/knowledge/b.md", 0.2),
+        ],
+    )
+    density = co_retrieval_density(tmp_path)
+    # 0.2 + 0.2 = 0.4 ≥ 0.3 → pair counted, both files have 1 partner
+    assert density.get("memory/knowledge/a.md") == pytest.approx(1 / CROSS_REFERENCE_EDGE_CAP)
+
+
+def test_co_retrieval_density_canonicalises_pair_direction(tmp_path: Path) -> None:
+    """The (a, b) and (b, a) edges should not double-count."""
+    _write_links(
+        tmp_path / "memory" / "knowledge" / "LINKS.jsonl",
+        [
+            _coret("memory/knowledge/a.md", "memory/knowledge/b.md", 1.0),
+            _coret("memory/knowledge/b.md", "memory/knowledge/a.md", 1.0),
+        ],
+    )
+    density = co_retrieval_density(tmp_path)
+    # Two rows for the same pair → counted as one partner per file (not two).
+    assert density["memory/knowledge/a.md"] == pytest.approx(1 / CROSS_REFERENCE_EDGE_CAP)
+
+
+def test_co_retrieval_density_caps_at_one(tmp_path: Path) -> None:
+    """A file with more than EDGE_CAP partners saturates at 1.0."""
+    rows = [
+        _coret("memory/knowledge/hub.md", f"memory/knowledge/p{i}.md", 1.0)
+        for i in range(CROSS_REFERENCE_EDGE_CAP + 5)
+    ]
+    _write_links(tmp_path / "memory" / "knowledge" / "LINKS.jsonl", rows)
+    density = co_retrieval_density(tmp_path)
+    assert density["memory/knowledge/hub.md"] == 1.0
+
+
+def test_co_retrieval_density_walks_multiple_links_files(tmp_path: Path) -> None:
+    """All LINKS.jsonl files under content_root contribute, not just one."""
+    _write_links(
+        tmp_path / "memory" / "knowledge" / "LINKS.jsonl",
+        [_coret("memory/knowledge/a.md", "memory/knowledge/b.md", 1.0)],
+    )
+    _write_links(
+        tmp_path / "memory" / "skills" / "LINKS.jsonl",
+        [
+            {
+                "from": "memory/skills/c.md",
+                "to": "memory/skills/d.md",
+                "kind": "co-retrieved",
+                "score": 1.0,
+                "source": "access-log",
+                "session_id": "x",
+                "namespace": "memory/skills",
+                "ts": "2026-05-05T00:00:00",
+            },
+        ],
+    )
+    density = co_retrieval_density(tmp_path)
+    assert "memory/knowledge/a.md" in density
+    assert "memory/skills/c.md" in density
+
+
+def test_co_retrieval_density_ignores_other_kinds(tmp_path: Path) -> None:
+    """``supersedes`` / ``references`` edges are not co-retrieval evidence."""
+    _write_links(
+        tmp_path / "memory" / "knowledge" / "LINKS.jsonl",
+        [
+            {
+                "from": "memory/knowledge/a.md",
+                "to": "memory/knowledge/b.md",
+                "kind": "supersedes",
+                "score": 1.0,
+                "source": "agent-asserted",
+                "session_id": "x",
+                "namespace": "memory/knowledge",
+                "ts": "2026-05-05T00:00:00",
+            },
+        ],
+    )
+    assert co_retrieval_density(tmp_path) == {}
+
+
+def test_co_retrieval_density_handles_missing_root() -> None:
+    """A non-existent content root returns an empty dict (no exception)."""
+    assert co_retrieval_density(Path("/this/does/not/exist")) == {}
+
+
+def test_dependency_health_no_predicate_returns_empty(tmp_path: Path) -> None:
+    """Without an is_valid predicate the health map is intentionally empty."""
+    _write_links(
+        tmp_path / "memory" / "knowledge" / "LINKS.jsonl",
+        [
+            {
+                "from": "memory/knowledge/a.md",
+                "to": "memory/knowledge/b.md",
+                "kind": "references",
+                "score": 1.0,
+                "source": "agent-asserted",
+                "session_id": "x",
+                "namespace": "memory/knowledge",
+                "ts": "2026-05-05T00:00:00",
+            },
+        ],
+    )
+    assert dependency_health(tmp_path) == {}
+
+
+def test_dependency_health_all_valid_targets_score_one(tmp_path: Path) -> None:
+    _write_links(
+        tmp_path / "memory" / "knowledge" / "LINKS.jsonl",
+        [
+            {
+                "from": "memory/knowledge/a.md",
+                "to": "memory/knowledge/b.md",
+                "kind": "references",
+                "score": 1.0,
+                "source": "agent-asserted",
+                "session_id": "x",
+                "namespace": "memory/knowledge",
+                "ts": "2026-05-05T00:00:00",
+            },
+        ],
+    )
+    health = dependency_health(tmp_path, is_valid=lambda _r: True)
+    assert health["memory/knowledge/a.md"] == 1.0
+
+
+def test_dependency_health_partial_invalid_targets_drop_score(tmp_path: Path) -> None:
+    _write_links(
+        tmp_path / "memory" / "knowledge" / "LINKS.jsonl",
+        [
+            {
+                "from": "memory/knowledge/a.md",
+                "to": "memory/knowledge/b.md",
+                "kind": "references",
+                "score": 1.0,
+                "source": "agent-asserted",
+                "session_id": "x",
+                "namespace": "memory/knowledge",
+                "ts": "2026-05-05T00:00:00",
+            },
+            {
+                "from": "memory/knowledge/a.md",
+                "to": "memory/knowledge/old.md",
+                "kind": "references",
+                "score": 1.0,
+                "source": "agent-asserted",
+                "session_id": "x",
+                "namespace": "memory/knowledge",
+                "ts": "2026-05-05T00:00:00",
+            },
+        ],
+    )
+
+    def is_valid(rel: str) -> bool:
+        return rel != "memory/knowledge/old.md"
+
+    health = dependency_health(tmp_path, is_valid=is_valid)
+    assert health["memory/knowledge/a.md"] == pytest.approx(0.5)
+
+
+def test_dependency_health_excludes_co_retrieval_edges(tmp_path: Path) -> None:
+    """Co-retrieved edges are not dependencies — they should not affect health."""
+    _write_links(
+        tmp_path / "memory" / "knowledge" / "LINKS.jsonl",
+        [
+            _coret("memory/knowledge/a.md", "memory/knowledge/b.md", 1.0),
+        ],
+    )
+    health = dependency_health(tmp_path, is_valid=lambda _r: True)
+    assert health == {}
+
+
+def test_dependency_health_walks_supersedes_edges(tmp_path: Path) -> None:
+    """``supersedes`` edges are dependency-bearing in addition to ``references``."""
+    _write_links(
+        tmp_path / "memory" / "knowledge" / "LINKS.jsonl",
+        [
+            {
+                "from": "memory/knowledge/new.md",
+                "to": "memory/knowledge/old.md",
+                "kind": "supersedes",
+                "score": 1.0,
+                "source": "agent-asserted",
+                "session_id": "x",
+                "namespace": "memory/knowledge",
+                "ts": "2026-05-05T00:00:00",
+            },
+        ],
+    )
+    health = dependency_health(tmp_path, is_valid=lambda _r: False)
+    # All targets invalid → 0.0
+    assert health["memory/knowledge/new.md"] == 0.0

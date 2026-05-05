@@ -23,7 +23,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 # Recognised edge kinds. Unknown kinds are accepted on read but never emitted
 # by this module — a sanity boundary so a typo doesn't pollute the graph.
@@ -259,15 +259,152 @@ def read_edges(path: Path) -> list[dict[str, Any]]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Plan 2 — co-retrieval density (cross-reference component input)
+# ---------------------------------------------------------------------------
+
+# Cap used to normalise per-file co-retrieval edge counts into [0, 1].
+# A file with ``CROSS_REFERENCE_EDGE_CAP`` distinct partners (each with
+# score above ``DEFAULT_CROSS_REFERENCE_SCORE_THRESHOLD``) saturates at
+# 1.0; below that, density scales linearly. The cap is small on purpose
+# — past 10 distinct co-retrievals the marginal evidence value is low,
+# and a higher cap would require many sessions worth of data before any
+# file moved off zero.
+CROSS_REFERENCE_EDGE_CAP = 10
+DEFAULT_CROSS_REFERENCE_SCORE_THRESHOLD = 0.3
+
+
+def _walk_links_files(content_root: Path) -> list[Path]:
+    """Find every ``LINKS.jsonl`` under ``content_root``.
+
+    Skips dot-prefixed directories the same way ``trust_decay`` does so we
+    do not crawl ``.git/`` or similar.
+    """
+    if not content_root.is_dir():
+        return []
+    out: list[Path] = []
+    stack = [content_root]
+    while stack:
+        current = stack.pop()
+        for child in sorted(current.iterdir()):
+            if child.is_dir():
+                if child.name.startswith("."):
+                    continue
+                stack.append(child)
+                continue
+            if child.is_file() and child.name == "LINKS.jsonl":
+                out.append(child)
+    out.sort()
+    return out
+
+
+def co_retrieval_density(
+    content_root: Path,
+    *,
+    score_threshold: float = DEFAULT_CROSS_REFERENCE_SCORE_THRESHOLD,
+    edge_cap: int = CROSS_REFERENCE_EDGE_CAP,
+) -> dict[str, float]:
+    """Build a per-file ``rel_path → density`` map from all LINKS.jsonl files.
+
+    For each file we count its **distinct co-retrieval partners** whose
+    ``co-retrieved`` edge score (number of sessions where the pair was
+    retrieved together) is at least ``score_threshold``. The count is
+    then normalised into [0, 1] by dividing by ``edge_cap``.
+
+    Multi-row aggregation: a single pair may appear on multiple rows
+    across different sessions — we sum their scores before applying the
+    threshold so a pair that co-occurred once per session across several
+    sessions can still cross the floor.
+
+    Files with no qualifying partners are absent from the returned dict
+    (callers should treat absence as "no density data").
+    """
+    pair_scores: dict[tuple[str, str], float] = {}
+    for path in _walk_links_files(content_root):
+        for row in read_edges(path):
+            if row.get("kind") != "co-retrieved":
+                continue
+            src = str(row.get("from", ""))
+            dst = str(row.get("to", ""))
+            if not src or not dst or src == dst:
+                continue
+            score_raw = row.get("score")
+            try:
+                score = float(score_raw) if score_raw is not None else 0.0
+            except (TypeError, ValueError):
+                score = 0.0
+            a, b = (src, dst) if src <= dst else (dst, src)
+            pair_scores[(a, b)] = pair_scores.get((a, b), 0.0) + score
+
+    partner_counts: dict[str, int] = {}
+    for (a, b), total in pair_scores.items():
+        if total < score_threshold:
+            continue
+        partner_counts[a] = partner_counts.get(a, 0) + 1
+        partner_counts[b] = partner_counts.get(b, 0) + 1
+
+    if edge_cap <= 0:
+        return {file: 1.0 for file in partner_counts}
+    return {
+        file: min(1.0, count / float(edge_cap)) for file, count in partner_counts.items()
+    }
+
+
+def dependency_health(
+    content_root: Path,
+    *,
+    is_valid: Callable[[str], bool] | None = None,
+) -> dict[str, float]:
+    """Per-file dependency-health scores derived from ``supersedes`` /
+    ``references`` edges in LINKS.jsonl.
+
+    A file's health is 1.0 minus the fraction of its outgoing
+    ``references`` / ``supersedes`` edges that point at *invalid*
+    targets. ``is_valid`` is a caller-supplied predicate
+    ``(rel_path) -> bool`` that says whether a referenced file is still
+    valid (e.g., not superseded, frontmatter present). Files with no
+    outgoing edges are absent from the result (caller treats absence as
+    "neutral" via the component's ``None`` default).
+
+    The implementation is deliberately conservative: only ``supersedes``
+    and ``references`` edge kinds are walked, and only the *outgoing*
+    direction. Co-retrieval edges are not dependency relationships and
+    are excluded.
+    """
+    if is_valid is None:
+        return {}
+    outgoing: dict[str, list[str]] = {}
+    for path in _walk_links_files(content_root):
+        for row in read_edges(path):
+            if row.get("kind") not in {"supersedes", "references"}:
+                continue
+            src = str(row.get("from", ""))
+            dst = str(row.get("to", ""))
+            if not src or not dst:
+                continue
+            outgoing.setdefault(src, []).append(dst)
+    health: dict[str, float] = {}
+    for src, targets in outgoing.items():
+        if not targets:
+            continue
+        valid = sum(1 for t in targets if is_valid(t))
+        health[src] = valid / float(len(targets))
+    return health
+
+
 __all__ = [
     "LinkEdge",
     "EDGE_KINDS",
     "EDGE_SOURCES",
     "ROOT_LINKS_NAMESPACE",
+    "CROSS_REFERENCE_EDGE_CAP",
+    "DEFAULT_CROSS_REFERENCE_SCORE_THRESHOLD",
     "derive_co_retrieval_edges",
     "group_edges_by_namespace",
     "links_path_for_namespace",
     "append_edges",
     "append_new_edges",
+    "co_retrieval_density",
+    "dependency_health",
     "read_edges",
 ]
