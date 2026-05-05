@@ -21,10 +21,15 @@ from typing import Any
 
 from harness.compaction import (
     COMPACTED_PLACEHOLDER,
+    DEFAULT_MAX_DEAD_ENDS,
     FULL_COMPACTED_BANNER,
+    _DEAD_ENDS_BANNER,
     _find_tool_pairs,
+    _format_dead_end_line,
     _has_full_compaction_summary,
     _is_already_compacted,
+    _is_dead_ends_message,
+    _is_failed_pair,
     maybe_compact,
     maybe_full_compact,
 )
@@ -783,3 +788,386 @@ def test_full_compact_preserves_initial_task_message():
     )
     # The original user task at index 0 is untouched.
     assert msgs[0] == {"role": "user", "content": "do the task"}
+
+
+# ---------------------------------------------------------------------------
+# Plan 4 — Failure preservation in compaction
+# ---------------------------------------------------------------------------
+
+
+class _DualReplyMode:
+    """Mode whose reflect() returns different text for the two prompt families.
+
+    The Layer-2 compaction issues two model calls when failures are present:
+    the main summarisation prompt (for successes) and the dead-ends prompt
+    (for failures). The two are distinguished by the leading sentence of
+    each prompt template.
+    """
+
+    def __init__(
+        self,
+        success_text: str = "- did A\n- did B",
+        dead_ends_text: str = "DEAD END: read_file({\"path\":\"missing.py\"}) → No such file",
+    ) -> None:
+        self.success_text = success_text
+        self.dead_ends_text = dead_ends_text
+        self.reflect_calls: list[tuple[list[dict], str]] = []
+
+    def reflect(self, messages: list[dict], prompt: str) -> tuple[str, Usage]:
+        self.reflect_calls.append((list(messages), prompt))
+        if "preserving a record of failed" in prompt:
+            return self.dead_ends_text, Usage(model="test", input_tokens=120, output_tokens=40)
+        return self.success_text, Usage(model="test", input_tokens=400, output_tokens=120)
+
+
+def _failed_pair(call_id: str, *, is_error: bool = True, content: str | None = None) -> list[dict]:
+    """Build a (assistant tool_use, user tool_result) pair representing a failure."""
+    if content is None:
+        content = "Traceback: KeyError 'foo'" if not is_error else "exit code 1: command failed"
+    return [
+        {"role": "assistant", "content": [_tool_use_block(call_id)]},
+        {
+            "role": "user",
+            "content": [_tool_result_block(call_id, content, is_error=is_error)],
+        },
+    ]
+
+
+def test_is_failed_pair_detects_explicit_error_flag():
+    a = {"role": "assistant", "content": [_tool_use_block("X")]}
+    u = {
+        "role": "user",
+        "content": [_tool_result_block("X", "anything", is_error=True)],
+    }
+    assert _is_failed_pair(a, u) is True
+
+
+def test_is_failed_pair_detects_keyword_in_non_error_result():
+    a = {"role": "assistant", "content": [_tool_use_block("X")]}
+    u = {
+        "role": "user",
+        "content": [_tool_result_block("X", "Traceback: ZeroDivisionError")],
+    }
+    assert _is_failed_pair(a, u) is True
+
+
+def test_is_failed_pair_false_for_success_result():
+    a = {"role": "assistant", "content": [_tool_use_block("X")]}
+    u = {"role": "user", "content": [_tool_result_block("X", "all good, here is the file")]}
+    assert _is_failed_pair(a, u) is False
+
+
+def test_is_failed_pair_handles_string_content():
+    """tool_result content may be a string instead of a block list."""
+    a = {"role": "assistant", "content": [_tool_use_block("X")]}
+    u = {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "X", "content": "permission denied"}],
+    }
+    assert _is_failed_pair(a, u) is True
+
+
+def test_format_dead_end_line_includes_tool_args_and_error():
+    a = {
+        "role": "assistant",
+        "content": [_tool_use_block("X", name="shell", inp={"cmd": "ls /missing"})],
+    }
+    u = {
+        "role": "user",
+        "content": [_tool_result_block("X", "No such file or directory", is_error=True)],
+    }
+    line = _format_dead_end_line(a, u)
+    assert line.startswith("DEAD END:")
+    assert "shell" in line
+    assert "missing" in line.lower() or "No such file" in line
+
+
+def test_layer2_skips_dead_ends_block_when_no_failures():
+    """No failures in the region → behaves exactly like before: one summary."""
+    msgs = _build_messages(num_pairs=8, content_size=200)
+    mode = _DualReplyMode()
+    tracer = _RecordingTracer()
+    result = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=4,
+    )
+    assert result.triggered is True
+    assert result.dead_ends_preserved == 0
+    # No dead-ends message inserted; only the summary banner.
+    assert not any(_is_dead_ends_message(m) for m in msgs)
+
+
+def test_layer2_emits_dead_ends_block_when_enough_failures():
+    """At least _DEAD_ENDS_LLM_MIN failures → LLM-generated dead-ends block."""
+    # Build conversation: task + 4 successes + 3 failures + 4 successes (kept).
+    msgs: list[dict] = [{"role": "user", "content": "do the task"}]
+    for i in range(4):
+        msgs.extend(_build_pair(f"call_{i}", "ok content"))
+    for i in range(3):
+        msgs.extend(_failed_pair(f"fail_{i}"))
+    for i in range(4):
+        msgs.extend(_build_pair(f"recent_{i}", "ok content"))
+
+    mode = _DualReplyMode(
+        dead_ends_text=(
+            "DEAD END: read_file({path:'missing.py'}) → No such file\n"
+            "DEAD END: shell({cmd:'pytest'}) → exit code 1\n"
+            "DEAD END: read_file({path:'old.py'}) → No such file"
+        )
+    )
+    tracer = _RecordingTracer()
+    result = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=4,
+    )
+    assert result.triggered is True
+    assert result.dead_ends_preserved == 3
+    # Both reflect calls happened (one for successes, one for failures).
+    assert len(mode.reflect_calls) == 2
+    # The second prompt is the failure prompt.
+    failure_prompts = [
+        p for _, p in mode.reflect_calls if "preserving a record of failed" in p
+    ]
+    assert len(failure_prompts) == 1
+    # A dead-ends message exists in the kept conversation.
+    dead_ends = [m for m in msgs if _is_dead_ends_message(m)]
+    assert len(dead_ends) == 1
+    assert "DEAD END" in dead_ends[0]["content"]
+
+
+def test_layer2_uses_template_for_few_failures():
+    """Below _DEAD_ENDS_LLM_MIN → no extra LLM call; template-based block."""
+    msgs: list[dict] = [{"role": "user", "content": "do the task"}]
+    for i in range(4):
+        msgs.extend(_build_pair(f"call_{i}", "ok content"))
+    msgs.extend(_failed_pair("fail_0"))  # exactly 1 failure
+    for i in range(4):
+        msgs.extend(_build_pair(f"recent_{i}", "ok content"))
+
+    mode = _DualReplyMode()
+    tracer = _RecordingTracer()
+    result = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=4,
+    )
+    assert result.triggered is True
+    assert result.dead_ends_preserved == 1
+    # Only the success summarisation prompt was sent — no dead-ends LLM call.
+    assert len(mode.reflect_calls) == 1
+    assert "preserving a record of failed" not in mode.reflect_calls[0][1]
+    # But the dead-ends block exists, populated from the template path.
+    dead_ends = [m for m in msgs if _is_dead_ends_message(m)]
+    assert len(dead_ends) == 1
+    assert "DEAD END" in dead_ends[0]["content"]
+
+
+def test_layer2_only_failures_skips_main_summary_call():
+    """A region containing only failures → the success-summary call is skipped."""
+    msgs: list[dict] = [{"role": "user", "content": "do the task"}]
+    for i in range(5):
+        msgs.extend(_failed_pair(f"fail_{i}"))
+    for i in range(4):
+        msgs.extend(_build_pair(f"recent_{i}", "ok content"))
+
+    mode = _DualReplyMode()
+    tracer = _RecordingTracer()
+    result = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=4,
+    )
+    assert result.triggered is True
+    # Only the dead-ends prompt was sent.
+    assert len(mode.reflect_calls) == 1
+    assert "preserving a record of failed" in mode.reflect_calls[0][1]
+    # No "[harness compaction summary]" appended — only the dead-ends block.
+    summary_msgs = [
+        m for m in msgs
+        if isinstance(m.get("content"), str)
+        and "[harness compaction summary]" in m["content"]
+    ]
+    assert summary_msgs == []
+    dead_ends = [m for m in msgs if _is_dead_ends_message(m)]
+    assert len(dead_ends) == 1
+
+
+def test_layer2_dead_ends_capped_at_max():
+    """A region with >DEFAULT_MAX_DEAD_ENDS failures FIFO-evicts older entries."""
+    msgs: list[dict] = [{"role": "user", "content": "do the task"}]
+    n_failures = DEFAULT_MAX_DEAD_ENDS + 5
+    for i in range(n_failures):
+        msgs.extend(_failed_pair(f"fail_{i}"))
+    for i in range(4):
+        msgs.extend(_build_pair(f"recent_{i}", "ok content"))
+
+    # Use a dead-ends LLM response with one line per failure so we can
+    # observe the cap is applied.
+    mode = _DualReplyMode(
+        dead_ends_text="\n".join(
+            f"DEAD END: tool({{i:{i}}}) → failure number {i}" for i in range(n_failures)
+        )
+    )
+    tracer = _RecordingTracer()
+    result = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=4,
+    )
+    assert result.triggered is True
+    assert result.dead_ends_preserved == n_failures  # raw count
+    dead_ends = [m for m in msgs if _is_dead_ends_message(m)]
+    assert len(dead_ends) == 1
+    body = dead_ends[0]["content"]
+    line_count = sum(1 for line in body.splitlines() if line.strip().startswith("DEAD END:"))
+    assert line_count == DEFAULT_MAX_DEAD_ENDS
+    # FIFO: the oldest entries are evicted; the last failure number is present.
+    assert f"failure number {n_failures - 1}" in body
+
+
+def test_layer3_preserves_dead_ends_block_through_full_compaction():
+    """Dead-ends messages inside the L3 region survive the L3 reset."""
+    # Build a conversation with a synthetic dead-ends message in the middle.
+    msgs = _build_messages(num_pairs=10, content_size=200)
+    # Inject a dead-ends message at index 3 (between the 1st and 2nd pair).
+    dead_ends = {
+        "role": "user",
+        "content": (
+            f"{_DEAD_ENDS_BANNER} The following approaches were tried earlier "
+            "in this session and failed. Do not re-attempt these without a "
+            "different approach.\n\n"
+            "DEAD END: read_file({path:'missing.py'}) → No such file\n"
+            "DEAD END: shell({cmd:'pytest'}) → exit code 1"
+        ),
+    }
+    msgs.insert(3, dead_ends)
+
+    mode = _SummarizingMode(
+        summary_text="## Goal\nFix bug.\n## Progress\nRead 5 files.\n"
+    )
+    tracer = _RecordingTracer()
+    result = maybe_full_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=2,
+    )
+    assert result.triggered is True
+    assert result.dead_ends_preserved == 1
+
+    # After L3, the dead-ends message must still be present.
+    surviving_dead_ends = [m for m in msgs if _is_dead_ends_message(m)]
+    assert len(surviving_dead_ends) == 1
+    assert "DEAD END: read_file" in surviving_dead_ends[0]["content"]
+    # And it should be located right after the L3 summary.
+    summary_indices = [
+        i for i, m in enumerate(msgs)
+        if isinstance(m.get("content"), str) and FULL_COMPACTED_BANNER in m["content"]
+    ]
+    assert len(summary_indices) == 1
+    assert _is_dead_ends_message(msgs[summary_indices[0] + 1])
+
+
+def test_layer3_no_dead_ends_passthrough():
+    """L3 with no dead-ends messages in the region behaves as before."""
+    msgs = _build_messages(num_pairs=10, content_size=200)
+    mode = _SummarizingMode()
+    tracer = _RecordingTracer()
+    result = maybe_full_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=2,
+    )
+    assert result.triggered is True
+    assert result.dead_ends_preserved == 0
+    assert not any(_is_dead_ends_message(m) for m in msgs)
+
+
+def test_layer2_reflect_failure_for_dead_ends_falls_back_to_template():
+    """If the dead-ends LLM call fails, fall back to the template path."""
+
+    class _PartialFailMode:
+        """reflect() succeeds on the success prompt but raises on the failure prompt."""
+
+        def __init__(self):
+            self.reflect_calls: list[tuple[list[dict], str]] = []
+
+        def reflect(self, messages, prompt):
+            self.reflect_calls.append((list(messages), prompt))
+            if "preserving a record of failed" in prompt:
+                raise RuntimeError("model unavailable for dead-ends call")
+            return ("- did A", Usage(model="test", input_tokens=200, output_tokens=80))
+
+    msgs: list[dict] = [{"role": "user", "content": "do the task"}]
+    for i in range(4):
+        msgs.extend(_build_pair(f"call_{i}", "ok content"))
+    for i in range(3):
+        msgs.extend(_failed_pair(f"fail_{i}"))
+    for i in range(4):
+        msgs.extend(_build_pair(f"recent_{i}", "ok content"))
+
+    mode = _PartialFailMode()
+    tracer = _RecordingTracer()
+    result = maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=4,
+    )
+    assert result.triggered is True  # success summary still produced
+    assert result.dead_ends_preserved == 3
+    # Template fallback wrote a dead-ends message.
+    dead_ends = [m for m in msgs if _is_dead_ends_message(m)]
+    assert len(dead_ends) == 1
+    # And we recorded the dead-ends summary error in the trace.
+    kinds = [k for k, _ in tracer.events]
+    assert "dead_ends_summary_error" in kinds
+
+
+def test_layer2_dead_ends_count_in_trace_event():
+    """compaction_complete trace event carries dead_ends_preserved."""
+    msgs: list[dict] = [{"role": "user", "content": "do the task"}]
+    for i in range(4):
+        msgs.extend(_build_pair(f"call_{i}", "ok content"))
+    for i in range(2):
+        msgs.extend(_failed_pair(f"fail_{i}"))
+    for i in range(4):
+        msgs.extend(_build_pair(f"recent_{i}", "ok content"))
+
+    mode = _DualReplyMode()
+    tracer = _RecordingTracer()
+    maybe_compact(
+        msgs,
+        mode,
+        tracer,
+        input_tokens=200_000,
+        threshold_tokens=100_000,
+        keep_recent_pairs=4,
+    )
+    complete_events = [data for k, data in tracer.events if k == "compaction_complete"]
+    assert len(complete_events) == 1
+    assert complete_events[0].get("dead_ends_preserved") == 2

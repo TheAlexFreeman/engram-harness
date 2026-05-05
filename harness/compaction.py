@@ -65,6 +65,53 @@ COMPACTED_PLACEHOLDER = (
     "[harness compaction summary] message that follows the compacted region."
 )
 
+# Plan 4 (Failure Preservation): dead-ends recovery.
+#
+# Manus's finding (cited in docs/relevance-realization-plans.md): leaving
+# failed actions in context is more valuable than summarizing them away,
+# because the model uses its own dead ends as implicit belief updates
+# ("I already tried X and it didn't work, so I should try Y"). We classify
+# pairs into successes and failures at compaction time. Successes go through
+# the existing summarization. Failures are summarized into a much shorter
+# "dead ends" block with one line per failure, and that block survives
+# Layer 3 full compaction so the dead-end record carries through long
+# sessions.
+DEFAULT_MAX_DEAD_ENDS = 20
+# Below this many failures we skip the model call entirely and template the
+# block from raw tool names + truncated error messages. Saves cost on the
+# common case where only a handful of tool calls in a region failed.
+_DEAD_ENDS_LLM_MIN = 3
+
+_DEAD_ENDS_BANNER = "[harness dead ends]"
+
+_FAILURE_KEYWORDS = (
+    "traceback",
+    "error:",
+    "failed",
+    "exception",
+    "no such file",
+    "permission denied",
+    "not found",
+    "command failed",
+    "exit code",
+)
+
+_FAILURE_COMPACTION_PROMPT = (
+    "You are preserving a record of failed or unsuccessful tool "
+    "interactions from an agent session. These dead ends are valuable "
+    "context — the agent should not re-attempt approaches that already "
+    "failed.\n\n"
+    "For each failed interaction below, write ONE line in this format:\n"
+    "  DEAD END: <tool_name>(<key args>) → <what went wrong>\n\n"
+    "Be specific: include file paths, error messages, the key argument "
+    "that was wrong. Keep each line under 120 characters. Do not "
+    "include any preamble or sections — output only the DEAD END lines.\n\n"
+    "===== Failed interactions =====\n\n"
+    "{region_text}\n\n"
+    "===== End failed interactions ====="
+)
+
+
 _COMPACTION_PROMPT = (
     "You are summarizing older tool interactions from a long agent "
     "session. The verbatim tool calls and their outputs from earlier "
@@ -120,7 +167,10 @@ _FULL_COMPACTION_PROMPT = (
     "If the agent was mid-edit on a file, name the file and the state.\n\n"
     "## Cautions\n"
     "Approaches that didn't work, dead ends to avoid revisiting, and any "
-    "constraints the user expressed.\n\n"
+    "constraints the user expressed. NOTE: a separate "
+    f"{_DEAD_ENDS_BANNER} message may follow this summary listing tools "
+    "calls that already failed — do not duplicate those entries here, just "
+    "the high-level lessons.\n\n"
     "Use concrete language. Prefer specific identifiers over abstractions. "
     "Drop anything that is *only* useful as conversational history.\n\n"
     "===== Begin compacted region =====\n\n"
@@ -147,6 +197,10 @@ class CompactionResult:
     usage: Usage = field(default_factory=Usage.zero)
     skipped_reason: str | None = None
     error: str | None = None
+    # Plan 4 (Failure Preservation): how many failed-tool-pair "dead ends"
+    # were preserved as a separate compact block alongside the main summary
+    # (Layer 2) or carried through full compaction (Layer 3).
+    dead_ends_preserved: int = 0
 
 
 def _env_threshold() -> int:
@@ -340,6 +394,148 @@ def _summary_message(summary_text: str) -> dict[str, Any]:
     return {"role": "user", "content": body}
 
 
+# ---------------------------------------------------------------------------
+# Plan 4 — failure detection + dead-ends preservation
+# ---------------------------------------------------------------------------
+
+
+def _is_failed_pair(assistant_msg: dict[str, Any], user_msg: dict[str, Any]) -> bool:
+    """Classify a (tool_use, tool_result) pair as a "dead end".
+
+    A pair is failed when any tool_result block in the user message is an
+    explicit error (``is_error: True``) or — for results the API marked
+    successful — its text contains one of ``_FAILURE_KEYWORDS``. The
+    keyword path is deliberately conservative: false positives become
+    informative dead-end entries (no harm), false negatives just fall
+    through to the normal summary path.
+    """
+    content = user_msg.get("content")
+    if not isinstance(content, list):
+        return False
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_result":
+            continue
+        if block.get("is_error"):
+            return True
+        text = _extract_text_from_block_content(block.get("content", ""))
+        lower = text.lower()
+        if any(sig in lower for sig in _FAILURE_KEYWORDS):
+            return True
+    return False
+
+
+def _is_dead_ends_message(msg: dict[str, Any]) -> bool:
+    """Whether *msg* is a Layer-2 dead-ends marker carried forward."""
+    if msg.get("role") != "user":
+        return False
+    content = msg.get("content")
+    if isinstance(content, str):
+        return _DEAD_ENDS_BANNER in content
+    return False
+
+
+def _dead_ends_message(summary_text: str) -> dict[str, Any]:
+    """Wrap a dead-ends block in a user-role message with the dead-ends banner."""
+    body = (
+        f"{_DEAD_ENDS_BANNER} The following approaches were tried earlier "
+        "in this session and failed. Do not re-attempt these without a "
+        "different approach.\n\n"
+        f"{summary_text.strip()}"
+    )
+    return {"role": "user", "content": body}
+
+
+def _extract_tool_use(assistant_msg: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """Pull the first tool_use block (name, input) from an assistant message."""
+    content = assistant_msg.get("content")
+    if not isinstance(content, list):
+        return None
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "tool_use":
+            return str(block.get("name", "?")), dict(block.get("input") or {})
+    return None
+
+
+def _format_dead_end_line(
+    assistant_msg: dict[str, Any],
+    user_msg: dict[str, Any],
+    *,
+    line_cap: int = 160,
+) -> str:
+    """Template a single ``DEAD END: ...`` line for one failed pair.
+
+    Used when there are too few failures to justify an LLM round-trip.
+    Picks the first tool_use + first error/keyword tool_result and writes:
+    ``DEAD END: <tool>(<truncated args>) → <truncated error>``.
+    """
+    tool = _extract_tool_use(assistant_msg) or ("?", {})
+    name, args = tool
+    args_blob = json.dumps(args, default=str, sort_keys=True)
+    if len(args_blob) > 60:
+        args_blob = args_blob[:57] + "..."
+    err_text = ""
+    content = user_msg.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            text = _extract_text_from_block_content(block.get("content", ""))
+            if block.get("is_error") or any(s in text.lower() for s in _FAILURE_KEYWORDS):
+                err_text = text.strip().splitlines()[0] if text.strip() else "(no message)"
+                break
+    if len(err_text) > 80:
+        err_text = err_text[:77] + "..."
+    line = f"DEAD END: {name}({args_blob}) → {err_text}"
+    if len(line) > line_cap:
+        line = line[: line_cap - 3] + "..."
+    return line
+
+
+def _template_dead_ends_block(
+    failed_pairs: list[tuple[int, int]], messages: list[dict[str, Any]]
+) -> str:
+    """Build a dead-ends summary without an LLM call (for small counts)."""
+    return "\n".join(_format_dead_end_line(messages[a], messages[u]) for a, u in failed_pairs)
+
+
+def _cap_dead_ends_block(text: str, *, max_lines: int = DEFAULT_MAX_DEAD_ENDS) -> str:
+    """Cap a dead-ends block at ``max_lines`` entries (FIFO eviction).
+
+    Operates on rendered text — both LLM and template paths flow through
+    here so the cap is enforced consistently.
+    """
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) <= max_lines:
+        return "\n".join(lines)
+    return "\n".join(lines[-max_lines:])
+
+
+def _merge_dead_ends_blocks(
+    existing: dict[str, Any] | None, new_text: str, *, max_lines: int = DEFAULT_MAX_DEAD_ENDS
+) -> dict[str, Any]:
+    """Combine a previously preserved dead-ends message with a new block.
+
+    Used when Layer 2 fires a second time and a prior dead-ends message
+    already exists in the kept region — we concatenate and re-cap so old
+    entries are evicted FIFO once the cap is hit.
+    """
+    combined_lines: list[str] = []
+    if existing is not None:
+        prior = existing.get("content", "")
+        if isinstance(prior, str):
+            for line in prior.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("DEAD END:"):
+                    combined_lines.append(stripped)
+    for line in new_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("DEAD END:"):
+            combined_lines.append(stripped)
+    if len(combined_lines) > max_lines:
+        combined_lines = combined_lines[-max_lines:]
+    return _dead_ends_message("\n".join(combined_lines))
+
+
 def maybe_compact(
     messages: list[dict[str, Any]],
     mode: Mode,
@@ -386,66 +582,134 @@ def maybe_compact(
     if reflect_fn is None:
         return CompactionResult(triggered=False, skipped_reason="mode_no_reflect")
 
+    failed_pairs = [(a, u) for a, u in fresh_pairs if _is_failed_pair(messages[a], messages[u])]
+    failed_set = set(failed_pairs)
+    success_pairs = [pair for pair in fresh_pairs if pair not in failed_set]
+
     indices_for_measure: list[int] = []
     for a, u in fresh_pairs:
         indices_for_measure.extend([a, u])
     chars_before = _measure_chars(messages, indices_for_measure)
 
-    region_chunks: list[str] = []
-    for idx, (a, u) in enumerate(fresh_pairs, start=1):
-        chunk = _build_pair_chunk(messages[a], messages[u])
-        region_chunks.append(f"--- Turn {idx} ---\n{chunk}")
-    region_text = "\n\n".join(region_chunks)
-    prompt = _COMPACTION_PROMPT.format(region_text=region_text)
-
     tracer.event(
         "compaction_start",
         pairs=len(fresh_pairs),
+        success_pairs=len(success_pairs),
+        failed_pairs=len(failed_pairs),
         input_tokens=input_tokens,
         threshold=threshold,
         chars_before=chars_before,
     )
 
-    try:
-        text, raw_usage = reflect_fn([], prompt)
-    except Exception as exc:  # noqa: BLE001
-        tracer.event(
-            "compaction_error",
-            error=type(exc).__name__,
-            message=str(exc)[:200],
-        )
-        return CompactionResult(
-            triggered=False,
-            skipped_reason="reflect_failed",
-            error=f"{type(exc).__name__}: {exc}",
-        )
+    summary_text = ""
+    raw_usage: Any = None
+    # Only call the model when there are success pairs to summarise. If
+    # everything in the region failed, the dead-ends block carries the load
+    # and we skip the main summary call entirely.
+    if success_pairs:
+        region_chunks: list[str] = []
+        for idx, (a, u) in enumerate(success_pairs, start=1):
+            chunk = _build_pair_chunk(messages[a], messages[u])
+            region_chunks.append(f"--- Turn {idx} ---\n{chunk}")
+        region_text = "\n\n".join(region_chunks)
+        prompt = _COMPACTION_PROMPT.format(region_text=region_text)
 
-    summary_text = (text or "").strip()
-    if not summary_text:
-        tracer.event("compaction_error", error="empty_summary")
-        return CompactionResult(triggered=False, skipped_reason="empty_summary")
+        try:
+            text, raw_usage = reflect_fn([], prompt)
+        except Exception as exc:  # noqa: BLE001
+            tracer.event(
+                "compaction_error",
+                error=type(exc).__name__,
+                message=str(exc)[:200],
+            )
+            return CompactionResult(
+                triggered=False,
+                skipped_reason="reflect_failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+        summary_text = (text or "").strip()
+        if not summary_text:
+            tracer.event("compaction_error", error="empty_summary")
+            return CompactionResult(triggered=False, skipped_reason="empty_summary")
+
+    # Dead-ends block — template for small counts, model call for larger.
+    dead_ends_text = ""
+    dead_ends_usage_raw: Any = None
+    if failed_pairs:
+        if len(failed_pairs) >= _DEAD_ENDS_LLM_MIN:
+            chunks: list[str] = []
+            for idx, (a, u) in enumerate(failed_pairs, start=1):
+                chunk = _build_pair_chunk(messages[a], messages[u])
+                chunks.append(f"--- Failure {idx} ---\n{chunk}")
+            failure_prompt = _FAILURE_COMPACTION_PROMPT.format(region_text="\n\n".join(chunks))
+            try:
+                d_text, dead_ends_usage_raw = reflect_fn([], failure_prompt)
+            except Exception as exc:  # noqa: BLE001
+                # Failure summarization errors should not abort the whole
+                # compaction. Fall back to the template path.
+                tracer.event(
+                    "dead_ends_summary_error",
+                    error=type(exc).__name__,
+                    message=str(exc)[:200],
+                )
+                d_text = _template_dead_ends_block(failed_pairs, messages)
+                dead_ends_usage_raw = None
+            dead_ends_text = (d_text or "").strip()
+            if not dead_ends_text:
+                dead_ends_text = _template_dead_ends_block(failed_pairs, messages)
+        else:
+            dead_ends_text = _template_dead_ends_block(failed_pairs, messages)
+        dead_ends_text = _cap_dead_ends_block(dead_ends_text)
 
     if pricing is None:
         pricing = load_pricing()
-    usage = compute_cost(raw_usage, pricing)
+    usage = compute_cost(raw_usage, pricing) if raw_usage is not None else Usage.zero()
+    if dead_ends_usage_raw is not None:
+        usage = usage + compute_cost(dead_ends_usage_raw, pricing)
 
     results_replaced = 0
     last_compacted_user_idx = -1
+    # Rewrite EVERY tool_result in the region (success and failure) to the
+    # placeholder so the kept conversation no longer carries verbatim
+    # outputs. Failures survive via the dead-ends block, not via raw text.
     for _, u in fresh_pairs:
         results_replaced += _replace_tool_result_content(messages[u])
         last_compacted_user_idx = u
 
+    inserted = 0
     insert_at = last_compacted_user_idx + 1
-    messages.insert(insert_at, _summary_message(summary_text))
+    if summary_text:
+        messages.insert(insert_at, _summary_message(summary_text))
+        inserted += 1
+    if dead_ends_text:
+        # Merge with any pre-existing dead-ends message in the kept region —
+        # a later compaction may discover one already there from earlier.
+        existing_idx: int | None = None
+        for j in range(len(messages)):
+            if _is_dead_ends_message(messages[j]):
+                existing_idx = j
+                break
+        merged = _merge_dead_ends_blocks(
+            messages[existing_idx] if existing_idx is not None else None,
+            dead_ends_text,
+        )
+        if existing_idx is not None:
+            messages[existing_idx] = merged
+        else:
+            messages.insert(insert_at + inserted, merged)
+            inserted += 1
 
     compacted_indices = [idx for pair in fresh_pairs for idx in pair]
-    chars_after = _measure_chars(messages, compacted_indices + [insert_at])
+    inserted_indices = list(range(insert_at, insert_at + inserted))
+    chars_after = _measure_chars(messages, compacted_indices + inserted_indices)
 
     tracer.event(
         "compaction_complete",
         pairs=len(fresh_pairs),
         results_replaced=results_replaced,
         summary_chars=len(summary_text),
+        dead_ends_preserved=len(failed_pairs),
         chars_before=chars_before,
         chars_after=chars_after,
         **usage.as_trace_dict(),
@@ -458,6 +722,7 @@ def maybe_compact(
         chars_before=chars_before,
         chars_after=chars_after,
         usage=usage,
+        dead_ends_preserved=len(failed_pairs),
     )
 
 
@@ -601,8 +866,20 @@ def maybe_full_compact(
     region_indices = list(range(region_start, region_end))
     chars_before = _measure_chars(messages, region_indices)
 
+    # Preserve any Layer-2 dead-ends messages from the compaction region.
+    # These survive the L3 reset so the model still sees the bullet list of
+    # approaches it has already tried.
+    preserved_dead_ends: list[dict[str, Any]] = []
+    for mi in region_indices:
+        if _is_dead_ends_message(messages[mi]):
+            preserved_dead_ends.append(messages[mi])
+
     region_chunks: list[str] = []
     for idx, mi in enumerate(region_indices, start=1):
+        # Skip dead-ends messages — they're preserved separately, no need
+        # to also feed them to the L3 summarizer.
+        if _is_dead_ends_message(messages[mi]):
+            continue
         chunk = _build_message_chunk(messages[mi], cap=_FULL_PER_PAIR_PROMPT_CAP)
         if not chunk:
             continue
@@ -616,6 +893,7 @@ def maybe_full_compact(
         input_tokens=input_tokens,
         threshold=threshold,
         chars_before=chars_before,
+        dead_ends_preserved=len(preserved_dead_ends),
     )
 
     try:
@@ -643,15 +921,28 @@ def maybe_full_compact(
 
     summary_msg = _full_summary_message(summary_text)
 
-    # Atomic edit: slice out the region and insert the summary.
-    messages[region_start:region_end] = [summary_msg]
+    # Atomic edit: slice out the region; insert summary + any preserved
+    # dead-ends messages right after it.
+    if preserved_dead_ends:
+        # Coalesce all preserved dead-ends messages into one (re-cap to the
+        # 20-line limit). A long-running session might have accumulated
+        # multiple Layer-2 dead-ends messages; merging here keeps the kept
+        # region tidy.
+        coalesced = preserved_dead_ends[0]
+        for extra in preserved_dead_ends[1:]:
+            coalesced = _merge_dead_ends_blocks(coalesced, extra.get("content", ""))
+        replacement = [summary_msg, coalesced]
+    else:
+        replacement = [summary_msg]
+    messages[region_start:region_end] = replacement
 
-    chars_after = len(summary_msg["content"])
+    chars_after = sum(len(m.get("content", "")) for m in replacement if isinstance(m, dict))
 
     tracer.event(
         "full_compaction_complete",
         messages_compacted=len(region_indices),
         summary_chars=len(summary_text),
+        dead_ends_preserved=len(preserved_dead_ends),
         chars_before=chars_before,
         chars_after=chars_after,
         **usage.as_trace_dict(),
@@ -664,4 +955,5 @@ def maybe_full_compact(
         chars_before=chars_before,
         chars_after=chars_after,
         usage=usage,
+        dead_ends_preserved=len(preserved_dead_ends),
     )
