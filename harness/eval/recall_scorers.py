@@ -22,13 +22,20 @@ if TYPE_CHECKING:
 
 @dataclass
 class RecallScoreResult:
-    """Outcome of one recall scorer against one task run."""
+    """Outcome of one recall scorer against one task run.
+
+    failure_code is optional and set on failures for taxonomy/aggregation
+    (e.g. "MISSING_EXPECTED", "EXCLUSION_LEAK", "ORDER_VIOLATION").
+    Metric-only scorers (MRR) always pass and are excluded from overall
+    task pass/fail.
+    """
 
     scorer: str
     task_id: str
     passed: bool
     detail: str
     metric: float = 0.0
+    failure_code: str | None = None
 
 
 class RecallScorer(Protocol):
@@ -48,6 +55,7 @@ def _exception_failure(
             passed=False,
             detail=f"recall raised: {run.exception}",
             metric=0.0,
+            failure_code="RECALL_EXCEPTION",
         )
     return None
 
@@ -91,6 +99,7 @@ class RecallHitScorer:
                     f"Missing: {missing}. Returned top-k: [{returned_preview}]"
                 ),
                 metric=rate,
+                failure_code="MISSING_EXPECTED",
             )
         return RecallScoreResult(
             scorer=self.name,
@@ -130,6 +139,7 @@ class RecallExclusionScorer:
                 passed=False,
                 detail=f"{len(leaked)} excluded file(s) leaked into top-k: {leaked}",
                 metric=0.0,
+                failure_code="EXCLUSION_LEAK",
             )
         return RecallScoreResult(
             scorer=self.name,
@@ -175,6 +185,7 @@ class RecallOrderScorer:
                 passed=False,
                 detail=f"expected_order files missing from top-k: {missing}",
                 metric=0.0,
+                failure_code="ORDER_MISSING",
             )
 
         seq = [positions[fp] for fp in task.expected_order]
@@ -193,17 +204,16 @@ class RecallOrderScorer:
             passed=False,
             detail=f"expected_order violated. Files at positions {seq}, expected ascending.",
             metric=0.0,
+            failure_code="ORDER_VIOLATION",
         )
 
 
 class RecallMRRScorer:
-    """Mean reciprocal rank of expected files. Metric-only, no pass/fail.
+    """Mean reciprocal rank of expected files. Metric-only (always passes).
 
-    For each file in ``expected_files`` find its rank in the returned list
-    (1-indexed); the reciprocal rank for a missing file is 0. The metric is
-    the mean reciprocal rank across all expected files. ``passed`` is True
-    only when every expected file appeared (any rank > 0); MRR is reported
-    purely for tracking regression over time.
+    MRR is reported purely for regression tracking; it does not affect
+    overall task pass/fail (see RecallTaskOutcome.passed). The metric is
+    the mean reciprocal rank (0 if expected file missing from results).
     """
 
     name = "recall_mrr"
@@ -230,12 +240,11 @@ class RecallMRRScorer:
             rank = positions.get(fp, 0)
             per_file_rr.append(1.0 / rank if rank > 0 else 0.0)
         mrr = sum(per_file_rr) / len(per_file_rr)
-        all_present = all(rr > 0 for rr in per_file_rr)
         positions_str = ", ".join(f"{fp}@{positions.get(fp, '?')}" for fp in task.expected_files)
         return RecallScoreResult(
             scorer=self.name,
             task_id=task.id,
-            passed=all_present,
+            passed=True,
             detail=f"MRR={mrr:.3f} across {len(per_file_rr)} file(s). Positions: [{positions_str}]",
             metric=mrr,
         )

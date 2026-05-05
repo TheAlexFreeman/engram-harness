@@ -16,7 +16,8 @@ Design (per docs/improvement-plans-2026.md §A1 follow-on):
   identity. Proven 1.0 → 1.5× boost. Proven 0.0 → 0.5× penalty.
 - **Reuses A5's `aggregate_access`** ([trust_decay.py](harness/_engram_fs/trust_decay.py))
   to read each namespace's ACCESS.jsonl and produce per-file
-  ``mean_helpfulness``. Cross-namespace merge is a thin loop here.
+  ``mean_helpfulness`` (which feeds ``TrustComponents.historical_accuracy`` and
+  ``composite_trust`` for Plan 2 decomposition). Cross-namespace merge is a thin loop here.
 - **Per-session caching** is the caller's job. Build once on first recall
   and stash on the EngramMemory instance — ACCESS rows land at
   end-of-session via the trace bridge, so within a session the index is

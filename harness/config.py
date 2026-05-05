@@ -82,6 +82,11 @@ class SessionConfig:
     # for 1M Opus). Falls through to
     # ``HARNESS_FULL_COMPACTION_INPUT_TOKEN_THRESHOLD`` env var.
     full_compaction_input_token_threshold: int | None = None
+    # K-line contextual boost (Plan 3 / A1 extension). When True (default),
+    # recall applies the lightweight Jaccard config-vector boost after
+    # helpfulness rerank. Disable with ``HARNESS_KLINE_BOOST=0`` or
+    # kline_boost=False. CLI exposure via --kline-boost.
+    kline_boost: bool = True
     # D1 Layer 2: prompt-injection classifier model. None / "" disables;
     # falls through to ``HARNESS_INJECTION_CLASSIFIER_MODEL`` env var.
     # Recommended: a Haiku-class model — verdicts are short JSON.

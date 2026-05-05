@@ -1,5 +1,9 @@
 """EngramMemory — a MemoryBackend that persists to an Engram git-backed memory repo.
 
+# NOTE (monolith-split todo): Split target harness/engram_memory/{types.py,
+# repo.py, recall.py (K-line boost), bootstrap.py, context.py, session.py,
+# backend.py, __init__.py}. Keep facade and lazy imports. See plan.
+
 Implements the contract from `harness.memory.MemoryBackend` against an Engram
 repository. Uses the harness-owned format layer in `harness._engram_fs` for
 path policy, frontmatter, indexes, and git staging/commits. Semantic recall is

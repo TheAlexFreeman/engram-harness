@@ -234,7 +234,7 @@ def test_mrr_scorer_zero_when_missing() -> None:
     task = _make_task(expected=["a.md"])
     run = _make_run(["b.md"])
     res = RecallMRRScorer().score(task, run)
-    assert not res.passed
+    assert res.passed  # metric-only scorer; always passes, metric=0 for regression tracking
     assert res.metric == 0.0
 
 

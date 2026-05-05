@@ -30,6 +30,12 @@ Both triggers are opt-in (safe default keeps legacy behavior):
 
 Set to 0 (default) to disable. See ``maybe_compact`` / ``maybe_full_compact``
 and loop.py integration. Per-role defaults can be wired in F5 follow-on.
+
+# Plan 4 (failure preservation): high-value recall results (high score or
+# recently used via K-line/helpfulness) should be protected from aggressive
+# summarization in Layer 2/3. Hook point: before replacing tool_result blocks,
+# check RecallEvent scores in memory snapshot and preserve or low-fi re-inject.
+# Measured by recall-eval suite (Plan 1).
 """
 
 from __future__ import annotations

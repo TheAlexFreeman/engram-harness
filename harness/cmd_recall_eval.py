@@ -81,15 +81,14 @@ def _print_report(report: RecallEvalReport) -> None:
 
 def _generate_tasks_from_trace(
     candidates_path: Path,
-    *,
-    helpfulness_threshold: float = 0.5,
 ) -> tuple[list[dict], list[dict]]:
     """Scan ``recall_candidates.jsonl`` and draft RecallEvalTask entries.
 
     Returns ``(drafts, flagged)``: drafts contain at least one
-    ``expected_file`` (a returned candidate the agent later read); flagged
-    are queries where the agent ignored everything we surfaced — these need
-    manual review.
+    ``expected_file`` (a returned candidate where ``used_in_session`` is true);
+    flagged are queries where the agent ignored everything we surfaced — these
+    need manual review. (Uses the ``used_in_session`` flag written by the trace
+    bridge rather than a helpfulness threshold.)
     """
     if not candidates_path.is_file():
         raise FileNotFoundError(f"recall_candidates.jsonl not found: {candidates_path}")

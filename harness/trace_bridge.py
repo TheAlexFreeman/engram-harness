@@ -1,5 +1,10 @@
 """Post-run trace bridge: harness JSONL traces → Engram activity records.
 
+# NOTE (monolith-split todo): Split target harness/trace_bridge/
+# {types.py, ingest.py, render.py, access.py, rollups.py, links.py,
+# recall_candidates.py, artifacts.py, run.py, __init__.py}.
+# Re-exports preserved for callers (run_trace_bridge, TraceBridgeResult).
+
 Reads a session's JSONL trace, derives summary / reflection / ACCESS / spans,
 and writes them under `core/memory/activity/YYYY/MM/DD/<session_id>/` then
 commits with provenance.

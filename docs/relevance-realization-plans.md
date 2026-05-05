@@ -1,7 +1,7 @@
 # Relevance Realization — Implementation Plans
 
 **Date:** 2026-05-05
-**Status:** in progress (Plan 1 recall eval skeleton + K-line test coverage landed; full binary scorers + taxonomy in follow-up)
+**Status:** Plan 1 complete (full scorers, taxonomy codes, MRR metric-only, --from-trace using used_in_session, runner+CLI+fixtures+tests all shipped and aligned to spec)
 **Context:** Motivated by the practitioner survey in
 `claude-research--agent-harness-relevance-realization.md`, grounded against the
 current codebase state as of the improvement-plans-2026.md update (2026-05-05,

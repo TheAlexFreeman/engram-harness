@@ -13,6 +13,11 @@ persistence, and project scaffolding. The ``Workspace`` class owns a
 ``<root>/workspace/`` directory; tool wrappers in
 ``harness/tools/work_tools.py`` call into it.
 
+# NOTE (monolith-split todo): Target package layout prepared in research.
+# harness/workspace/{errors.py, lock.py, constants.py, current_md.py,
+# project.py, plans.py, workspace.py, __init__.py} with re-exports.
+# See follow-on plan for migration checklist.
+
 Design points (see docs/workspace-affordances-draft.md):
 
 - Workspace is a *peer* of both the engram memory tree and the harness

@@ -154,7 +154,8 @@ class RecallTaskOutcome:
 
     @property
     def passed(self) -> bool:
-        return all(s.passed for s in self.scores)
+        # MRR is metric-only and always passes; exclude it from overall verdict
+        return all(s.passed for s in self.scores if s.scorer != "recall_mrr")
 
 
 @dataclass

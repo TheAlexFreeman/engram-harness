@@ -27,6 +27,10 @@ content matches.
 When no ACCESS rows carry config fields (fresh corpus, old data) the
 boost is a no-op — graceful degradation per ROADMAP §10.
 
+SessionConfig.kline_boost (default True) and CLI --kline-boost control it;
+the env var HARNESS_KLINE_BOOST=0 still overrides. Boost contribution is
+captured in recall_candidates.jsonl for A6 observability.
+
 See `docs/relevance-realization-plans.md` (Plan 3) and
 `docs/improvement-plans-2026.md` (A1 extension) for context and rollout notes.
 """
