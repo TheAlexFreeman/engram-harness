@@ -1,11 +1,11 @@
 # Relevance Realization — Implementation Plans
 
 **Date:** 2026-05-05
-**Status:** proposed
+**Status:** in progress (Plan 1 recall eval skeleton + K-line test coverage landed; full binary scorers + taxonomy in follow-up)
 **Context:** Motivated by the practitioner survey in
 `claude-research--agent-harness-relevance-realization.md`, grounded against the
-current codebase state as of the improvement-plans-2026.md update (2026-05-02,
-18 of 24 themes shipped).
+current codebase state as of the improvement-plans-2026.md update (2026-05-05,
+23 of 25 themes shipped). K-line boost integrated in engram_memory.recall.
 
 Four plans, ordered by dependency: Recall Eval Suite first (measures everything
 else), Trust Score Decomposition second (refactors existing math), K-line

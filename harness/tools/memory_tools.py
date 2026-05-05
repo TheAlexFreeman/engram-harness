@@ -163,6 +163,15 @@ class MemoryRecall:
                     "current-truth facts. Set true for audit/forensic tasks."
                 ),
             },
+            "include_neighbors": {
+                "type": "boolean",
+                "description": (
+                    "When true, after primary recall, widen results with 1-hop "
+                    "neighbors from the link graph (co-retrieved files, supersedes "
+                    "edges etc in LINKS.jsonl). Helps surface contextually related "
+                    "memory. Default false. Adds at most a handful of extra hits."
+                ),
+            },
         },
         "required": ["query"],
     }
@@ -184,9 +193,14 @@ class MemoryRecall:
 
         scope = _normalize_recall_scope(args.get("scope") or args.get("namespace"))
         include_superseded = bool(args.get("include_superseded", False))
+        include_neighbors = bool(args.get("include_neighbors", False))
 
         results = self._memory.recall(
-            query, k=k, namespace=scope, include_superseded=include_superseded
+            query,
+            k=k,
+            namespace=scope,
+            include_superseded=include_superseded,
+            include_neighbors=include_neighbors,
         )
 
         try:
@@ -1010,9 +1024,77 @@ def _lifecycle_row_line(row) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# memory: link audit (A3)
+# ---------------------------------------------------------------------------
+
+
+class MemoryLinkAudit:
+    """``memory_link_audit`` — inspect and optionally prune low-value edges in LINKS.jsonl.
+
+    Helps keep the co-retrieval / supersedes graph clean: removes edges below
+    a score threshold or older than N days. Dry-run by default (safe).
+    """
+
+    name = "memory_link_audit"
+    mutates = True
+    capabilities = frozenset({CAP_MEMORY_WRITE})
+    untrusted_output = False
+    description = (
+        "Audit the memory link graph (LINKS.jsonl). Reports counts of low-score or "
+        "stale edges per namespace and, when dry_run=false, prunes them. "
+        "Use to maintain recall quality after many co-retrieval edges accumulate. "
+        "Always start with dry_run=true to preview."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "min_score": {
+                "type": "number",
+                "description": "Edges with score < this are candidates for removal. Default 0.2.",
+            },
+            "max_age_days": {
+                "type": "integer",
+                "description": "Edges older than this many days are candidates. Default 90.",
+            },
+            "dry_run": {
+                "type": "boolean",
+                "description": "If true (default), only report what would be pruned; do not rewrite files.",
+            },
+        },
+    }
+
+    def __init__(self, memory: "EngramMemory"):
+        self._memory = memory
+
+    def run(self, args: dict) -> str:
+        from harness._engram_fs.link_graph import prune_low_score_edges
+
+        min_score = float(args.get("min_score", 0.2))
+        max_age = int(args.get("max_age_days", 90))
+        dry = bool(args.get("dry_run", True))
+
+        counts = prune_low_score_edges(
+            self._memory.content_root,
+            min_score=min_score,
+            max_age_days=max_age,
+            dry_run=dry,
+        )
+        total = sum(counts.values())
+        mode = "DRY-RUN (no changes)" if dry else "PRUNED"
+        lines = [f"Link graph audit ({mode}):"]
+        for ns, cnt in sorted(counts.items()):
+            lines.append(f"- {ns}: {cnt} edges below threshold / stale")
+        lines.append(f"Total affected: {total}")
+        if total == 0:
+            lines.append("_Graph is clean._")
+        return "\n".join(lines)
+
+
 __all__ = [
     "MemoryContext",
     "MemoryLifecycleReview",
+    "MemoryLinkAudit",
     "MemoryRecall",
     "MemoryRemember",
     "MemoryReview",

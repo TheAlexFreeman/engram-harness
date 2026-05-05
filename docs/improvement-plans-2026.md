@@ -3,7 +3,7 @@
 ## title: Engram Harness — Improvement Plans (2026)
 status: draft
 audience: project maintainers + contributors
-last_updated: 2026-05-02
+last_updated: 2026-05-05
 
 # Engram Harness — Improvement Plans (2026)
 
@@ -28,24 +28,24 @@ sequencing is the recommendation that matters most.
 provenance/versioning layer, the integration seam (PRs #15–#19) between
 the harness loop, the workspace, and Engram memory.
 
-**Status as of 2026-05-02.** Of the contemporary-practice gaps this
+**Status as of 2026-05-05.** Of the contemporary-practice gaps this
 document identified at the start of April 2026, the following have shipped:
-A1 (hybrid retrieval), A2 (bi-temporal facts + invalidation), A3 (link
-graph), A4 (sleep-time consolidate), A5 (promotion/decay lifecycle), A6
+A1 (hybrid retrieval + K-line contextual boost extension), A2 (bi-temporal facts + invalidation), A3 (link
+graph write path), A4 (sleep-time consolidate), A5 (promotion/decay lifecycle), A6
 (recall observability), B1 (subagents), B2 (tiered context compaction —
 all three layers), B3 (code-as-action sandboxed Python tool), B4
-(durable interrupt + resume), B5 (result-aware loop detection), C1 (OTel
+(durable interrupt + resume with cross-machine relocate), B5 (result-aware loop detection), C1 (OTel
 GenAI conformance), C2 (eval harness skeleton), C3 (replay mode), C4 (drift
 detection), D1 (two-layer prompt-injection defense), D2 (human-in-the-loop
-approval). System-prompt template extraction
-(system-prompt-improvements-plan.md) also shipped end-to-end. 18 of 24
-themes complete.
+approval), F1–F5 (roles wired in prompt/CLI + guard + inheritance + observability + inference v1).
+System-prompt template extraction
+(system-prompt-improvements-plan.md) also shipped end-to-end. 23 of 25
+themes complete. See the new `docs/relevance-realization-plans.md` (2026-05-05)
+for the next-phase focus on recall evals, trust decomposition, K-line, and failure preservation.
 
 **What's left** (open at the time of this update): E1 (DSPy/GEPA prompt
-optimization), and the new Theme F — F1 (wire roles into the prompt
-and CLI), F2 (workspace-vs-codebase write boundary), F3 (subagent role
-inheritance), F4 (role as observability dimension), F5 (inference,
-mid-session transitions, plan-phase binding). Per-theme detail follows.
+optimization), and A3 read-side widening (`include_neighbors` + `memory_link_audit`).
+Per-theme detail follows. (Theme F v1 is shipped; remaining F5 mid-session/plan-phase binding is tracked under open items.)
 
 ---
 
@@ -143,6 +143,17 @@ files helpful for *similar* tasks higher). Needs a query→task-slug
 similarity function.
 - Time-decayed helpfulness (recent helpfulness weighted more than
 ancient). Could reuse A5's `decay_factor`.
+
+**Shipped extension (K-line contextual tagging):** As of 2026-05-05, the
+K-line index (`harness/_engram_fs/kline_index.py`) adds a lightweight
+symbolic configuration fingerprint (task slug, topic tags, tool sequence,
+plan phase, namespaces) to ACCESS rows via the trace bridge. At recall time
+it applies a small additive Jaccard-similarity boost (default 0.15 weight)
+after the helpfulness rerank. This surfaces memories formed under similar
+reasoning contexts (Minsky K-lines). No embedding call required; graceful
+degradation when no config data present. See `docs/relevance-realization-plans.md`
+Plan 3 for design and `test_kline_index.py` for coverage. Exposed via
+`HARNESS_KLINE_BOOST=1` (default on).
 
 #### A2. Bi-temporal facts + invalidation (don't delete; supersede) — **shipped (v1)**
 

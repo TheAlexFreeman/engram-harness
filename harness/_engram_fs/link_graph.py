@@ -13,8 +13,8 @@ appeared in the same recall call's top-k. Other kinds (``supersedes``,
 ``references``, ``contradicts``) are reserved for follow-ups (A2
 bi-temporal, agent-asserted edges, LLM-extracted edges).
 
-Read side (graph-walk recall widening) and the audit-and-prune skill
-are deferred to follow-up PRs per the plan.
+Read side (graph-walk recall widening via ``get_one_hop_neighbors``) and the
+``memory_link_audit`` tool (prune low-score / stale edges) are now implemented.
 """
 
 from __future__ import annotations
@@ -392,6 +392,112 @@ def dependency_health(
     return health
 
 
+# ---------------------------------------------------------------------------
+# Read-side helpers for recall widening (A3)
+# ---------------------------------------------------------------------------
+
+
+def load_all_edges(content_root: Path) -> list[LinkEdge]:
+    """Load every LINKS.jsonl under the content root into LinkEdge objects.
+
+    Bad rows are skipped (graceful). Used by neighbor lookup and audit.
+    """
+    edges: list[LinkEdge] = []
+    for p in _walk_links_files(content_root):
+        for row in read_edges(p):
+            try:
+                e = LinkEdge(
+                    src=row["from"],
+                    dst=row["to"],
+                    kind=row["kind"],
+                    score=float(row.get("score", 0.5)),
+                    source=row.get("source", "access-log"),
+                    session_id=row.get("session_id", ""),
+                    namespace=row.get("namespace", ""),
+                    ts=row.get("ts", ""),
+                )
+                edges.append(e)
+            except (KeyError, ValueError, TypeError):
+                continue  # malformed row
+    return edges
+
+
+def get_one_hop_neighbors(
+    content_root: Path,
+    seed_paths: Iterable[str],
+    *,
+    max_neighbors_per_seed: int = 5,
+    min_score: float = 0.1,
+    kinds: set[str] | None = None,
+) -> dict[str, list[tuple[str, float, str]]]:
+    """Return 1-hop neighbors for each seed path.
+
+    Co-retrieved edges are treated as undirected. Directed kinds (supersedes,
+    references, contradicts) contribute both directions for widening purposes.
+    Results per seed are sorted by score desc and capped.
+
+    Returns {seed: [(neighbor_relpath, score, kind), ...], ...}
+    """
+    if kinds is None:
+        kinds = EDGE_KINDS
+    all_edges = load_all_edges(content_root)
+
+    from collections import defaultdict
+
+    adj: dict[str, list[tuple[str, float, str]]] = defaultdict(list)
+    for e in all_edges:
+        if e.kind not in kinds or e.score < min_score:
+            continue
+        adj[e.src].append((e.dst, float(e.score), e.kind))
+        adj[e.dst].append((e.src, float(e.score), e.kind))  # both dirs for widen
+
+    result: dict[str, list[tuple[str, float, str]]] = {}
+    for seed in seed_paths:
+        cands = sorted(adj.get(seed, []), key=lambda x: -x[1])[:max_neighbors_per_seed]
+        result[seed] = cands
+    return result
+
+
+def prune_low_score_edges(
+    content_root: Path,
+    *,
+    min_score: float = 0.2,
+    max_age_days: int = 90,
+    dry_run: bool = True,
+) -> dict[str, int]:
+    """Audit helper: count (and optionally prune) low-score or stale edges.
+
+    Returns per-namespace counts of removed edges. If dry_run=False, rewrites
+    LINKS.jsonl files in place (backup via git is caller's responsibility).
+    Intended for use by ``memory_link_audit`` tool.
+    """
+    from datetime import datetime, timedelta
+
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+    removed: dict[str, int] = {}
+    for ns_path in _walk_links_files(content_root):
+        ns = ns_path.parent.name if ns_path.parent.name != "memory" else "memory"
+        rows = read_edges(ns_path)
+        kept = []
+        drop = 0
+        for row in rows:
+            try:
+                sc = float(row.get("score", 0))
+                ts = row.get("ts", "")
+                if sc < min_score or (ts and ts < cutoff):
+                    drop += 1
+                    continue
+            except Exception:
+                drop += 1
+                continue
+            kept.append(row)
+        removed[ns] = drop
+        if not dry_run and drop > 0:
+            # rewrite pruned
+            ns_path.write_text("\n".join(json.dumps(r) for r in kept) + "\n", encoding="utf-8")
+    return removed
+
+
 __all__ = [
     "LinkEdge",
     "EDGE_KINDS",
@@ -407,4 +513,7 @@ __all__ = [
     "co_retrieval_density",
     "dependency_health",
     "read_edges",
+    "load_all_edges",
+    "get_one_hop_neighbors",
+    "prune_low_score_edges",
 ]

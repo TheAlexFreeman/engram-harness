@@ -501,6 +501,7 @@ def _build_memory(
     from harness.tools.memory_tools import (
         MemoryContext,
         MemoryLifecycleReview,
+        MemoryLinkAudit,
         MemoryRecall,
         MemoryRemember,
         MemoryReview,
@@ -570,8 +571,8 @@ def _build_memory(
         )
     except Exception as exc:  # noqa: BLE001
         print(
-            f"[warning] failed to open Engram repo at {repo_path}: {exc}. "
-            "Falling back to FileMemory.",
+            f"[warning] failed to open Engram repo at {repo_path}: "
+            f"{type(exc).__name__}: {exc}. Falling back to FileMemory.",
             file=sys.stderr,
         )
         from harness.memory import FileMemory
@@ -609,6 +610,8 @@ def _build_memory(
         # Read-only A5 surface — surfaces promote/demote candidates from the
         # latest decay sweep (or computes them on demand if the cache is missing).
         MemoryLifecycleReview(engram),
+        # A3: link-graph maintenance (read-only audit by default)
+        MemoryLinkAudit(engram),
     ]
     if not read_only:
         memory_tools.extend(

@@ -12,14 +12,16 @@ to lower the barrier to entry: a user who hasn't thought about roles
 yet can pass ``--role infer`` and get sensible defaults plus a
 visible explanation of *why* that role was chosen.
 
-Out of F5 scope (deferred):
+Out of F5 scope (deferred to post-F1-F4 + optimize):
 - Mid-session role transitions via a ``request_role_change`` tool
   gated on D2 async approval. The transition needs to rebuild
   prompt + tool registry + lane state, which is most cleanly done
-  via the B4 pause/resume pipeline.
+  via the B4 pause/resume pipeline. (Future hook in loop.py turn
+  start for dynamic prompt swap.)
 - Plan-phase binding: workspace plan phases declare a per-phase role
   and B4 cross-machine resume reads it. Pairs nicely with multi-phase
   workflows but adds plan-schema surface that needs its own design pass.
+  (Scaffold in optimize/ for binding logic.)
 """
 
 from __future__ import annotations

@@ -26,6 +26,9 @@ content matches.
 
 When no ACCESS rows carry config fields (fresh corpus, old data) the
 boost is a no-op — graceful degradation per ROADMAP §10.
+
+See `docs/relevance-realization-plans.md` (Plan 3) and
+`docs/improvement-plans-2026.md` (A1 extension) for context and rollout notes.
 """
 
 from __future__ import annotations

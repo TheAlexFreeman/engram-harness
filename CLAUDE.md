@@ -54,7 +54,10 @@ in-flight state — messages, usage, loop counters, EngramMemory buffered events
 mutation for resume. `harness/tools/memory_tools.py` exposes the seven
 agent-callable memory tools — `memory_recall`, `memory_review`, `memory_remember`,
 `memory_context`, `memory_trace`, `memory_lifecycle_review` (A5), and
-`pause_for_user` (B4) — when `--memory=engram` is selected.
+`memory_link_audit` (A3) — when `--memory=engram` is selected.
+`pause_for_user` (B4) lives in `harness/tools/pause.py` and is registered
+alongside them. `harness resume` supports same-machine, relocation, and
+cross-machine (`--relocate`) resume modes per `cmd_resume.py`.
 `harness/config.py::_harness_project_root` is the canonical anchor for finding
 `workspace/` (and the bundled `engram/`).
 

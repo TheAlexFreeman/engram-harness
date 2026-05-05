@@ -25,9 +25,11 @@ Design
   the configured cap. ``spawn_subagents`` (plural) lets the model
   intentionally dispatch a batch in one tool call.
 
-Out of scope for this PR (call out as follow-ups):
-- Trace-bridge nested spans matching OTel GenAI semconv.
-- Cost budget propagation beyond the result text.
+Out of scope / follow-up notes:
+- Cost budget propagation beyond the result text (tracked in Usage).
+- Full nested OTel GenAI span correlation for subagent runs is handled at the
+  `otel_export.py` level (C1 conformance); trace_bridge emits the parent
+  `subagent_run` event and child traces remain separate JSONL for now.
 
 F3 closes the per-sub-agent system-prompt rewrite gap: when the parent
 session has a role (or the subagent specifies one), the child's system

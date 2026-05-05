@@ -391,6 +391,7 @@ class EngramMemory:
         *,
         namespace: str | None = None,
         include_superseded: bool = False,
+        include_neighbors: bool = False,
     ) -> list[Memory]:
         q = (query or "").strip()
         if not q:
@@ -509,6 +510,53 @@ class EngramMemory:
                     hit["score"] = hi.reweight(base, fp)
                 hits.sort(key=lambda h: float(h.get("score", 0.0)), reverse=True)
 
+        hits = hits[:k]
+
+        # A3: optional 1-hop neighbor widening via LINKS.jsonl graph (co-retrieved etc).
+        # Adds a few unique neighbors (attenuated score) so high-value clusters surface.
+        # Graceful: if link graph missing or errors, silently skip (no behavior change).
+        if include_neighbors and hits:
+            try:
+                from harness._engram_fs.link_graph import get_one_hop_neighbors
+
+                seeds = [h.get("file_path", "") for h in hits if h.get("file_path")]
+                neigh_map = get_one_hop_neighbors(
+                    self.content_root, seeds, max_neighbors_per_seed=3, min_score=0.15
+                )
+                seen = {h["file_path"] for h in hits}
+                for _seed, cands in neigh_map.items():
+                    for npath, nscore, _kind in cands:
+                        if npath in seen or not npath:
+                            continue
+                        try:
+                            abs_p = self.content_root / npath
+                            raw = abs_p.read_text(encoding="utf-8", errors="replace")
+                            # crude frontmatter strip for preview
+                            if raw.startswith("---\n"):
+                                parts = raw.split("---\n", 2)
+                                content = parts[2].strip() if len(parts) > 2 else parts[-1].strip()
+                            else:
+                                content = raw.strip()
+                            preview = content[:600]
+                            if len(content) > 600:
+                                preview += "…"
+                            added = {
+                                "file_path": npath,
+                                "content": preview,
+                                "score": float(nscore) * 0.55,
+                                "trust": "link-graph",
+                                "heading": "neighbor",
+                            }
+                            hits.append(added)
+                            seen.add(npath)
+                        except Exception:
+                            continue
+                hits.sort(key=lambda h: float(h.get("score", 0.0)), reverse=True)
+            except Exception:
+                # link_graph or FS issue — degrade silently
+                pass
+
+        # re-apply k cap after possible widening (neighbors compete for slots)
         hits = hits[:k]
         returned_paths = {h["file_path"] for h in hits}
         self._capture_recall_candidates(

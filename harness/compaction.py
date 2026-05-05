@@ -20,16 +20,16 @@ Tier in the B2 stack:
   high-water mark, replaces the bulk of the conversation with a
   single comprehensive summary message.
 
-Both triggers are opt-in:
+Both triggers are opt-in (safe default keeps legacy behavior):
 
-* ``HARNESS_COMPACTION_INPUT_TOKEN_THRESHOLD`` for Layer 2 (or the
-  ``--compaction-input-token-threshold`` CLI flag).
-* ``HARNESS_FULL_COMPACTION_INPUT_TOKEN_THRESHOLD`` for Layer 3 (or
-  ``--full-compaction-input-token-threshold``).
+* ``HARNESS_COMPACTION_INPUT_TOKEN_THRESHOLD`` (or CLI flag) — Layer 2
+  micro-compact at high-water. Recommended: 7000–12000 tokens
+  (≈60-70% of a 16k–32k context).
+* ``HARNESS_FULL_COMPACTION_INPUT_TOKEN_THRESHOLD`` — Layer 3 full
+  conversation compact. Recommended: 14000–20000 (≈85-90%).
 
-Default is disabled (``0``) for both so existing workflows are
-unaffected. Recommended values: ~70%% of context for Layer 2 and
-~90%% for Layer 3.
+Set to 0 (default) to disable. See ``maybe_compact`` / ``maybe_full_compact``
+and loop.py integration. Per-role defaults can be wired in F5 follow-on.
 """
 
 from __future__ import annotations
