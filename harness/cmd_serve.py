@@ -26,7 +26,10 @@ def main() -> None:
         "Security: set HARNESS_API_TOKEN to require Authorization: Bearer <token> "
         "on all non-health endpoints. Binding to a non-loopback host also requires "
         "HARNESS_WORKSPACE_ROOT. API sessions default to --tool-profile no_shell; "
-        "set HARNESS_SERVER_ALLOW_FULL_TOOLS=1 to permit full shell-capable sessions."
+        "set HARNESS_SERVER_ALLOW_FULL_TOOLS=1 to permit full shell-capable sessions. "
+        "Resource knobs: HARNESS_SERVER_MAX_ACTIVE_SESSIONS, "
+        "HARNESS_SERVER_SSE_QUEUE_MAXSIZE, and "
+        "HARNESS_SERVER_INTERACTIVE_IDLE_TIMEOUT_SECS."
     )
     args = parser.parse_args(sys.argv[2:])
 

@@ -15,4 +15,16 @@ See improvement-plans-2026.md §E1 for motivation and isolation rules.
 
 from __future__ import annotations
 
-__all__ = []
+from harness.optimize.runner import (
+    PromptVariant,
+    PromptVariantScore,
+    builtin_prompt_variants,
+    score_prompt_variants,
+)
+
+__all__ = [
+    "PromptVariant",
+    "PromptVariantScore",
+    "builtin_prompt_variants",
+    "score_prompt_variants",
+]

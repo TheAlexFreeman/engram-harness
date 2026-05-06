@@ -874,8 +874,6 @@ def test_render_candidates_md_includes_urgency_when_provided() -> None:
     urgency_rows = [
         _row_with_components("memory/knowledge/hot-bad.md", urgency=0.9, accuracy=0.2),
     ]
-    body = render_candidates_md(
-        rows, kind="promote", today=_today(), urgency_rows=urgency_rows
-    )
+    body = render_candidates_md(rows, kind="promote", today=_today(), urgency_rows=urgency_rows)
     assert "## High urgency files" in body
     assert "memory/knowledge/hot-bad.md" in body

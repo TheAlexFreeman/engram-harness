@@ -1,16 +1,34 @@
 # Relevance Realization — Implementation Plans
 
 **Date:** 2026-05-05
-**Status:** Plan 1 complete (full scorers, taxonomy codes, MRR metric-only, --from-trace using used_in_session, runner+CLI+fixtures+tests all shipped and aligned to spec)
+**Status:** Plans 1-4 complete. Plan 1 ships full scorers, taxonomy codes,
+MRR metric-only scoring, `--from-trace` using `used_in_session`, runner, CLI,
+fixtures, and tests. Plan 2 ships named trust components in
+`harness/_engram_fs/trust_decay.py`. Plan 3 ships K-line retrieval tagging and
+boosting through trace-derived configuration vectors. Plan 4 ships dead-end
+failure preservation in compaction.
 **Context:** Motivated by the practitioner survey in
 `claude-research--agent-harness-relevance-realization.md`, grounded against the
 current codebase state as of the improvement-plans-2026.md update (2026-05-05,
 23 of 25 themes shipped). K-line boost integrated in engram_memory.recall.
 
-Four plans, ordered by dependency: Recall Eval Suite first (measures everything
+Four completed plans, ordered by dependency: Recall Eval Suite first (measures everything
 else), Trust Score Decomposition second (refactors existing math), K-line
 Retrieval Tagging third (novel retrieval signal), Failure Preservation fourth
 (small compaction change that benefits from eval measurement).
+
+## Current State
+
+- **Plan 1: shipped.** `harness recall-eval` runs fixture-backed recall checks
+  and can draft tasks from real `recall_candidates.jsonl` traces.
+- **Plan 2: shipped.** Lifecycle scoring exposes named trust components while
+  preserving the legacy `effective_trust` surface for callers.
+- **Plan 3: shipped.** ACCESS rows carry configuration vectors and recall applies
+  a bounded K-line boost when matching context is available.
+- **Plan 4: shipped.** Layer 2 and full compaction preserve failed tool-call
+  dead ends so long sessions do not erase useful negative evidence.
+- **Next recommended work:** run recall-eval in CI, expand fixtures from real
+  traces, and use the metrics to guide E1 prompt optimization.
 
 ---
 

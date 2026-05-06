@@ -34,6 +34,9 @@ jobs:
       - name: Run harness tests
         run: python -m pytest harness/tests/ -v
 
+      - name: Run recall eval quality gate
+        run: harness recall-eval --really-run
+
   frontend:
     name: Frontend Checks
     runs-on: ubuntu-latest

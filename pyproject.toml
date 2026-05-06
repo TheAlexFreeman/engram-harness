@@ -57,13 +57,16 @@ packages = [
     "harness",
     "harness._engram_fs",
     "harness.eval",
+    "harness.engram_memory_parts",
     "harness.modes",
+    "harness.optimize",
     "harness.prompt_templates",
     "harness.sinks",
-    "harness.tests",
     "harness.tools",
     "harness.tools.fs",
     "harness.tools.search",
+    "harness.trace_bridge_parts",
+    "harness.workspace_parts",
 ]
 
 [tool.setuptools.package-dir]

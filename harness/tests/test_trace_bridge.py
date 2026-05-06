@@ -1301,9 +1301,7 @@ def test_trace_bridge_writes_kline_config_on_access_row(
     assert "file_edit" in cfg.get("tool_sequence", [])
 
 
-def test_trace_bridge_omits_config_when_session_state_empty(
-    repo: Path, tmp_path: Path
-) -> None:
+def test_trace_bridge_omits_config_when_session_state_empty(repo: Path, tmp_path: Path) -> None:
     """A session with no task / no tool sequence / no namespaces should
     not write a noisy ``config: {}`` field on its ACCESS rows."""
     mem = EngramMemory(repo, embed=False)

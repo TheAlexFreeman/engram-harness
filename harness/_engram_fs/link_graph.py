@@ -345,9 +345,7 @@ def co_retrieval_density(
 
     if edge_cap <= 0:
         return {file: 1.0 for file in partner_counts}
-    return {
-        file: min(1.0, count / float(edge_cap)) for file, count in partner_counts.items()
-    }
+    return {file: min(1.0, count / float(edge_cap)) for file, count in partner_counts.items()}
 
 
 def dependency_health(

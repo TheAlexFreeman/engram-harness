@@ -102,6 +102,10 @@ class SessionConfig:
     approval_channel: str | None = None
     approval_webhook_url: str | None = None
     approval_timeout_sec: float = 300.0
+    # Named groups expanded into approval_gated_tools when a channel is active.
+    # v1 ships "high-risk" for shell, broad git, delete/move/write, and
+    # supersession operations.
+    approval_presets: list[str] = field(default_factory=list)
     # Tools whose dispatches always require approval, regardless of the
     # tool's class attribute. Useful for opting in third-party tools that
     # don't declare ``requires_approval``.
@@ -121,6 +125,10 @@ class SessionConfig:
 
     # Tool access control
     tool_profile: ToolProfile = ToolProfile.FULL
+    # Stronger than ToolProfile.READ_ONLY: disables harness-owned local writes
+    # such as FileMemory progress.md and JSONL trace files. Engram read-only
+    # recall still works, but trace-to-Engram and workspace scaffolding stay off.
+    readonly_process: bool = False
 
     # F1: agent role for this session. ``None`` means no role section is
     # injected into the system prompt (preserves pre-roles behavior). When
@@ -181,6 +189,8 @@ def session_config_from_snapshot(
             except ValueError:
                 kwargs[name] = ToolProfile.FULL
         elif name in {"repeat_guard_exempt_tools", "approval_gated_tools", "grok_include"}:
+            kwargs[name] = list(value or [])
+        elif name == "approval_presets":
             kwargs[name] = list(value or [])
         else:
             kwargs[name] = value
@@ -373,6 +383,10 @@ def _is_read_only_profile(config: SessionConfig) -> bool:
     return config.tool_profile == ToolProfile.READ_ONLY
 
 
+def _is_process_read_only(config: SessionConfig) -> bool:
+    return bool(getattr(config, "readonly_process", False))
+
+
 def _tool_prompt_flags(tools: dict[str, Any]) -> tuple[bool, bool, bool, bool]:
     """Return memory/work prompt flags derived from registered tools."""
     with_memory_tools = any(name.startswith("memory_") for name in tools)
@@ -405,6 +419,8 @@ def _has_active_plan_context(tools: dict[str, Any], engram_memory: Any | None) -
 def trace_to_engram_enabled(config: SessionConfig, engram_memory: Any | None) -> bool:
     """Return whether this session may write trace artifacts into Engram."""
     if engram_memory is None:
+        return False
+    if _is_process_read_only(config):
         return False
     if _is_read_only_profile(config):
         return False
@@ -465,6 +481,7 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         approval_channel=getattr(args, "approval_channel", None),
         approval_webhook_url=getattr(args, "approval_webhook_url", None),
         approval_timeout_sec=getattr(args, "approval_timeout_sec", 300.0),
+        approval_presets=list(getattr(args, "approval_presets", None) or []),
         approval_gated_tools=list(getattr(args, "approval_gated_tools", None) or []),
         stream=args.stream,
         stream_max_block_chars=getattr(args, "stream_max_block_chars", 4000),
@@ -474,6 +491,7 @@ def config_from_args(args: argparse.Namespace) -> SessionConfig:
         # through to the SessionConfig default (True).
         reflect=reflect_arg if reflect_arg is not None else True,
         tool_profile=ToolProfile(getattr(args, "tool_profile", "full")),
+        readonly_process=bool(getattr(args, "readonly_process", False)),
         role=getattr(args, "role", None),
         grok_include=list(args.grok_include or []),
         grok_encrypted_reasoning=args.grok_encrypted_reasoning,
@@ -498,7 +516,10 @@ def _build_memory(
     write tools. Read-only profiles never see it.
     """
     if config.memory_backend == "file":
-        from harness.memory import FileMemory
+        from harness.memory import FileMemory, NoopMemory
+
+        if _is_process_read_only(config):
+            return NoopMemory(), None, []
 
         return FileMemory(path=config.workspace / "progress.md"), None, []
 
@@ -561,9 +582,10 @@ def _build_memory(
     # just calls the closure and reads documented attributes.
     previous_session_provider = _build_previous_session_provider(config)
     read_only = _is_read_only_profile(config)
+    process_read_only = _is_process_read_only(config)
     reserve_session_dir = (
         False
-        if read_only
+        if read_only or process_read_only
         else (bool(config.trace_to_engram) if config.trace_to_engram is not None else True)
     )
     try:
@@ -596,7 +618,7 @@ def _build_memory(
     # message instead.
     workspace = Workspace(project_root, session_id=engram.session_id)
     allow_test_postconditions = config.tool_profile != ToolProfile.NO_SHELL
-    if not read_only:
+    if not read_only and not process_read_only:
         try:
             workspace.ensure_layout()
         except OSError as exc:
@@ -743,6 +765,8 @@ def _derive_trace_path(
     the file is left in place (no truncation). The resumed loop appends to
     the existing trace so the JSONL stays continuous across the pause.
     """
+    if _is_process_read_only(config):
+        return Path("traces") / "readonly-disabled.jsonl"
     if resume_trace_path is not None:
         path = Path(resume_trace_path).resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -767,7 +791,12 @@ def _build_tracer(
     extra_sinks: list[Any] | None = None,
 ) -> Any:
     """Build tracer from config, optionally with extra sinks."""
-    sinks: list[Any] = [Tracer(trace_path)]
+    if _is_process_read_only(config):
+        from harness.trace import NullTraceSink
+
+        sinks: list[Any] = [NullTraceSink()]
+    else:
+        sinks = [Tracer(trace_path)]
     if config.trace_live:
         sinks.append(ConsoleTracePrinter())
     if extra_sinks:
@@ -1327,7 +1356,11 @@ def _wire_approval_channel(config: SessionConfig, *, tracer: Any) -> None:
     Wires an ``on_approval`` callback to the session tracer so each
     decision becomes an ``approval_decision`` trace event for audit.
     """
-    from harness.safety.approval import build_channel_from_spec, set_approval_channel
+    from harness.safety.approval import (
+        approval_gates_for_presets,
+        build_channel_from_spec,
+        set_approval_channel,
+    )
 
     spec = (
         (
@@ -1359,7 +1392,22 @@ def _wire_approval_channel(config: SessionConfig, *, tracer: Any) -> None:
         set_approval_channel(None)
         return
 
-    gated = list(getattr(config, "approval_gated_tools", None) or [])
+    presets = list(getattr(config, "approval_presets", None) or [])
+    env_preset = os.environ.get("HARNESS_APPROVAL_PRESET", "")
+    if env_preset.strip():
+        presets.extend(tok.strip() for tok in env_preset.split(",") if tok.strip())
+    try:
+        gated = approval_gates_for_presets(
+            presets,
+            explicit_tools=list(getattr(config, "approval_gated_tools", None) or []),
+        )
+    except ValueError as exc:
+        try:
+            tracer.event("approval_channel_disabled", reason=str(exc))
+        except Exception:  # noqa: BLE001
+            pass
+        set_approval_channel(None)
+        return
 
     def _on_approval(tool_name: str, request: Any, decision: Any) -> None:
         try:

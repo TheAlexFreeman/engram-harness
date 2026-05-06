@@ -860,7 +860,9 @@ def render_urgency_section(
             flagged.append(row)
     if not flagged:
         return ""
-    flagged.sort(key=lambda r: r.components.retrieval_urgency if r.components else 0.0, reverse=True)
+    flagged.sort(
+        key=lambda r: r.components.retrieval_urgency if r.components else 0.0, reverse=True
+    )
     lines = ["## High urgency files", ""]
     lines.append(
         "Files that are retrieved frequently but are not consistently helpful. "

@@ -45,7 +45,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Tunable constants
 # ---------------------------------------------------------------------------
@@ -412,9 +411,7 @@ class KLineIndex:
         """
         return self.by_path.get(file_path, [])
 
-    def best_similarity(
-        self, file_path: str, current: ConfigurationVector
-    ) -> float:
+    def best_similarity(self, file_path: str, current: ConfigurationVector) -> float:
         """Best Jaccard similarity between *current* and any history config."""
         if current.is_empty:
             return 0.0

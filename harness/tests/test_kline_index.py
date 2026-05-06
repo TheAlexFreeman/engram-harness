@@ -20,7 +20,6 @@ from harness._engram_fs.kline_index import (
     trim_tool_sequence,
 )
 
-
 # ---------------------------------------------------------------------------
 # normalize_task_slug
 # ---------------------------------------------------------------------------
@@ -130,13 +129,15 @@ def test_configuration_vector_to_dict_round_trip() -> None:
 
 def test_configuration_vector_from_dict_handles_garbage() -> None:
     """Tolerant of malformed inputs."""
-    cfg = ConfigurationVector.from_dict({
-        "task_slug": 123,  # wrong type
-        "plan_phase": ["implementation"],  # wrong type
-        "tool_sequence": "read",  # not a list
-        "active_namespaces": None,
-        "topic_tags": ["auth", 5, "session"],  # mixed types
-    })
+    cfg = ConfigurationVector.from_dict(
+        {
+            "task_slug": 123,  # wrong type
+            "plan_phase": ["implementation"],  # wrong type
+            "tool_sequence": "read",  # not a list
+            "active_namespaces": None,
+            "topic_tags": ["auth", 5, "session"],  # mixed types
+        }
+    )
     assert cfg.task_slug == ""
     assert cfg.plan_phase is None
     assert cfg.tool_sequence == ()
@@ -310,9 +311,7 @@ def test_kline_index_resorts_by_boosted_score() -> None:
 
 def test_kline_index_handles_missing_file_path() -> None:
     """Hits without ``file_path`` get similarity 0 and score unchanged."""
-    idx = KLineIndex(
-        by_path={"memory/knowledge/a.md": [build_session_config(task="t", query="q")]}
-    )
+    idx = KLineIndex(by_path={"memory/knowledge/a.md": [build_session_config(task="t", query="q")]})
     hits = [{"score": 0.4}]
     idx.boost(hits, current=build_session_config(task="t", query="q"))
     assert hits[0]["kline_similarity"] == 0
@@ -437,16 +436,20 @@ def test_build_kline_index_skips_malformed_rows(tmp_path: Path) -> None:
     knowledge = tmp_path / "memory" / "knowledge"
     knowledge.mkdir(parents=True)
     (knowledge / "ACCESS.jsonl").write_text(
-        "\n".join([
-            json.dumps({
-                "file": "memory/knowledge/good.md",
-                "date": "2026-05-05",
-                "helpfulness": 0.7,
-                "config": {"task_slug": "good", "topic_tags": ["alpha"]},
-            }),
-            "this is not json",
-            json.dumps({"missing_file": True}),
-        ])
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "file": "memory/knowledge/good.md",
+                        "date": "2026-05-05",
+                        "helpfulness": 0.7,
+                        "config": {"task_slug": "good", "topic_tags": ["alpha"]},
+                    }
+                ),
+                "this is not json",
+                json.dumps({"missing_file": True}),
+            ]
+        )
         + "\n",
         encoding="utf-8",
     )

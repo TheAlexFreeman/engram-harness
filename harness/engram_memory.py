@@ -28,11 +28,25 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+from harness.engram_memory_parts.types import (
+    BufferedRecord as _BufferedRecord,
+)
+from harness.engram_memory_parts.types import (
+    MemorySessionSnapshot,
+)
+from harness.engram_memory_parts.types import (
+    RecallCandidateEvent as _RecallCandidateEvent,
+)
+from harness.engram_memory_parts.types import (
+    RecallEvent as _RecallEvent,
+)
+from harness.engram_memory_parts.types import (
+    TraceEvent as _TraceEvent,
+)
 from harness.engram_schema import PROMPT_RECALL_NAMESPACES, SEARCH_SCOPES
 from harness.memory import Memory
 
@@ -114,84 +128,9 @@ def _format_relative(when: datetime, *, now: datetime | None = None) -> str:
     return f"{days} day{'s' if days != 1 else ''} ago"
 
 
-@dataclass
-class _BufferedRecord:
-    timestamp: datetime
-    kind: str
-    content: str
-
-
-@dataclass
-class _RecallEvent:
-    """One result returned by recall(); used by the trace bridge for ACCESS scoring."""
-
-    file_path: str
-    query: str
-    timestamp: datetime
-    trust: str = ""
-    score: float = 0.0
-    phase: str = "manifest"  # "manifest" (first call) or "fetch" (follow-up by index)
-
-
-@dataclass
-class _RecallCandidateEvent:
-    """The full ranked candidate set considered for a single ``recall()`` call.
-
-    Where ``_RecallEvent`` records only the entries the agent saw,
-    ``_RecallCandidateEvent`` captures *everything* that scored — what
-    each backend ranked at each position, and which made it through
-    fusion. The trace bridge writes these to ``recall_candidates.jsonl``
-    so later debugging can answer "why did the agent miss file X?"
-    """
-
-    timestamp: datetime
-    query: str
-    namespace: str | None
-    k: int
-    candidates: list[dict[str, Any]]  # [{file_path, source, rank, score, returned}]
-
-
 # Cap non-returned per-backend candidates persisted per call. Returned paths are
 # always kept so the JSONL mirrors what was actually shown to the agent.
 _CANDIDATE_CAP_PER_SOURCE = 10
-
-
-@dataclass
-class _TraceEvent:
-    """One agent-annotated trace event. Feeds session summary + reflection."""
-
-    timestamp: datetime
-    event: str
-    reason: str = ""
-    detail: str = ""
-
-
-@dataclass(frozen=True)
-class MemorySessionSnapshot:
-    """Stable read model for trace-bridge/checkpoint consumers."""
-
-    content_root: Path
-    content_prefix: str
-    session_id: str
-    session_dir_rel: str
-    task: str | None
-    session_summary: str
-    session_reflection: str
-    buffered_records: list[_BufferedRecord]
-    recall_events: list[_RecallEvent]
-    recall_candidate_events: list[_RecallCandidateEvent]
-    trace_events: list[_TraceEvent]
-    # Plan 3 (K-line tagging): the running configuration state at end-of-session.
-    # ``tool_sequence`` is the last-N tool ring buffer; ``active_namespaces``
-    # is the union of namespaces this session recalled from; ``plan_phase``
-    # is the active workspace plan's current phase title (or None). The
-    # trace bridge composes these into a per-row config field on
-    # ACCESS.jsonl entries — recall rows additionally pull topic_tags
-    # from each recall event's query so per-event topic proximity is
-    # preserved.
-    tool_sequence: tuple[str, ...] = ()
-    active_namespaces: tuple[str, ...] = ()
-    plan_phase: str | None = None
 
 
 # Soft per-need character budgets for `memory: context` by tier.

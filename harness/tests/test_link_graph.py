@@ -23,11 +23,8 @@ from harness._engram_fs.link_graph import (
     co_retrieval_density,
     dependency_health,
     derive_co_retrieval_edges,
-    get_one_hop_neighbors,
     group_edges_by_namespace,
     links_path_for_namespace,
-    load_all_edges,
-    prune_low_score_edges,
     read_edges,
 )
 from harness.engram_memory import EngramMemory

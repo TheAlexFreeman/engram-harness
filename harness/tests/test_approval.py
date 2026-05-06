@@ -28,10 +28,12 @@ import json
 
 import harness.tools as tools_mod
 from harness.safety.approval import (
+    HIGH_BLAST_RADIUS_TOOLS,
     ApprovalDecision,
     ApprovalRequest,
     CLIApprovalChannel,
     WebhookApprovalChannel,
+    approval_gates_for_presets,
     build_channel_from_spec,
     check_approval,
     set_approval_channel,
@@ -228,6 +230,19 @@ def test_check_approval_audit_callback_fires():
     assert name == "demo"
     assert dec.approved is True
     assert req.tool_args == {"a": 1}
+
+
+def test_approval_high_risk_preset_expands_with_explicit_tools():
+    gated = approval_gates_for_presets(["high-risk"], explicit_tools=["custom_tool"])
+    assert "custom_tool" in gated
+    assert HIGH_BLAST_RADIUS_TOOLS <= set(gated)
+
+
+def test_approval_unknown_preset_raises():
+    import pytest
+
+    with pytest.raises(ValueError, match="unknown approval preset"):
+        approval_gates_for_presets(["surprise"])
 
 
 # ---------------------------------------------------------------------------

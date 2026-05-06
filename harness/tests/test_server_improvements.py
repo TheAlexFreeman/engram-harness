@@ -84,6 +84,43 @@ def test_full_tool_profile_rejected_without_opt_in(tmp_path, monkeypatch):
     assert resp.status_code == 403
 
 
+def test_session_quota_rejects_when_active_limit_reached(monkeypatch):
+    srv = _import_server()
+    from fastapi import HTTPException
+
+    class _FakeSession:
+        status = "running"
+
+    fake_id = "quota_running"
+    monkeypatch.setattr(srv, "_MAX_ACTIVE_SESSIONS", 1)
+    with srv._sessions_lock:
+        srv._sessions[fake_id] = _FakeSession()  # type: ignore[assignment]
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            srv._enforce_session_quota()
+        assert exc_info.value.status_code == 429
+    finally:
+        with srv._sessions_lock:
+            srv._sessions.pop(fake_id, None)
+
+
+def test_session_quota_ignores_terminal_sessions(monkeypatch):
+    srv = _import_server()
+
+    class _FakeSession:
+        status = "completed"
+
+    fake_id = "quota_completed"
+    monkeypatch.setattr(srv, "_MAX_ACTIVE_SESSIONS", 1)
+    with srv._sessions_lock:
+        srv._sessions[fake_id] = _FakeSession()  # type: ignore[assignment]
+    try:
+        srv._enforce_session_quota()
+    finally:
+        with srv._sessions_lock:
+            srv._sessions.pop(fake_id, None)
+
+
 def test_non_loopback_serve_requires_workspace_root_and_auth(monkeypatch):
     srv = _import_server()
 

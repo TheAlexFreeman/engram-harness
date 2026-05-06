@@ -23,7 +23,6 @@ import logging
 import os
 import re
 from collections import defaultdict
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -42,6 +41,21 @@ from harness.session_artifacts import (
     recall_events_section,
     subagent_runs_section,
     trace_events_section,
+)
+from harness.trace_bridge_parts.types import (
+    AccessObservation as _AccessObservation,
+)
+from harness.trace_bridge_parts.types import (
+    SessionStats as _SessionStats,
+)
+from harness.trace_bridge_parts.types import (
+    SubagentStats as _SubagentStats,
+)
+from harness.trace_bridge_parts.types import (
+    ToolCallRecord as _ToolCall,
+)
+from harness.trace_bridge_parts.types import (
+    TraceBridgeResult,
 )
 
 _log = logging.getLogger(__name__)
@@ -63,92 +77,6 @@ _AGENT_FM = {
     "trust": "medium",
     "tool": "harness",
 }
-
-
-@dataclass
-class _ToolCall:
-    turn: int
-    seq: int
-    name: str
-    args: dict[str, Any]
-    timestamp: str
-    is_error: bool = False
-    duration_ms: int | None = None
-    content_preview: str = ""
-
-
-@dataclass
-class _SubagentStats:
-    """Per-subagent aggregate stats, derived from the parent's
-    ``subagent_run`` event plus (optionally) the subagent's own JSONL trace.
-
-    Populated by the trace bridge after PR 1 lands a per-spawn trace file
-    and a parent ``subagent_run`` event with ``seq``, ``task``, and
-    ``trace_path``. Used for the summary "Subagent runs" section and the
-    reflection prompt's delegation-quality nudges.
-    """
-
-    seq: int = 0
-    task: str = ""
-    depth: int = 1
-    turns: int = 0
-    tool_call_count: int = 0
-    error_count: int = 0
-    cost_usd: float = 0.0
-    input_tokens: int = 0
-    output_tokens: int = 0
-    max_turns_reached: bool = False
-    by_tool: dict[str, int] = field(default_factory=dict)
-
-
-@dataclass
-class _SessionStats:
-    task: str = ""
-    turns: int = 0
-    end_reason: str | None = None
-    tool_call_count: int = 0
-    error_count: int = 0
-    total_input_tokens: int = 0
-    total_output_tokens: int = 0
-    total_cost_usd: float = 0.0
-    by_tool: dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    error_tools: dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    # ISO date string derived from the first trace event we see (session_start
-    # if available, else the earliest event). Used for ACCESS rows so reruns
-    # on a later day don't collide with the (file, session_id, date) dedupe.
-    session_date: str = ""
-    # turn number → total cost for that turn (from "usage" events)
-    turn_costs: dict[int, float] = field(default_factory=dict)
-    pattern_diagnostics: list[dict[str, Any]] = field(default_factory=list)
-    subagent_runs: list[_SubagentStats] = field(default_factory=list)
-
-
-@dataclass
-class TraceBridgeResult:
-    """Summary returned to callers — useful for tests and CLI reporting."""
-
-    session_dir: Path
-    summary_path: Path
-    reflection_path: Path
-    spans_path: Path
-    access_entries: int
-    commit_sha: str | None
-    artifacts: list[str]
-    recall_candidates_path: Path | None = None
-    link_paths: list[Path] = field(default_factory=list)
-
-
-@dataclass
-class _AccessObservation:
-    namespace: str
-    file: str
-    helpfulness: float
-    note: str
-    # Plan 3 (K-line tagging): the session's ConfigurationVector at the
-    # time of the event, serialised to a JSON-safe dict. Optional —
-    # callers that don't compute one (or sessions whose vectors are
-    # empty) get no ``config`` field on the resulting ACCESS row.
-    config: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

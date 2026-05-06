@@ -21,7 +21,7 @@ from harness.config import (
     trace_to_engram_enabled,
 )
 from harness.stream import NullStreamSink, StderrStreamPrinter
-from harness.trace import CompositeTracer, Tracer
+from harness.trace import CompositeTracer, NullTraceSink, Tracer
 
 
 def _minimal_namespace(**kwargs) -> argparse.Namespace:
@@ -43,6 +43,9 @@ def _minimal_namespace(**kwargs) -> argparse.Namespace:
         trace_live=True,
         trace_to_engram=None,
         tool_profile="full",
+        readonly_process=False,
+        approval_presets=None,
+        approval_gated_tools=None,
         grok_include=None,
         grok_encrypted_reasoning=False,
     )
@@ -72,6 +75,7 @@ def test_config_defaults(tmp_path):
     assert config.stream_max_block_chars == 4000
     assert config.trace_live is True
     assert config.trace_to_engram is None
+    assert config.readonly_process is False
     assert config.grok_include == []
     assert config.grok_encrypted_reasoning is False
 
@@ -493,6 +497,26 @@ def test_build_session_read_only_engram_uses_local_trace_path(
     assert trace_to_engram_enabled(config, components.engram_memory) is False
 
 
+def test_build_session_readonly_process_file_memory_writes_no_files(tmp_path):
+    config = SessionConfig(
+        workspace=tmp_path,
+        memory_backend="file",
+        tool_profile=ToolProfile.READ_ONLY,
+        readonly_process=True,
+        trace_live=False,
+        stream=False,
+    )
+    with patch("harness.config._build_mode") as mock_mode:
+        mock_mode.return_value = MagicMock()
+        components = build_session(config, tools={})
+
+    assert isinstance(components.tracer, NullTraceSink)
+    assert components.memory.__class__.__name__ == "NoopMemory"
+    assert not (tmp_path / "progress.md").exists()
+    assert not (tmp_path / "workspace").exists()
+    assert not (tmp_path / "traces").exists()
+
+
 # ---------------------------------------------------------------------------
 # ToolProfile
 # ---------------------------------------------------------------------------
@@ -530,6 +554,22 @@ def test_config_from_args_tool_profile_read_only():
     ns = _minimal_namespace(tool_profile="read_only")
     config = config_from_args(ns)
     assert config.tool_profile is ToolProfile.READ_ONLY
+
+
+def test_config_from_args_readonly_process():
+    ns = _minimal_namespace(readonly_process=True)
+    config = config_from_args(ns)
+    assert config.readonly_process is True
+
+
+def test_config_from_args_approval_presets_and_gates():
+    ns = _minimal_namespace(
+        approval_presets=["high-risk"],
+        approval_gated_tools=["custom_tool"],
+    )
+    config = config_from_args(ns)
+    assert config.approval_presets == ["high-risk"]
+    assert config.approval_gated_tools == ["custom_tool"]
 
 
 def test_config_from_args_tool_profile_no_shell():

@@ -638,9 +638,7 @@ def test_kline_boost_disabled_via_env(engram_repo: Path, monkeypatch) -> None:
     assert isinstance(results, list)
 
 
-def test_kline_boost_promotes_contextually_matching_file(
-    engram_repo: Path, monkeypatch
-) -> None:
+def test_kline_boost_promotes_contextually_matching_file(engram_repo: Path, monkeypatch) -> None:
     """With matching ACCESS history, recall ranks the contextually similar
     file higher than the unrelated one with the same content match."""
     # Force similar BM25 evidence for both files, so the K-line boost is
@@ -659,6 +657,7 @@ def test_kline_boost_promotes_contextually_matching_file(
     # the upcoming session's recall.
     access_path = knowledge / "ACCESS.jsonl"
     import json
+
     rows = [
         {
             "file": "memory/knowledge/ctx-match.md",
@@ -673,9 +672,7 @@ def test_kline_boost_promotes_contextually_matching_file(
             },
         },
     ]
-    access_path.write_text(
-        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
-    )
+    access_path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
 
     # Disable the helpfulness rerank so only the K-line boost reorders.
     monkeypatch.setenv("HARNESS_HELPFULNESS_RERANK", "0")

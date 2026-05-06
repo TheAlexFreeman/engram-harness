@@ -11,6 +11,7 @@ from harness.cmd_consolidate import main as _consolidate_main
 from harness.cmd_decay import main as _decay_main
 from harness.cmd_drift import main as _drift_main
 from harness.cmd_eval import main as _eval_main
+from harness.cmd_optimize import main as _optimize_main
 from harness.cmd_recall_debug import main as _recall_debug_main
 from harness.cmd_recall_eval import main as _recall_eval_main
 from harness.cmd_replay import main as _replay_main
@@ -367,6 +368,19 @@ def _parse_args() -> argparse.Namespace:
         help=("Webhook poll deadline before falling back to denial. Default 300 (5 minutes)."),
     )
     parser.add_argument(
+        "--approval-preset",
+        action="append",
+        default=None,
+        dest="approval_presets",
+        choices=["none", "high-risk"],
+        metavar="PRESET",
+        help=(
+            "Gate a built-in preset when an approval channel is active. "
+            "'high-risk' covers shell execution, broad git mutation, delete/move/write, "
+            "and memory supersession. Repeatable; defaults to no preset."
+        ),
+    )
+    parser.add_argument(
         "--approval-gate",
         action="append",
         default=None,
@@ -482,6 +496,15 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--readonly-process",
+        action="store_true",
+        help=(
+            "Stronger read-only mode for reviews/plans: avoid harness-owned local writes "
+            "(FileMemory progress.md, JSONL traces, workspace scaffolding, trace bridge). "
+            "Pair with --tool-profile=read_only for a process-level dry run."
+        ),
+    )
+    parser.add_argument(
         "--role",
         choices=["chat", "plan", "research", "build", "infer"],
         default=None,
@@ -567,6 +590,10 @@ def main() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] == "recall-eval":
         _recall_eval_main()
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "optimize":
+        _optimize_main()
         return
 
     if len(sys.argv) > 1 and sys.argv[1] == "replay":

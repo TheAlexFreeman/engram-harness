@@ -20,10 +20,10 @@ from __future__ import annotations
 from typing import Any
 
 from harness.compaction import (
+    _DEAD_ENDS_BANNER,
     COMPACTED_PLACEHOLDER,
     DEFAULT_MAX_DEAD_ENDS,
     FULL_COMPACTED_BANNER,
-    _DEAD_ENDS_BANNER,
     _find_tool_pairs,
     _format_dead_end_line,
     _has_full_compaction_summary,
@@ -807,7 +807,7 @@ class _DualReplyMode:
     def __init__(
         self,
         success_text: str = "- did A\n- did B",
-        dead_ends_text: str = "DEAD END: read_file({\"path\":\"missing.py\"}) → No such file",
+        dead_ends_text: str = 'DEAD END: read_file({"path":"missing.py"}) → No such file',
     ) -> None:
         self.success_text = success_text
         self.dead_ends_text = dead_ends_text
@@ -933,9 +933,7 @@ def test_layer2_emits_dead_ends_block_when_enough_failures():
     # Both reflect calls happened (one for successes, one for failures).
     assert len(mode.reflect_calls) == 2
     # The second prompt is the failure prompt.
-    failure_prompts = [
-        p for _, p in mode.reflect_calls if "preserving a record of failed" in p
-    ]
+    failure_prompts = [p for _, p in mode.reflect_calls if "preserving a record of failed" in p]
     assert len(failure_prompts) == 1
     # A dead-ends message exists in the kept conversation.
     dead_ends = [m for m in msgs if _is_dead_ends_message(m)]
@@ -997,9 +995,9 @@ def test_layer2_only_failures_skips_main_summary_call():
     assert "preserving a record of failed" in mode.reflect_calls[0][1]
     # No "[harness compaction summary]" appended — only the dead-ends block.
     summary_msgs = [
-        m for m in msgs
-        if isinstance(m.get("content"), str)
-        and "[harness compaction summary]" in m["content"]
+        m
+        for m in msgs
+        if isinstance(m.get("content"), str) and "[harness compaction summary]" in m["content"]
     ]
     assert summary_msgs == []
     dead_ends = [m for m in msgs if _is_dead_ends_message(m)]
@@ -1059,9 +1057,7 @@ def test_layer3_preserves_dead_ends_block_through_full_compaction():
     }
     msgs.insert(3, dead_ends)
 
-    mode = _SummarizingMode(
-        summary_text="## Goal\nFix bug.\n## Progress\nRead 5 files.\n"
-    )
+    mode = _SummarizingMode(summary_text="## Goal\nFix bug.\n## Progress\nRead 5 files.\n")
     tracer = _RecordingTracer()
     result = maybe_full_compact(
         msgs,
@@ -1080,7 +1076,8 @@ def test_layer3_preserves_dead_ends_block_through_full_compaction():
     assert "DEAD END: read_file" in surviving_dead_ends[0]["content"]
     # And it should be located right after the L3 summary.
     summary_indices = [
-        i for i, m in enumerate(msgs)
+        i
+        for i, m in enumerate(msgs)
         if isinstance(m.get("content"), str) and FULL_COMPACTED_BANNER in m["content"]
     ]
     assert len(summary_indices) == 1

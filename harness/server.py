@@ -145,6 +145,11 @@ _CORS_ORIGINS: list[str] = [
 _API_TOKEN = os.environ.get("HARNESS_API_TOKEN", "").strip()
 _ALLOW_UNAUTH_LOCAL = os.environ.get("HARNESS_ALLOW_UNAUTH_LOCAL") == "1"
 _ALLOW_FULL_TOOLS = os.environ.get("HARNESS_SERVER_ALLOW_FULL_TOOLS") == "1"
+_MAX_ACTIVE_SESSIONS = int(os.environ.get("HARNESS_SERVER_MAX_ACTIVE_SESSIONS", "16"))
+_SSE_QUEUE_MAXSIZE = int(os.environ.get("HARNESS_SERVER_SSE_QUEUE_MAXSIZE", "1000"))
+_INTERACTIVE_IDLE_TIMEOUT_SECS = float(
+    os.environ.get("HARNESS_SERVER_INTERACTIVE_IDLE_TIMEOUT_SECS", "3600")
+)
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 # Workspace validation: optional root boundary from env.
@@ -282,6 +287,25 @@ def _request_is_authorized(request: Request) -> bool:
     if scheme.lower() != "bearer" or not value:
         return False
     return hmac.compare_digest(value, _API_TOKEN)
+
+
+def _active_session_count() -> int:
+    with _sessions_lock:
+        return sum(1 for s in _sessions.values() if s.status in {"running", "idle", "paused"})
+
+
+def _enforce_session_quota() -> None:
+    if _MAX_ACTIVE_SESSIONS <= 0:
+        return
+    active = _active_session_count()
+    if active >= _MAX_ACTIVE_SESSIONS:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"active session quota exceeded ({active}/{_MAX_ACTIVE_SESSIONS}); "
+                "increase HARNESS_SERVER_MAX_ACTIVE_SESSIONS to allow more"
+            ),
+        )
 
 
 def _get_store() -> SessionStore | None:
@@ -456,7 +480,7 @@ def _run_interactive_session(session: ManagedSession) -> None:
         )
         session.status = "idle"
 
-        IDLE_TIMEOUT = 3600.0
+        IDLE_TIMEOUT = _INTERACTIVE_IDLE_TIMEOUT_SECS
         idle_since = _monotonic()
 
         while not session.stop_event.is_set() and not result.stopped_by_budget:
@@ -879,6 +903,7 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     from harness.tool_registry import build_tools
     from harness.tools.fs import WorkspaceScope
 
+    _enforce_session_quota()
     session_id = f"ses_{uuid.uuid4().hex[:8]}"
     workspace = _validate_workspace(req.workspace)
     memory_repo = _validate_memory_repo(req.memory_repo) if req.memory_repo else None
@@ -915,7 +940,7 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     )
 
     loop = asyncio.get_running_loop()
-    queue: asyncio.Queue[SSEEvent] = asyncio.Queue(maxsize=1000)
+    queue: asyncio.Queue[SSEEvent] = asyncio.Queue(maxsize=max(_SSE_QUEUE_MAXSIZE, 1))
     sse_trace = SSETraceSink(queue, loop=loop)
     sse_stream = SSEStreamSink(queue, loop=loop)
 

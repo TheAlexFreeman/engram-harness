@@ -1,0 +1,8 @@
+{
+  "id": "trace-data-pipeline-superseded-exclusion",
+  "query": "legacy airflow ingestion pipeline migration context but use current design",
+  "k": 5,
+  "expected_files": ["memory/knowledge/data/ingestion-pipeline.md"],
+  "excluded_files": ["memory/knowledge/data/old-pipeline-airflow.md"],
+  "tags": ["from-trace", "data", "superseded", "exclusion"]
+}

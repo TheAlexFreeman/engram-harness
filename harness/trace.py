@@ -193,6 +193,22 @@ class ConsoleTracePrinter:
         pass
 
 
+class NullTraceSink:
+    """Trace sink that intentionally drops events without touching disk."""
+
+    def event(self, kind: str, **data: Any) -> None:  # noqa: ARG002
+        return None
+
+    def close(self) -> None:
+        return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+
 class CompositeTracer:
     """Forward ``event`` / ``close`` to each child in order (e.g. JSONL then stderr)."""
 

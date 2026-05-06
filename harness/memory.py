@@ -80,3 +80,30 @@ class FileMemory:
     def _append(self, text: str) -> None:
         with self.path.open("a", encoding="utf-8") as f:
             f.write(text)
+
+
+class NoopMemory:
+    """Memory backend for process-level read-only sessions.
+
+    Unlike ``FileMemory``, this backend never creates or appends to files. It
+    keeps the loop contract intact for review/dry-run sessions where the tool
+    registry is read-only and the harness itself should avoid local writes too.
+    """
+
+    def start_session(self, task: str) -> str:  # noqa: ARG002
+        return ""
+
+    def recall(self, query: str, k: int = 5) -> list[Memory]:  # noqa: ARG002
+        return []
+
+    def record(self, content: str, kind: str = "note") -> None:  # noqa: ARG002
+        return None
+
+    def end_session(
+        self,
+        summary: str,  # noqa: ARG002
+        *,
+        skip_commit: bool = False,  # noqa: ARG002
+        defer_artifacts: bool = False,  # noqa: ARG002
+    ) -> None:
+        return None

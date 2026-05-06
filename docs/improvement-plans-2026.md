@@ -28,10 +28,10 @@ sequencing is the recommendation that matters most.
 provenance/versioning layer, the integration seam (PRs #15–#19) between
 the harness loop, the workspace, and Engram memory.
 
-**Status as of 2026-05-05.** Of the contemporary-practice gaps this
+**Status as of 2026-05-05 evening.** Of the contemporary-practice gaps this
 document identified at the start of April 2026, the following have shipped:
 A1 (hybrid retrieval + K-line contextual boost extension), A2 (bi-temporal facts + invalidation), A3 (link
-graph write path), A4 (sleep-time consolidate), A5 (promotion/decay lifecycle), A6
+graph write path plus read-side neighbor widening and `memory_link_audit`), A4 (sleep-time consolidate), A5 (promotion/decay lifecycle), A6
 (recall observability), B1 (subagents), B2 (tiered context compaction —
 all three layers), B3 (code-as-action sandboxed Python tool), B4
 (durable interrupt + resume with cross-machine relocate), B5 (result-aware loop detection), C1 (OTel
@@ -39,13 +39,41 @@ GenAI conformance), C2 (eval harness skeleton), C3 (replay mode), C4 (drift
 detection), D1 (two-layer prompt-injection defense), D2 (human-in-the-loop
 approval), F1–F5 (roles wired in prompt/CLI + guard + inheritance + observability + inference v1).
 System-prompt template extraction
-(system-prompt-improvements-plan.md) also shipped end-to-end. 23 of 25
-themes complete. See the new `docs/relevance-realization-plans.md` (2026-05-05)
-for the next-phase focus on recall evals, trust decomposition, K-line, and failure preservation.
+(system-prompt-improvements-plan.md) also shipped end-to-end. The follow-on
+relevance-realization track has now shipped Plan 1 (recall eval suite), Plan 2
+(trust score decomposition), Plan 3 (K-line retrieval tagging), and Plan 4
+(failure preservation in compaction).
 
 **What's left** (open at the time of this update): E1 (DSPy/GEPA prompt
-optimization), and A3 read-side widening (`include_neighbors` + `memory_link_audit`).
-Per-theme detail follows. (Theme F v1 is shipped; remaining F5 mid-session/plan-phase binding is tracked under open items.)
+optimization) and hardening work around read-only semantics, approval presets,
+CI coverage, server policy, and module splits. Per-theme detail follows. (Theme
+F v1 is shipped; remaining F5 mid-session/plan-phase binding is tracked under
+open items.)
+
+### Current State
+
+- **Shipped:** A1-A6, B1-B5, C1-C4, D1-D2, F1-F5 v1, A3 read-side widening,
+  recall evals, trust decomposition, K-line retrieval tagging, and failure
+  preservation.
+- **Partially shipped / needs hardening:** strict process-level read-only mode,
+  approval presets, CI coverage for API/integration surfaces, and operator
+  documentation.
+- **Next recommended work:** E1 prompt optimization, monolith package splits,
+  recall-eval as a quality gate, server hardening, and contributor DX cleanup.
+
+### Quality Gates
+
+For local parity with the current harness CI, run:
+
+```bash
+python -m ruff check harness conftest.py
+python -m ruff format --check harness conftest.py
+python -m pytest harness/tests/ -v
+harness recall-eval --really-run
+```
+
+Use `pip install -e ".[dev,api]"` before API/server tests and
+`python -m pytest harness/tests/ --integration -v` for the integration suite.
 
 ---
 

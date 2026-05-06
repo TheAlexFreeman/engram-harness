@@ -50,44 +50,37 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
+
+from harness.workspace_parts import constants as _constants
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-_SUBDIRS = (
-    "notes",
-    "projects",
-    "projects/_archive",
-    "scratch",
-    "archive",
-)
-
-# Initial contents written when CURRENT.md is first created.
-_CURRENT_INITIAL = """## Threads
-
-## Closed
-
-## Notes
-"""
-
-_GITIGNORE_CONTENTS = "scratch/\n"
-
-# How long a closed thread stays in the Closed section of CURRENT.md
-# before being moved to archive/threads.md.
-_CLOSED_THREAD_RETENTION = timedelta(days=7)
-
-# Conventional thread statuses. Not enforced — but these are the values
-# rendered in the prompt and the ones the trace bridge understands.
-_CONVENTIONAL_STATUSES = ("active", "blocked", "paused")
-
-# Section headers we parse in CURRENT.md.
-_SECTION_THREADS = "Threads"
-_SECTION_CLOSED = "Closed"
-_SECTION_NOTES = "Notes"
+# Constants live in ``harness.workspace_parts.constants``; aliases are kept here
+# so the rest of this compatibility module remains unchanged during the split.
+_SUBDIRS = _constants.SUBDIRS
+_CURRENT_INITIAL = _constants.CURRENT_INITIAL
+_GITIGNORE_CONTENTS = _constants.GITIGNORE_CONTENTS
+_CLOSED_THREAD_RETENTION = _constants.CLOSED_THREAD_RETENTION
+_SECTION_THREADS = _constants.SECTION_THREADS
+_SECTION_CLOSED = _constants.SECTION_CLOSED
+_SECTION_NOTES = _constants.SECTION_NOTES
+PLAN_STATUS_ACTIVE = _constants.PLAN_STATUS_ACTIVE
+PLAN_STATUS_COMPLETED = _constants.PLAN_STATUS_COMPLETED
+PLAN_STATUS_AWAITING_APPROVAL = _constants.PLAN_STATUS_AWAITING_APPROVAL
+_PLAN_FAILURE_WARN_THRESHOLD = _constants.PLAN_FAILURE_WARN_THRESHOLD
+_PC_PREFIX_GREP = _constants.PC_PREFIX_GREP
+_PC_PREFIX_TEST = _constants.PC_PREFIX_TEST
+_PC_TEST_TIMEOUT_SECS = _constants.PC_TEST_TIMEOUT_SECS
+_APPROVAL_ID_PREFIX = _constants.APPROVAL_ID_PREFIX
+_WORKSPACE_LOCK_NAME = _constants.WORKSPACE_LOCK_NAME
+_WORKSPACE_LOCK_TIMEOUT_SECONDS = _constants.WORKSPACE_LOCK_TIMEOUT_SECONDS
+_WORKSPACE_LOCK_POLL_INTERVAL_SECONDS = _constants.WORKSPACE_LOCK_POLL_INTERVAL_SECONDS
+_WORKSPACE_LOCK_STALE_AGE_SECONDS = _constants.WORKSPACE_LOCK_STALE_AGE_SECONDS
 
 # Heading regex — thread entries look like
 #   ### <name> [status] (project: <project>)
@@ -108,25 +101,18 @@ _CLOSED_HEADING_RE = re.compile(
 _NOTE_LINE_RE = re.compile(r"^\-\s+`(?P<ts>[^`]+)`\s+(?P<body>.*)$")
 
 # Plan-related constants.
-PLAN_STATUS_ACTIVE = "active"
-PLAN_STATUS_COMPLETED = "completed"
-PLAN_STATUS_PAUSED = "paused"
-PLAN_STATUS_AWAITING_APPROVAL = "awaiting_approval"
-
 # After this many failures on the same phase the briefing nudges the
 # agent to revise the plan rather than keep retrying.
-_PLAN_FAILURE_WARN_THRESHOLD = 3
+# _PLAN_FAILURE_WARN_THRESHOLD imported above.
 
 # Postcondition prefixes the harness knows how to verify automatically.
 # Anything without one of these prefixes is a manual check — reported
 # verbatim in the briefing but never automatically marked pass/fail.
-_PC_PREFIX_GREP = "grep:"
-_PC_PREFIX_TEST = "test:"
+# Postcondition prefixes imported above.
 
 # Soft cap on subprocess test commands so a misconfigured postcondition
 # can't hang the session.
-_PC_TEST_TIMEOUT_SECS = 120
-_APPROVAL_ID_PREFIX = "apr_"
+# Test timeout and approval-id prefix imported above.
 
 # ---------------------------------------------------------------------------
 # Workspace write lock
@@ -140,10 +126,7 @@ _APPROVAL_ID_PREFIX = "apr_"
 # Python thread so helpers that compose (open_thread → write_current,
 # plan_advance → _save_run_state) don't self-deadlock.
 
-_WORKSPACE_LOCK_NAME = ".harness-write.lock"
-_WORKSPACE_LOCK_TIMEOUT_SECONDS = 5.0
-_WORKSPACE_LOCK_POLL_INTERVAL_SECONDS = 0.05
-_WORKSPACE_LOCK_STALE_AGE_SECONDS = 30.0
+# Lock constants imported above.
 
 
 class WorkspaceWriteError(RuntimeError):

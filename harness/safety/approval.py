@@ -33,6 +33,20 @@ import time
 from dataclasses import dataclass, field
 from typing import IO, Any, Iterable, Protocol
 
+HIGH_BLAST_RADIUS_TOOLS: frozenset[str] = frozenset(
+    {
+        "bash",
+        "run_script",
+        "python_eval",
+        "git",
+        "git_commit",
+        "delete_path",
+        "move_path",
+        "write_file",
+        "memory_supersede",
+    }
+)
+
 
 @dataclass
 class ApprovalRequest:
@@ -267,6 +281,25 @@ def _default_http_request(
 _APPROVAL_CHANNEL: ApprovalChannel | None = None
 _GATED_TOOL_NAMES: frozenset[str] = frozenset()
 _ON_APPROVAL_CALLBACK: Any | None = None
+
+
+def approval_gates_for_presets(
+    presets: Iterable[str] = (),
+    *,
+    explicit_tools: Iterable[str] = (),
+) -> list[str]:
+    """Expand approval preset names and explicit tool names into stable gates."""
+
+    gated = {str(t).strip() for t in explicit_tools if str(t).strip()}
+    for raw in presets:
+        preset = str(raw or "").strip().lower()
+        if preset in ("", "none", "off"):
+            continue
+        if preset in ("high-risk", "high_blast_radius", "high-blast-radius", "default"):
+            gated.update(HIGH_BLAST_RADIUS_TOOLS)
+            continue
+        raise ValueError(f"unknown approval preset {raw!r}; expected 'high-risk' or 'none'")
+    return sorted(gated)
 
 
 def set_approval_channel(
