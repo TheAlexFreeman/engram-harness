@@ -40,13 +40,9 @@ Design points (see docs/workspace-affordances-draft.md):
 
 from __future__ import annotations
 
-import errno
 import json
-import os
 import re
 import subprocess
-import threading
-import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -55,6 +51,26 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from harness.workspace_parts import constants as _constants
+
+# Lock primitives extracted to harness.workspace_parts.lock in P2.1.3.
+# Re-imported under their pre-split private aliases so the rest of this
+# module (and any external caller that imported them from here) keeps
+# working unchanged.
+from harness.workspace_parts.lock import (  # noqa: F401  (re-exported for back-compat)
+    WorkspaceWriteError,
+)
+from harness.workspace_parts.lock import (
+    WorkspaceWriteLock as _WorkspaceWriteLock,
+)
+from harness.workspace_parts.lock import (  # noqa: F401
+    is_pid_alive as _is_pid_alive,
+)
+from harness.workspace_parts.lock import (  # noqa: F401
+    read_lock_pid as _read_lock_pid,
+)
+from harness.workspace_parts.lock import (  # noqa: F401
+    try_remove_stale_lock as _try_remove_stale_lock,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -115,186 +131,10 @@ _NOTE_LINE_RE = re.compile(r"^\-\s+`(?P<ts>[^`]+)`\s+(?P<body>.*)$")
 # Test timeout and approval-id prefix imported above.
 
 # ---------------------------------------------------------------------------
-# Workspace write lock
+# Workspace write lock — extracted to harness.workspace_parts.lock (P2.1.3).
+# Re-imported above as ``_WorkspaceWriteLock``, ``WorkspaceWriteError`` so
+# every internal call site continues to work unchanged.
 # ---------------------------------------------------------------------------
-#
-# Two harness invocations against the same workspace must not silently
-# stomp each other's CURRENT.md threads or plan run-state. Mirrors the
-# pattern used by ``harness._engram_fs.git_repo.GitRepo.write_lock`` —
-# atomic ``os.O_CREAT|O_EXCL`` create with bounded poll/timeout, plus a
-# stale-lock recovery for crashed processes. Reentrant within a single
-# Python thread so helpers that compose (open_thread → write_current,
-# plan_advance → _save_run_state) don't self-deadlock.
-
-# Lock constants imported above.
-
-
-class WorkspaceWriteError(RuntimeError):
-    """Raised when a workspace write lock cannot be acquired in time."""
-
-
-def _is_pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Process exists but we may not have permission to signal it.
-        return True
-    except OSError as error:
-        if error.errno == errno.ESRCH:
-            return False
-        if getattr(error, "winerror", None) == 87:
-            return False
-        # Treat unknown errors as alive to avoid unsafe lock removal.
-        return True
-
-
-def _read_lock_pid(lock_path: Path) -> int | None:
-    try:
-        contents = lock_path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    for raw in contents.splitlines():
-        line = raw.strip()
-        if not line.lower().startswith("pid="):
-            continue
-        token = line.split("=", 1)[1].strip()
-        if not token:
-            return None
-        try:
-            pid = int(token)
-        except ValueError:
-            return None
-        return pid if pid > 0 else None
-    return None
-
-
-def _try_remove_stale_lock(lock_path: Path) -> bool:
-    """Remove the lock file if it's older than the stale threshold and
-    its owner PID is dead. Returns True if a stale lock was removed.
-    """
-    try:
-        mtime = lock_path.stat().st_mtime
-    except OSError:
-        return False
-    if (time.time() - mtime) <= _WORKSPACE_LOCK_STALE_AGE_SECONDS:
-        return False
-    pid = _read_lock_pid(lock_path)
-    if pid is not None and _is_pid_alive(pid):
-        return False
-    try:
-        lock_path.unlink()
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return False
-    return True
-
-
-class _WorkspaceWriteLock:
-    """Reentrant workspace write lock.
-
-    Within a single thread, repeated ``acquire()`` calls reuse the same
-    file lock (depth-counted). Across threads or processes, callers
-    serialize via the on-disk lock file at
-    ``<workspace>/.harness-write.lock``.
-    """
-
-    def __init__(self, lock_path: Path):
-        self._lock_path = lock_path
-        self._state_mutex = threading.Lock()
-        self._owner_tid: int | None = None
-        self._depth = 0
-
-    @contextmanager
-    def acquire(self, *, purpose: str = "write"):
-        tid = threading.get_ident()
-        with self._state_mutex:
-            if self._owner_tid == tid:
-                self._depth += 1
-                reentrant = True
-            else:
-                reentrant = False
-        if reentrant:
-            try:
-                yield
-            finally:
-                with self._state_mutex:
-                    self._depth -= 1
-            return
-
-        self._acquire_file_lock(purpose=purpose)
-        with self._state_mutex:
-            self._owner_tid = tid
-            self._depth = 1
-        try:
-            yield
-        finally:
-            with self._state_mutex:
-                self._depth -= 1
-                release = self._depth == 0
-                if release:
-                    self._owner_tid = None
-            if release:
-                self._release_file_lock()
-
-    def _acquire_file_lock(self, *, purpose: str) -> None:
-        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        deadline = time.monotonic() + _WORKSPACE_LOCK_TIMEOUT_SECONDS
-        payload = f"pid={os.getpid()}\npurpose={purpose}\nstarted_at={time.time()}\n"
-        while True:
-            try:
-                fd = os.open(str(self._lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except PermissionError:
-                # Windows: a freshly-unlinked lock file can sit in
-                # "delete pending" state briefly, so a racing acquirer
-                # gets PermissionError(13) instead of FileExistsError.
-                # Treat both as "lock currently held, retry."
-                if time.monotonic() >= deadline:
-                    raise WorkspaceWriteError(
-                        "Another process is writing to this workspace "
-                        "(lock file in delete-pending state). Retry."
-                    )
-                time.sleep(_WORKSPACE_LOCK_POLL_INTERVAL_SECONDS)
-                continue
-            except FileExistsError:
-                if _try_remove_stale_lock(self._lock_path):
-                    continue
-                if time.monotonic() >= deadline:
-                    owner = ""
-                    try:
-                        owner = self._lock_path.read_text(encoding="utf-8").strip()
-                    except OSError:
-                        pass
-                    suffix = f" Active writer: {owner}" if owner else ""
-                    raise WorkspaceWriteError(
-                        f"Another process is writing to this workspace. Wait and retry.{suffix}"
-                    )
-                time.sleep(_WORKSPACE_LOCK_POLL_INTERVAL_SECONDS)
-                continue
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    handle.write(payload)
-            except OSError:
-                # If we somehow couldn't write the payload, leave an
-                # empty lock file — stale-recovery will eventually
-                # reclaim it. Don't raise.
-                pass
-            return
-
-    def _release_file_lock(self) -> None:
-        try:
-            self._lock_path.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            # Best-effort: leave the lock file; stale recovery will
-            # handle it. Don't propagate.
-            pass
 
 
 # ---------------------------------------------------------------------------

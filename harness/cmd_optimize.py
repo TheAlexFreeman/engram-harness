@@ -12,7 +12,7 @@ from harness.eval.recall_runner import (
     load_recall_tasks,
     run_recall_eval,
 )
-from harness.optimize import builtin_prompt_variants, score_prompt_variants
+from harness.optimize import builtin_prompt_variants, dspy_available, score_prompt_variants
 
 
 def _print_scores(scores) -> None:
@@ -60,6 +60,12 @@ def main() -> None:
     if not args.really_run:
         print("=== harness optimize (dry-run) ===\n")
         print(f"Prompt variants: {len(variants)}")
+        dspy_status = (
+            "available — install only required for E1 v2 GEPA/MIPROv2 search"
+            if dspy_available()
+            else "not installed (install with: pip install -e '.[optimize]')"
+        )
+        print(f"DSPy / GEPA scaffold: {dspy_status}")
         print("Pass --really-run to execute the recall-eval metric gate.")
         _print_scores(score_prompt_variants(variants))
         return

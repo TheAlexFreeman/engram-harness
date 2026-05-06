@@ -30,6 +30,15 @@ class CreateSessionRequest(BaseModel):
     trace_to_engram: bool | None = None
     interactive: bool = False
     tool_profile: Literal["full", "no_shell", "read_only"] = "no_shell"
+    # F1-F5 + readonly-process surface, plumbed from the CLI via SessionConfig.
+    # ``role`` may be a known role slug ("chat", "plan", "research", "build")
+    # or "infer" to invoke the heuristic resolver. ``readonly_process`` makes
+    # the session leave no on-disk side effects (no trace bridge, NoopMemory,
+    # null tracer). ``approval_preset`` selects a built-in or file-loaded
+    # approval-channel gate (see HARNESS_APPROVAL_PRESET_FILE).
+    role: str | None = None
+    readonly_process: bool = False
+    approval_preset: str | None = None
 
 
 class CreateSessionResponse(BaseModel):

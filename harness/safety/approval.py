@@ -28,10 +28,12 @@ operator can override per session without touching tool source.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import IO, Any, Iterable, Protocol
+from pathlib import Path
+from typing import IO, Any, Iterable, Mapping, Protocol
 
 HIGH_BLAST_RADIUS_TOOLS: frozenset[str] = frozenset(
     {
@@ -46,6 +48,208 @@ HIGH_BLAST_RADIUS_TOOLS: frozenset[str] = frozenset(
         "memory_supersede",
     }
 )
+
+# Tools that mutate the workspace filesystem directly (not via shell or
+# subprocess wrappers). ``write_file`` is in HIGH_BLAST_RADIUS already
+# but listed here too so the read-only preset is a strict superset.
+_FS_MUTATING_TOOLS: frozenset[str] = frozenset(
+    {
+        "edit_file",
+        "write_file",
+        "append_file",
+        "mkdir",
+        "delete_path",
+        "move_path",
+        "copy_path",
+    }
+)
+
+# Tools that escape workspace boundaries through subprocess execution.
+# These can mutate state the harness has no other way to govern.
+_SHELL_TOOLS: frozenset[str] = frozenset(
+    {
+        "bash",
+        "run_script",
+        "python_eval",
+        "python_exec",
+    }
+)
+
+# Tools that perform git mutations.
+_GIT_MUTATING_TOOLS: frozenset[str] = frozenset(
+    {
+        "git",
+        "git_commit",
+    }
+)
+
+# Tools that talk to the network.
+_NETWORK_TOOLS: frozenset[str] = frozenset(
+    {
+        "web_fetch",
+        "web_search",
+    }
+)
+
+# Tools that mutate the harness-owned workspace surface (notes, plans,
+# threads). Not in HIGH_BLAST_RADIUS because they are scoped to the
+# workspace by construction, but operators may still want approval gates
+# for them on managed deployments.
+_WORK_MUTATING_TOOLS: frozenset[str] = frozenset(
+    {
+        "work_thread",
+        "work_jot",
+        "work_note",
+        "work_promote",
+        "work_scratch",
+        "work_project_create",
+        "work_project_goal",
+        "work_project_ask",
+        "work_project_resolve",
+        "work_project_archive",
+        "work_project_plan",
+    }
+)
+
+# Tools that mutate Engram-governed memory.
+_MEMORY_MUTATING_TOOLS: frozenset[str] = frozenset(
+    {
+        "memory_remember",
+        "memory_supersede",
+        "memory_link_audit",
+    }
+)
+
+# All mutating tools across every category — the union the ``read-only``
+# preset gates against. ``write_todos`` and ``update_todo`` mutate but
+# are scoped to the session; they're included so a paranoid operator
+# never sees a write the channel didn't authorize.
+_ALL_MUTATING_TOOLS: frozenset[str] = (
+    _FS_MUTATING_TOOLS
+    | _SHELL_TOOLS
+    | _GIT_MUTATING_TOOLS
+    | _WORK_MUTATING_TOOLS
+    | _MEMORY_MUTATING_TOOLS
+    | frozenset({"write_todos", "update_todo", "memory_trace", "pause_for_user"})
+)
+
+
+# Built-in preset table. Operators can override / extend via
+# ``HARNESS_APPROVAL_PRESET_FILE`` (see :func:`load_preset_file`).
+_BUILTIN_PRESETS: Mapping[str, frozenset[str]] = {
+    "default": HIGH_BLAST_RADIUS_TOOLS,
+    "high-risk": HIGH_BLAST_RADIUS_TOOLS,
+    "high_blast_radius": HIGH_BLAST_RADIUS_TOOLS,
+    "high-blast-radius": HIGH_BLAST_RADIUS_TOOLS,
+    "read-only": _ALL_MUTATING_TOOLS,
+    "read_only": _ALL_MUTATING_TOOLS,
+    "bash-only": _SHELL_TOOLS,
+    "bash_only": _SHELL_TOOLS,
+    "shell": _SHELL_TOOLS,
+    "paranoid": _ALL_MUTATING_TOOLS | _NETWORK_TOOLS,
+    "network-deny": _NETWORK_TOOLS,
+    "network_deny": _NETWORK_TOOLS,
+    "no-network": _NETWORK_TOOLS,
+}
+
+
+# File-loaded preset overlay — loaded once per process from
+# ``HARNESS_APPROVAL_PRESET_FILE`` on first use.
+_FILE_PRESETS: dict[str, frozenset[str]] | None = None
+_FILE_PRESETS_LOCK_KEY = object()  # placeholder; lookups are racy-tolerant
+
+
+def _normalize_preset_name(name: str) -> str:
+    """Lowercased, trimmed preset name; ``-`` and ``_`` are interchangeable."""
+    return name.strip().lower().replace("_", "-")
+
+
+def load_preset_file(path: Path | str) -> dict[str, frozenset[str]]:
+    """Parse a preset YAML / JSON file into ``{name: frozenset(tool_names)}``.
+
+    YAML format (``- bash``-style lists or flow-style):
+
+    .. code-block:: yaml
+
+       network-deny: [web_fetch, web_search]
+       paranoid:
+         - bash
+         - run_script
+         - delete_path
+
+    Names are normalized exactly like built-in presets — case-insensitive,
+    ``-`` / ``_`` interchangeable. Tool names are kept as-written.
+    Invalid file → :class:`ValueError`; missing file → empty dict so a
+    typo in ``HARNESS_APPROVAL_PRESET_FILE`` doesn't crash the server.
+    """
+    p = Path(path).expanduser()
+    if not p.exists():
+        return {}
+    raw = p.read_text(encoding="utf-8")
+    data: object
+    if p.suffix.lower() in (".yaml", ".yml"):
+        try:
+            import yaml  # type: ignore[import-untyped]
+        except ImportError as exc:  # pragma: no cover - PyYAML is in base deps
+            raise ValueError(f"PyYAML not available for parsing approval presets at {p}") from exc
+        data = yaml.safe_load(raw)
+    else:
+        data = json.loads(raw)
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError(f"approval-preset file at {p} must be a top-level mapping")
+    parsed: dict[str, frozenset[str]] = {}
+    for raw_name, raw_tools in data.items():
+        if not isinstance(raw_name, str):
+            raise ValueError(f"preset names must be strings (got {raw_name!r})")
+        if not isinstance(raw_tools, (list, tuple, set, frozenset)):
+            raise ValueError(f"preset {raw_name!r} must map to a list of tool names")
+        tools = {str(t).strip() for t in raw_tools if str(t).strip()}
+        parsed[_normalize_preset_name(raw_name)] = frozenset(tools)
+    return parsed
+
+
+def _file_presets() -> dict[str, frozenset[str]]:
+    """Lazily load file-defined presets from ``HARNESS_APPROVAL_PRESET_FILE``.
+
+    The cache is keyed on the env var value so a process that reloads
+    its environment (e.g. a long-running test runner that overrides the
+    var per-test) sees the new file without restarting.
+    """
+    global _FILE_PRESETS
+    raw = os.environ.get("HARNESS_APPROVAL_PRESET_FILE", "").strip()
+    if not raw:
+        _FILE_PRESETS = None
+        return {}
+    if _FILE_PRESETS is None or _FILE_PRESETS.get("__source__") != frozenset({raw}):
+        try:
+            loaded = load_preset_file(raw)
+        except (OSError, ValueError):
+            loaded = {}
+        loaded["__source__"] = frozenset({raw})
+        _FILE_PRESETS = loaded
+    return {k: v for k, v in (_FILE_PRESETS or {}).items() if k != "__source__"}
+
+
+def known_preset_names() -> list[str]:
+    """Return the resolved preset names (built-ins + file-loaded), normalized."""
+    names = set(_BUILTIN_PRESETS.keys())
+    names.update(_file_presets().keys())
+    return sorted(_normalize_preset_name(n) for n in names)
+
+
+def resolve_preset(name: str) -> frozenset[str] | None:
+    """Look up a preset; file-loaded entries override built-ins on conflict."""
+    norm = _normalize_preset_name(name)
+    if norm in ("", "none", "off"):
+        return frozenset()
+    file_loaded = _file_presets()
+    if norm in file_loaded:
+        return file_loaded[norm]
+    if norm in _BUILTIN_PRESETS:
+        return _BUILTIN_PRESETS[norm]
+    return None
 
 
 @dataclass
@@ -288,17 +492,31 @@ def approval_gates_for_presets(
     *,
     explicit_tools: Iterable[str] = (),
 ) -> list[str]:
-    """Expand approval preset names and explicit tool names into stable gates."""
+    """Expand approval preset names and explicit tool names into stable gates.
+
+    Built-in presets:
+
+    - ``default`` / ``high-risk`` — :data:`HIGH_BLAST_RADIUS_TOOLS`.
+    - ``read-only`` — every mutating tool.
+    - ``bash-only`` / ``shell`` — shell + python_exec / python_eval.
+    - ``paranoid`` — every mutation plus network calls.
+    - ``network-deny`` / ``no-network`` — ``web_fetch`` and ``web_search``.
+
+    Operators can override or add presets via a YAML / JSON file at the
+    path in ``HARNESS_APPROVAL_PRESET_FILE``; entries there take
+    precedence over built-ins of the same name.
+    """
 
     gated = {str(t).strip() for t in explicit_tools if str(t).strip()}
     for raw in presets:
-        preset = str(raw or "").strip().lower()
-        if preset in ("", "none", "off"):
+        preset = str(raw or "").strip()
+        if not preset:
             continue
-        if preset in ("high-risk", "high_blast_radius", "high-blast-radius", "default"):
-            gated.update(HIGH_BLAST_RADIUS_TOOLS)
-            continue
-        raise ValueError(f"unknown approval preset {raw!r}; expected 'high-risk' or 'none'")
+        resolved = resolve_preset(preset)
+        if resolved is None:
+            known = ", ".join(known_preset_names()) or "(none)"
+            raise ValueError(f"unknown approval preset {raw!r}; expected one of: {known}")
+        gated.update(resolved)
     return sorted(gated)
 
 
@@ -340,7 +558,14 @@ def check_approval(tool_name: str, tool: Any, args: dict[str, Any]) -> ApprovalD
     or the tool isn't gated). Returns an :class:`ApprovalDecision`
     otherwise — its ``approved`` flag controls whether the dispatch
     site executes the tool.
+
+    Every gated check is recorded in the audit log when
+    ``HARNESS_AUDIT_LOG`` is configured — including channel errors and
+    timeouts — so operators can reconstruct exactly which mutations
+    were attempted, allowed, denied, or interrupted.
     """
+    from harness.safety import audit as _audit
+
     if _APPROVAL_CHANNEL is None or not _is_gated(tool_name, tool):
         return None
     request = ApprovalRequest(
@@ -352,6 +577,20 @@ def check_approval(tool_name: str, tool: Any, args: dict[str, Any]) -> ApprovalD
         decision = _APPROVAL_CHANNEL.request(request)
     except Exception as exc:  # noqa: BLE001
         decision = ApprovalDecision(error=f"channel raised: {type(exc).__name__}: {exc}")
+
+    if decision.error:
+        decision_label = "error"
+    elif decision.approved:
+        decision_label = "approved"
+    else:
+        decision_label = "denied"
+    _audit.record_approval(
+        session_id=None,
+        tool=tool_name,
+        decision=decision_label,
+        channel=type(_APPROVAL_CHANNEL).__name__,
+        reason=decision.reason or decision.error,
+    )
 
     cb = _ON_APPROVAL_CALLBACK
     if cb is not None:

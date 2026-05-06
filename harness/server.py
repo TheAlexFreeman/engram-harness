@@ -38,6 +38,8 @@ from harness.loop import (
     session_remaining_cost_usd,
     session_remaining_tool_calls,
 )
+from harness.safety import audit as audit_log
+from harness.safety.rate_limit import limiter_from_env
 from harness.server_models import (
     CreateSessionRequest,
     CreateSessionResponse,
@@ -51,6 +53,17 @@ from harness.server_models import (
     StopResponse,
     ToolCallInfo,
     UsageInfo,
+)
+
+# Path validation moved to harness.server_validation in P2.1.5. The
+# back-compat alias FORBIDDEN_PATHS is re-exported here so any external
+# caller that imported it from this module keeps working.
+from harness.server_validation import FORBIDDEN_PATHS as _FORBIDDEN_PATHS  # noqa: F401
+from harness.server_validation import (
+    validate_memory_repo as _validate_memory_repo_impl,
+)
+from harness.server_validation import (
+    validate_workspace as _validate_workspace_impl,
 )
 from harness.session_index import (
     engram_session_metadata,
@@ -164,66 +177,17 @@ _MEMORY_ROOT: Path | None = (
     else None
 )
 
-_FORBIDDEN_PATHS: frozenset[str] = frozenset(
-    str(Path(p).resolve())
-    for p in [
-        "/",
-        "/etc",
-        "/usr",
-        "/bin",
-        "/sbin",
-        "/lib",
-        "/proc",
-        "/sys",
-        "/dev",
-        "C:/",
-        "C:/Windows",
-        "C:/Windows/System32",
-    ]
-    if Path(p).exists() or p in ("/", "C:/")
-)
-
 
 def _validate_workspace(workspace_str: str) -> Path:
-    """Resolve and validate a workspace path. Raises HTTPException on bad input."""
-    p = Path(workspace_str).resolve()
-    if str(p) in _FORBIDDEN_PATHS:
-        raise HTTPException(status_code=400, detail=f"Workspace '{p}' is a restricted path")
-    if _WORKSPACE_ROOT is not None:
-        try:
-            p.relative_to(_WORKSPACE_ROOT)
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Workspace must be under {_WORKSPACE_ROOT}",
-            )
-    return p
+    return _validate_workspace_impl(workspace_str, workspace_root=_WORKSPACE_ROOT)
 
 
 def _validate_memory_repo(memory_repo_str: str) -> Path:
-    """Resolve and validate a caller-provided Engram memory repo path."""
-    p = Path(memory_repo_str).resolve()
-    if str(p) in _FORBIDDEN_PATHS:
-        raise HTTPException(status_code=400, detail=f"Memory repo '{p}' is a restricted path")
-    boundary = _MEMORY_ROOT or _WORKSPACE_ROOT
-    if boundary is not None:
-        try:
-            p.relative_to(boundary)
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Memory repo must be under {boundary}",
-            )
-    if not any(
-        (p / rel / "memory" / "HOME.md").is_file()
-        for rel in (Path("."), Path("core"), Path("engram") / "core")
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="Memory repo must contain memory/HOME.md, core/memory/HOME.md, "
-            "or engram/core/memory/HOME.md",
-        )
-    return p
+    return _validate_memory_repo_impl(
+        memory_repo_str,
+        workspace_root=_WORKSPACE_ROOT,
+        memory_root=_MEMORY_ROOT,
+    )
 
 
 _sessions: dict[str, ManagedSession] = {}
@@ -287,6 +251,38 @@ def _request_is_authorized(request: Request) -> bool:
     if scheme.lower() != "bearer" or not value:
         return False
     return hmac.compare_digest(value, _API_TOKEN)
+
+
+def _request_token_id(request: Request) -> str | None:
+    """Return the audit-safe token id for the bearer token on ``request``."""
+    header = request.headers.get("authorization", "")
+    _, _, value = header.partition(" ")
+    return audit_log.token_id(value.strip() or None)
+
+
+def _request_remote(request: Request) -> str | None:
+    """Best-effort remote-address extraction (X-Forwarded-For aware)."""
+    forwarded = request.headers.get("x-forwarded-for", "").strip()
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip() or None
+    client = request.client
+    if client is None:
+        return None
+    return client.host
+
+
+def _rate_limit_key(request: Request) -> str:
+    """Pick a stable key for the rate limiter — token id, else remote IP."""
+    token = _request_token_id(request)
+    if token:
+        return f"tok:{token}"
+    remote = _request_remote(request)
+    if remote:
+        return f"ip:{remote}"
+    return "anon"
+
+
+_rate_limiter = limiter_from_env()
 
 
 def _active_session_count() -> int:
@@ -394,6 +390,13 @@ def _run_session(session: ManagedSession) -> None:
         close_memory = getattr(session.components.engram_memory, "close", None)
         if close_memory is not None:
             close_memory()
+        audit_log.record_session_end(
+            session_id=session.id,
+            status=session.status,
+            turns_used=session.turns_used,
+            total_cost_usd=session.usage.total_cost_usd,
+            bridge_status=session.bridge_status,
+        )
 
 
 def _run_interactive_session(session: ManagedSession) -> None:
@@ -572,6 +575,13 @@ def _run_interactive_session(session: ManagedSession) -> None:
         close_memory = getattr(session.components.engram_memory, "close", None)
         if close_memory is not None:
             close_memory()
+        audit_log.record_session_end(
+            session_id=session.id,
+            status=session.status,
+            turns_used=session.turns_used,
+            total_cost_usd=session.usage.total_cost_usd,
+            bridge_status=session.bridge_status,
+        )
 
 
 def _store_complete_session(session: ManagedSession) -> None:
@@ -800,12 +810,50 @@ app.add_middleware(
 
 @app.middleware("http")
 async def _auth_middleware(request: Request, call_next):
-    if request.url.path != "/health" and not _request_is_authorized(request):
+    path = request.url.path
+    if path == "/health":
+        return await call_next(request)
+    remote = _request_remote(request)
+    if not _request_is_authorized(request):
+        audit_log.record_auth(
+            path=path,
+            method=request.method,
+            remote=remote,
+            authorized=False,
+            token_prefix=_request_token_id(request),
+            reason="missing_or_invalid_bearer",
+        )
         return JSONResponse(
             {"detail": "Missing or invalid bearer token"},
             status_code=401,
             headers={"WWW-Authenticate": "Bearer"},
         )
+    decision = _rate_limiter.allow(_rate_limit_key(request))
+    if not decision.allowed:
+        audit_log.record_policy(
+            decision="rate_limited",
+            detail=decision.reason or "limit",
+            remote=remote,
+            token_prefix=_request_token_id(request),
+            extra={"path": path, "retry_after_secs": decision.retry_after_secs},
+        )
+        retry_after = max(1, int(round(decision.retry_after_secs)))
+        return JSONResponse(
+            {
+                "detail": "Rate limit exceeded",
+                "reason": decision.reason,
+                "retry_after_secs": decision.retry_after_secs,
+            },
+            status_code=429,
+            headers={"Retry-After": str(retry_after)},
+        )
+    audit_log.record_auth(
+        path=path,
+        method=request.method,
+        remote=remote,
+        authorized=True,
+        token_prefix=_request_token_id(request),
+    )
     return await call_next(request)
 
 
@@ -898,8 +946,9 @@ def _list_in_memory_sessions(
 
 
 @app.post("/sessions", response_model=CreateSessionResponse)
-async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
+async def create_session(req: CreateSessionRequest, request: Request) -> CreateSessionResponse:
     from harness.config import ToolProfile
+    from harness.role_inference import infer_role, is_known_role_or_infer
     from harness.tool_registry import build_tools
     from harness.tools.fs import WorkspaceScope
 
@@ -908,7 +957,15 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
     workspace = _validate_workspace(req.workspace)
     memory_repo = _validate_memory_repo(req.memory_repo) if req.memory_repo else None
     tool_profile = ToolProfile(req.tool_profile)
+    remote = _request_remote(request)
+    token_prefix = _request_token_id(request)
     if tool_profile == ToolProfile.FULL and not _ALLOW_FULL_TOOLS:
+        audit_log.record_policy(
+            decision="full_tool_rejected",
+            detail="HARNESS_SERVER_ALLOW_FULL_TOOLS unset",
+            remote=remote,
+            token_prefix=token_prefix,
+        )
         raise HTTPException(
             status_code=403,
             detail=(
@@ -916,6 +973,25 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
                 "Set HARNESS_SERVER_ALLOW_FULL_TOOLS=1 to opt in."
             ),
         )
+
+    role: str | None = None
+    if req.role is not None:
+        role_value = req.role.strip().lower()
+        if not is_known_role_or_infer(role_value):
+            raise HTTPException(
+                status_code=400,
+                detail=("role must be one of chat / plan / research / build or 'infer'"),
+            )
+        if role_value == "infer":
+            inference = infer_role(req.task)
+            role = inference.role
+        else:
+            role = role_value
+
+    presets: list[str] = []
+    if req.approval_preset:
+        presets = [p.strip() for p in req.approval_preset.split(",") if p.strip()]
+
     config = SessionConfig(
         workspace=workspace,
         model=req.model,
@@ -937,6 +1013,9 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
         trace_live=req.trace_live,
         trace_to_engram=req.trace_to_engram,
         tool_profile=tool_profile,
+        readonly_process=bool(req.readonly_process),
+        role=role,
+        approval_presets=presets,
     )
 
     loop = asyncio.get_running_loop()
@@ -995,6 +1074,17 @@ async def create_session(req: CreateSessionRequest) -> CreateSessionResponse:
             )
         except Exception:
             pass
+
+    audit_log.record_session_start(
+        session_id=session_id,
+        role=role,
+        tool_profile=tool_profile.value,
+        readonly_process=bool(req.readonly_process),
+        interactive=bool(req.interactive),
+        workspace=str(workspace),
+        token_prefix=token_prefix,
+        remote=remote,
+    )
 
     runner = _run_interactive_session if req.interactive else _run_session
     thread = threading.Thread(

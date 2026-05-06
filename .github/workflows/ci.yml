@@ -37,6 +37,14 @@ jobs:
       - name: Run recall eval quality gate
         run: harness recall-eval --really-run
 
+      - name: Drift smoke (P1.5 — advisory)
+        # Drift exits 0 cleanly when no DB is configured, but we exercise
+        # the analyzer path against a tiny synthetic SessionStore so a
+        # regression in cmd_drift surfaces here, not in production.
+        # ``--exit-on-alert`` on a clean fixture must yield exit 0.
+        shell: bash
+        run: python -m harness.tests.fixtures.drift
+
   frontend:
     name: Frontend Checks
     runs-on: ubuntu-latest
@@ -83,3 +91,47 @@ jobs:
 
       - name: Run harness tests with semantic deps available
         run: python -m pytest harness/tests/ -v
+
+  harness-api-extras:
+    name: Harness with API extras
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package with api extras
+        run: python -m pip install -e ".[dev,api]"
+
+      - name: Run harness tests with FastAPI server deps available
+        run: python -m pytest harness/tests/ -v
+
+  harness-integration:
+    name: Harness integration suite
+    runs-on: ubuntu-latest
+    # Integration suite requires filesystem, git, and FastAPI/sse plumbing.
+    # Run on push/PR to default branches and on workflow_dispatch; skip elsewhere
+    # to keep PR latency low (the unit suite already runs everywhere).
+    if: |
+      github.event_name == 'workflow_dispatch'
+      || github.ref == 'refs/heads/main'
+      || github.ref == 'refs/heads/master'
+      || contains(github.event.pull_request.labels.*.name, 'run-integration')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package with full extras
+        run: python -m pip install -e ".[dev,api,search]"
+
+      - name: Run harness integration tests
+        run: python -m pytest harness/tests/ --integration -v

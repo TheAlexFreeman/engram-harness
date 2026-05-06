@@ -245,6 +245,110 @@ def test_approval_unknown_preset_raises():
         approval_gates_for_presets(["surprise"])
 
 
+def test_approval_unknown_preset_lists_available_names():
+    import pytest
+
+    with pytest.raises(ValueError, match=r"expected one of:.*read-only"):
+        approval_gates_for_presets(["surprise"])
+
+
+def test_approval_read_only_preset_gates_all_mutations():
+    gated = set(approval_gates_for_presets(["read-only"]))
+    # Should cover filesystem, shell, git, work, memory mutations.
+    for tool in (
+        "edit_file",
+        "write_file",
+        "bash",
+        "run_script",
+        "git_commit",
+        "work_thread",
+        "memory_remember",
+        "memory_supersede",
+    ):
+        assert tool in gated, f"read-only preset missing {tool}"
+
+
+def test_approval_bash_only_preset_only_gates_shell():
+    gated = set(approval_gates_for_presets(["bash-only"]))
+    assert "bash" in gated
+    assert "run_script" in gated
+    assert "python_exec" in gated
+    assert "edit_file" not in gated
+    assert "memory_remember" not in gated
+
+
+def test_approval_paranoid_preset_includes_network():
+    gated = set(approval_gates_for_presets(["paranoid"]))
+    assert "web_fetch" in gated
+    assert "web_search" in gated
+    assert "edit_file" in gated
+
+
+def test_approval_network_deny_preset_only_gates_network():
+    gated = set(approval_gates_for_presets(["network-deny"]))
+    assert gated == {"web_fetch", "web_search"}
+
+
+def test_approval_preset_underscore_and_dash_interchangeable():
+    a = approval_gates_for_presets(["read-only"])
+    b = approval_gates_for_presets(["read_only"])
+    assert a == b
+
+
+def test_approval_file_loaded_preset_yaml(tmp_path, monkeypatch):
+    yaml_path = tmp_path / "presets.yaml"
+    yaml_path.write_text(
+        "office-only: [bash, run_script]\nworkspace-locked:\n  - edit_file\n  - delete_path\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HARNESS_APPROVAL_PRESET_FILE", str(yaml_path))
+
+    gated = set(approval_gates_for_presets(["office-only"]))
+    assert gated == {"bash", "run_script"}
+
+    locked = set(approval_gates_for_presets(["workspace-locked"]))
+    assert locked == {"edit_file", "delete_path"}
+
+
+def test_approval_file_loaded_preset_overrides_builtin(tmp_path, monkeypatch):
+    yaml_path = tmp_path / "presets.yaml"
+    yaml_path.write_text("default: [edit_file]\n", encoding="utf-8")
+    monkeypatch.setenv("HARNESS_APPROVAL_PRESET_FILE", str(yaml_path))
+
+    gated = approval_gates_for_presets(["default"])
+    assert gated == ["edit_file"]
+
+
+def test_approval_file_loaded_preset_missing_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_APPROVAL_PRESET_FILE", str(tmp_path / "does-not-exist.yaml"))
+    # Should fall back to built-ins without raising.
+    gated = approval_gates_for_presets(["default"])
+    assert "bash" in gated
+
+
+def test_approval_file_loaded_preset_invalid_top_level(tmp_path, monkeypatch):
+    yaml_path = tmp_path / "bad.yaml"
+    yaml_path.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+    monkeypatch.setenv("HARNESS_APPROVAL_PRESET_FILE", str(yaml_path))
+    # File-load failures degrade to built-ins; we don't crash the server.
+    gated = approval_gates_for_presets(["default"])
+    assert "bash" in gated
+
+
+def test_known_preset_names_includes_built_ins_and_files(tmp_path, monkeypatch):
+    yaml_path = tmp_path / "presets.yaml"
+    yaml_path.write_text("custom-one: [bash]\n", encoding="utf-8")
+    monkeypatch.setenv("HARNESS_APPROVAL_PRESET_FILE", str(yaml_path))
+
+    from harness.safety.approval import known_preset_names
+
+    names = known_preset_names()
+    assert "default" in names
+    assert "read-only" in names
+    assert "paranoid" in names
+    assert "custom-one" in names
+
+
 # ---------------------------------------------------------------------------
 # Dispatch integration via execute()
 # ---------------------------------------------------------------------------

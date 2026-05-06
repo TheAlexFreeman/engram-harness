@@ -32,21 +32,25 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from harness.engram_memory_parts.types import (
-    BufferedRecord as _BufferedRecord,
-)
-from harness.engram_memory_parts.types import (
-    MemorySessionSnapshot,
-)
-from harness.engram_memory_parts.types import (
-    RecallCandidateEvent as _RecallCandidateEvent,
-)
-from harness.engram_memory_parts.types import (
-    RecallEvent as _RecallEvent,
-)
-from harness.engram_memory_parts.types import (
-    TraceEvent as _TraceEvent,
-)
+from harness.engram_memory_parts.format import format_relative as _format_relative
+from harness.engram_memory_parts.format import today_parts as _today_parts
+from harness.engram_memory_parts.format import truncate_head as _truncate_head
+from harness.engram_memory_parts.paths import detect_engram_repo
+from harness.engram_memory_parts.paths import git_relative_prefix as _git_relative_prefix
+from harness.engram_memory_parts.paths import normalize_memory_path as _normalize_memory_path
+from harness.engram_memory_parts.paths import resolve_content_root as _resolve_content_root
+from harness.engram_memory_parts.paths import sanitize_skill_name as _sanitize_skill_name
+from harness.engram_memory_parts.recall_helpers import embedding_available as _embedding_available
+from harness.engram_memory_parts.recall_helpers import first_match_snippet as _first_match_snippet
+from harness.engram_memory_parts.recall_helpers import is_path_superseded as _is_path_superseded
+from harness.engram_memory_parts.recall_helpers import read_trust as _read_trust
+from harness.engram_memory_parts.recall_helpers import recall_scopes as _recall_scopes
+from harness.engram_memory_parts.recall_helpers import rel_path_in_scope as _rel_path_in_scope
+from harness.engram_memory_parts.types import BufferedRecord as _BufferedRecord
+from harness.engram_memory_parts.types import MemorySessionSnapshot
+from harness.engram_memory_parts.types import RecallCandidateEvent as _RecallCandidateEvent
+from harness.engram_memory_parts.types import RecallEvent as _RecallEvent
+from harness.engram_memory_parts.types import TraceEvent as _TraceEvent
 from harness.engram_schema import PROMPT_RECALL_NAMESPACES, SEARCH_SCOPES
 from harness.memory import Memory
 
@@ -94,39 +98,10 @@ _PREVIOUS_SESSION_FINAL_TEXT_CHARS = 600
 _SESSION_ID_PATTERN = re.compile(r"act-(\d{3})$")
 
 
-def _today_parts() -> tuple[str, str, str]:
-    now = datetime.now()
-    return f"{now.year:04d}", f"{now.month:02d}", f"{now.day:02d}"
-
-
-def _truncate_head(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    head = text[:limit].rstrip()
-    return head + f"\n\n…[truncated, {len(text) - limit} more chars]\n"
-
-
-def _format_relative(when: datetime, *, now: datetime | None = None) -> str:
-    """Render a coarse "X ago" string for the previous-session header.
-
-    Resolution is deliberately low (minutes / hours / days). The
-    bootstrap is human-readable orientation, not a precise log; a
-    rough relative time keeps the line readable.
-    """
-    now = now or datetime.now()
-    delta = now - when
-    seconds = int(delta.total_seconds())
-    if seconds < 60:
-        return "just now"
-    minutes = seconds // 60
-    if minutes < 60:
-        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
-    hours = minutes // 60
-    if hours < 24:
-        return f"{hours} hour{'s' if hours != 1 else ''} ago"
-    days = hours // 24
-    return f"{days} day{'s' if days != 1 else ''} ago"
-
+# Display-side formatting helpers live in
+# ``harness.engram_memory_parts.format``; recall + path helpers live in the
+# sibling modules under engram_memory_parts. They're imported up top under
+# their original private aliases so the EngramMemory class body is unchanged.
 
 # Cap non-returned per-backend candidates persisted per call. Returned paths are
 # always kept so the JSONL mirrors what was actually shown to the agent.
@@ -1637,206 +1612,12 @@ class EngramMemory:
 
 
 # ---------------------------------------------------------------------------
-# Module-level helpers
+# Module-level public surface
 # ---------------------------------------------------------------------------
-
-
-def _recall_scopes(namespace: str | None) -> tuple[str, ...]:
-    if namespace is None:
-        return _SEARCH_SCOPES
-    normalized = str(namespace).strip().lower()
-    if not normalized:
-        return _SEARCH_SCOPES
-    if normalized not in _RECALL_NAMESPACES:
-        allowed = ", ".join(sorted(_RECALL_NAMESPACES))
-        raise ValueError(f"recall namespace must be one of: {allowed}; got {namespace!r}")
-    return (f"memory/{normalized}",)
-
-
-def _rel_path_in_scope(rel_path: str, scope: str) -> bool:
-    cleaned = rel_path.strip("/")
-    scope_clean = scope.strip("/")
-    return cleaned == scope_clean or cleaned.startswith(f"{scope_clean}/")
-
-
-def _sanitize_skill_name(raw: str) -> str:
-    """Return *raw* if it is safe to interpolate into ``memory/skills/<raw>``.
-
-    A skill name must resolve inside ``memory/skills/`` — no traversal
-    segments, no absolute paths, no drive letters, no NUL bytes. Slashes
-    are permitted so that nested skill folders (``skills/foo/bar``) work,
-    but ``..`` segments, empty segments, and leading ``/`` are rejected.
-    Returns an empty string if anything looks unsafe; callers should
-    interpret that as "don't probe directly, fall back to search".
-    """
-    if not isinstance(raw, str):
-        return ""
-    s = raw.strip().replace("\\", "/")
-    if not s:
-        return ""
-    if "\x00" in s:
-        return ""
-    if s.startswith("/") or (len(s) > 1 and s[1] == ":"):
-        return ""
-    parts = s.split("/")
-    if any(p in ("", "..", ".") for p in parts):
-        return ""
-    return "/".join(parts)
-
-
-def _normalize_memory_path(raw: str) -> str:
-    """Normalize a user-supplied memory path to ``memory/<rest>``.
-
-    Accepts both ``"users/Alex/profile.md"`` and
-    ``"memory/users/Alex/profile.md"``. Rejects traversal segments,
-    absolute paths, empty strings.
-    """
-    if not isinstance(raw, str):
-        raise ValueError("path must be a string")
-    s = raw.strip().replace("\\", "/")
-    if not s:
-        raise ValueError("path must be non-empty")
-    if s.startswith("/") or (len(s) > 1 and s[1] == ":"):
-        raise ValueError(f"path must be relative (got {raw!r})")
-    parts = [p for p in s.split("/") if p]
-    if any(p == ".." for p in parts):
-        raise ValueError(f"path may not contain '..' (got {raw!r})")
-    # Strip leading "memory/" if the caller supplied it.
-    if parts and parts[0] == "memory":
-        parts = parts[1:]
-    if not parts:
-        raise ValueError(f"path must point inside memory/ (got {raw!r})")
-    return "memory/" + "/".join(parts)
-
-
-def _resolve_content_root(repo_root: Path, content_prefix: str | None) -> tuple[str, Path]:
-    """Pick the (prefix, content_root) pair for the given repo path.
-
-    The repo root may either contain `memory/HOME.md` directly (no prefix), or
-    sit one level above (with a `core/` or `engram/core/` subdirectory).
-    """
-    if content_prefix is not None:
-        prefix = content_prefix.strip("/")
-        cr = (repo_root / prefix).resolve() if prefix else repo_root
-        if not (cr / "memory" / "HOME.md").is_file():
-            raise ValueError(f"No memory/HOME.md under {cr} (content_prefix={content_prefix!r})")
-        return prefix, cr
-
-    # Auto-detect.
-    candidates = [
-        ("", repo_root),
-        ("core", repo_root / "core"),
-        ("engram/core", repo_root / "engram" / "core"),
-    ]
-    for prefix, cr in candidates:
-        if (cr / "memory" / "HOME.md").is_file():
-            return prefix, cr.resolve()
-    raise ValueError(
-        f"Could not find memory/HOME.md under {repo_root} (tried: '', 'core', 'engram/core')"
-    )
-
-
-def _git_relative_prefix(content_root: Path) -> str:
-    """Return the prefix that maps the git toplevel to *content_root*."""
-    import subprocess
-
-    result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        cwd=str(content_root if content_root.is_dir() else content_root.parent),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    if result.returncode != 0:
-        raise ValueError(f"Not inside a git repo: {content_root}")
-    git_root = Path(result.stdout.strip()).resolve()
-    try:
-        rel = content_root.resolve().relative_to(git_root)
-    except ValueError as exc:
-        raise ValueError(f"{content_root} is not under {git_root}") from exc
-    return str(rel).replace("\\", "/").strip("/")
-
-
-def _embedding_available() -> bool:
-    try:
-        import numpy  # noqa: F401
-        from sentence_transformers import SentenceTransformer  # noqa: F401
-    except ImportError:
-        return False
-    return True
-
-
-def _read_trust(abs_path: Path) -> str:
-    if not abs_path.is_file():
-        return ""
-    try:
-        from harness._engram_fs import read_with_frontmatter
-
-        fm, _ = read_with_frontmatter(abs_path)
-        return str(fm.get("trust", "")).lower()
-    except Exception:  # noqa: BLE001
-        return ""
-
-
-def _is_path_superseded(abs_path: Path) -> bool:
-    """Return whether a memory file's frontmatter marks it as superseded.
-
-    Reads only the frontmatter — file is missing, unparseable, or has no
-    bi-temporal annotation → ``False``. Lifts to the recall path so we
-    can hide expired/superseded facts without changing the indexes.
-    """
-    if not abs_path.is_file():
-        return False
-    try:
-        from harness._engram_fs import read_with_frontmatter
-        from harness._engram_fs.frontmatter_policy import is_superseded
-
-        fm, _ = read_with_frontmatter(abs_path)
-        return is_superseded(fm)
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _first_match_snippet(text: str, tokens: list[str], *, ctx: int = 200) -> str:
-    lower = text.lower()
-    best = -1
-    for t in tokens:
-        idx = lower.find(t)
-        if idx == -1:
-            continue
-        if best == -1 or idx < best:
-            best = idx
-    if best == -1:
-        return text[:ctx]
-    start = max(0, best - ctx // 2)
-    end = min(len(text), best + ctx)
-    snippet = text[start:end].strip()
-    if start > 0:
-        snippet = "…" + snippet
-    if end < len(text):
-        snippet = snippet + "…"
-    return snippet
-
-
-def detect_engram_repo(start: Path) -> Path | None:
-    """Walk up from *start* looking for an Engram repo.
-
-    Recognises three layouts:
-      - `<dir>/core/memory/HOME.md`  → returns `<dir>` (with content_prefix='core')
-      - `<dir>/memory/HOME.md`       → returns `<dir>` (with content_prefix='')
-      - `<dir>/engram/core/memory/HOME.md` (merged repo) → returns `<dir>/engram`
-
-    Returns the directory to pass as `repo_root` to `EngramMemory`, or None.
-    """
-    cur = Path(start).resolve()
-    for candidate in [cur, *cur.parents]:
-        if (candidate / "core" / "memory" / "HOME.md").is_file():
-            return candidate
-        if (candidate / "memory" / "HOME.md").is_file():
-            return candidate
-        if (candidate / "engram" / "core" / "memory" / "HOME.md").is_file():
-            return candidate / "engram"
-    return None
+# Helpers were extracted in P2.1.1 to ``harness.engram_memory_parts``; they
+# are imported at the top of this module under their original private
+# aliases so the EngramMemory class body needs no changes.
+# ---------------------------------------------------------------------------
 
 
 __all__ = [
