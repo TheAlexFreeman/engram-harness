@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -482,9 +483,18 @@ def _default_http_request(
 # ---------------------------------------------------------------------------
 
 
-_APPROVAL_CHANNEL: ApprovalChannel | None = None
-_GATED_TOOL_NAMES: frozenset[str] = frozenset()
-_ON_APPROVAL_CALLBACK: Any | None = None
+# Thread-local storage so concurrent API sessions (each on its own OS thread)
+# do not clobber each other's channel, gated-tool set, or callback.  Mirrors
+# the _INJECTION_TLS pattern in harness/tools/__init__.py.
+_APPROVAL_TLS = threading.local()
+
+
+def _approval_state() -> dict[str, Any]:
+    st = getattr(_APPROVAL_TLS, "state", None)
+    if st is None:
+        st = {"channel": None, "gated": frozenset(), "callback": None}
+        _APPROVAL_TLS.state = st
+    return st
 
 
 def approval_gates_for_presets(
@@ -534,19 +544,23 @@ def set_approval_channel(
     sufficient). ``on_approval`` is fired with
     ``(tool_name, ApprovalRequest, ApprovalDecision)`` for every check
     so the session tracer can record audit events.
+
+    Installs on the **current OS thread**; concurrent sessions each get
+    an independent binding via :data:`_APPROVAL_TLS` — the same pattern
+    used by the injection classifier in ``harness/tools/__init__.py``.
     """
-    global _APPROVAL_CHANNEL, _GATED_TOOL_NAMES, _ON_APPROVAL_CALLBACK
-    _APPROVAL_CHANNEL = channel
-    _GATED_TOOL_NAMES = frozenset(gated_tools)
-    _ON_APPROVAL_CALLBACK = on_approval
+    st = _approval_state()
+    st["channel"] = channel
+    st["gated"] = frozenset(gated_tools)
+    st["callback"] = on_approval
 
 
 def get_approval_channel() -> ApprovalChannel | None:
-    return _APPROVAL_CHANNEL
+    return _approval_state()["channel"]
 
 
 def _is_gated(tool_name: str, tool: Any) -> bool:
-    if tool_name in _GATED_TOOL_NAMES:
+    if tool_name in _approval_state()["gated"]:
         return True
     return bool(getattr(tool, "requires_approval", False))
 
@@ -566,7 +580,9 @@ def check_approval(tool_name: str, tool: Any, args: dict[str, Any]) -> ApprovalD
     """
     from harness.safety import audit as _audit
 
-    if _APPROVAL_CHANNEL is None or not _is_gated(tool_name, tool):
+    st = _approval_state()
+    channel = st["channel"]
+    if channel is None or not _is_gated(tool_name, tool):
         return None
     request = ApprovalRequest(
         tool_name=tool_name,
@@ -574,7 +590,7 @@ def check_approval(tool_name: str, tool: Any, args: dict[str, Any]) -> ApprovalD
         request_id=_generate_request_id(),
     )
     try:
-        decision = _APPROVAL_CHANNEL.request(request)
+        decision = channel.request(request)
     except Exception as exc:  # noqa: BLE001
         decision = ApprovalDecision(error=f"channel raised: {type(exc).__name__}: {exc}")
 
@@ -588,11 +604,11 @@ def check_approval(tool_name: str, tool: Any, args: dict[str, Any]) -> ApprovalD
         session_id=None,
         tool=tool_name,
         decision=decision_label,
-        channel=type(_APPROVAL_CHANNEL).__name__,
+        channel=type(channel).__name__,
         reason=decision.reason or decision.error,
     )
 
-    cb = _ON_APPROVAL_CALLBACK
+    cb = st["callback"]
     if cb is not None:
         try:
             cb(tool_name, request, decision)
