@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect } from "react";
+import { MarkdownContent } from "./MarkdownContent";
 
 interface Props {
   text: string;
@@ -27,9 +28,11 @@ export function StreamingText({ text, streaming = false }: Props) {
   }, [text]);
 
   return (
-    <span className="whitespace-pre-wrap break-words">
-      {displayed}
-      {streaming && <span className="cursor-blink ml-0.5 inline-block w-1.5 h-4 bg-green-400 align-middle" />}
-    </span>
+    <div className="relative">
+      <MarkdownContent content={displayed} />
+      {streaming && (
+        <span className="cursor-blink ml-0.5 inline-block w-1.5 h-4 bg-green-400 align-middle" />
+      )}
+    </div>
   );
 }

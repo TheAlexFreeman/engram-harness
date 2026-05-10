@@ -23,9 +23,8 @@ Six detailed development direction notes from a comprehensive knowledge-base rev
 ### bb-ai-task-platform [active] (project: bb-ai-task-platform)
 Analysis complete. Next: decide which phase to build first and begin backend.tasks app DSI folder
 
-### tier1-fixes [active]
-Apply 4 Tier 1 fixes: escape no-op, thread-local approval, fail-closed import, subcommand help
-
 ## Closed
+
+### tier1-fixes — Completed 3 real Tier 1 fixes: thread-local approval channel, fail-closed import, subcommand help. Review finding #1 (_escape_untrusted_body) was a display artifact — code was correct. (2026-05-09)
 
 ## Notes

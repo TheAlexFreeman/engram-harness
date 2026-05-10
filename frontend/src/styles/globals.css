@@ -1,3 +1,6 @@
+/* highlight.js dark theme for code blocks — must precede @tailwind directives */
+@import "highlight.js/styles/github-dark.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -29,6 +32,90 @@
   .input {
     @apply bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-gray-100 text-sm
            font-mono focus:outline-none focus:border-gray-500 placeholder-gray-600;
+  }
+
+  /* Markdown prose — dark-UI overrides for @tailwindcss/typography */
+  .agent-prose {
+    @apply prose prose-sm prose-invert max-w-none leading-relaxed;
+
+    /* Body text */
+    --tw-prose-body: theme(colors.gray.100);
+    --tw-prose-headings: theme(colors.gray.50);
+    --tw-prose-lead: theme(colors.gray.300);
+    --tw-prose-links: theme(colors.purple.400);
+    --tw-prose-bold: theme(colors.gray.100);
+    --tw-prose-counters: theme(colors.gray.400);
+    --tw-prose-bullets: theme(colors.gray.500);
+    --tw-prose-hr: theme(colors.gray.700);
+    --tw-prose-quotes: theme(colors.gray.300);
+    --tw-prose-quote-borders: theme(colors.purple.600);
+    --tw-prose-captions: theme(colors.gray.500);
+    --tw-prose-th-borders: theme(colors.gray.600);
+    --tw-prose-td-borders: theme(colors.gray.700);
+
+    /* Inline code */
+    --tw-prose-code: theme(colors.purple.300);
+
+    /* Tighten spacing slightly for chat context */
+    p { @apply my-2; }
+    h1, h2, h3, h4 { @apply mt-4 mb-2; }
+    ul, ol { @apply my-2; }
+    li { @apply my-0.5; }
+
+    /* Inline code pill */
+    :not(pre) > code {
+      @apply bg-gray-800 text-purple-300 rounded px-1 py-0.5 text-xs font-mono;
+      font-weight: normal;
+    }
+    :not(pre) > code::before,
+    :not(pre) > code::after {
+      content: none;
+    }
+
+    /* Code blocks — let highlight.js handle coloring */
+    pre {
+      @apply bg-gray-900 border border-gray-700 rounded-md my-3 overflow-x-auto;
+      padding: 0;
+    }
+    pre code {
+      @apply block p-4 text-xs leading-relaxed bg-transparent;
+      color: inherit;
+      font-weight: normal;
+    }
+    pre code::before,
+    pre code::after {
+      content: none;
+    }
+
+    /* Tables */
+    table {
+      @apply w-full text-sm my-3 border-collapse;
+    }
+    th {
+      @apply bg-gray-800 text-gray-200 font-semibold text-left px-3 py-1.5 border border-gray-600;
+    }
+    td {
+      @apply px-3 py-1.5 border border-gray-700;
+    }
+    tr:nth-child(even) td {
+      @apply bg-gray-900;
+    }
+
+    /* Blockquotes */
+    blockquote {
+      @apply border-l-2 border-purple-600 pl-4 text-gray-400 italic my-3;
+    }
+    blockquote p { @apply my-0; }
+
+    /* Horizontal rules */
+    hr {
+      @apply border-gray-700 my-4;
+    }
+
+    /* Task list checkboxes */
+    input[type="checkbox"] {
+      @apply mr-1.5 accent-purple-500;
+    }
   }
 }
 
