@@ -1056,9 +1056,7 @@ async def memory_graph(account_id: int, path: str = "") -> MemoryGraphResponse:
             )
             for n in graph.nodes
         ],
-        edges=[
-            MemoryGraphEdgeModel(source=e.source, target=e.target) for e in graph.edges
-        ],
+        edges=[MemoryGraphEdgeModel(source=e.source, target=e.target) for e in graph.edges],
         scope=graph.scope,
     )
 

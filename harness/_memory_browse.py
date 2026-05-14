@@ -252,9 +252,7 @@ class MemoryGraph:
     scope: str | None = None
 
 
-def build_memory_graph(
-    memory_root: Path, account_id: int, rel_path: str
-) -> MemoryGraph:
+def build_memory_graph(memory_root: Path, account_id: int, rel_path: str) -> MemoryGraph:
     """Build a node+edge graph of `.md` cross-references for `account_id`.
 
     `rel_path` is an optional scope: when empty, the whole per-account
@@ -268,9 +266,7 @@ def build_memory_graph(
     root, target, normalized = _resolve_within(memory_root, account_id, rel_path)
 
     if not root.is_dir():
-        raise MemoryRootMissingError(
-            f"No engram memory initialized for account {account_id}."
-        )
+        raise MemoryRootMissingError(f"No engram memory initialized for account {account_id}.")
 
     if not target.exists() or not target.is_dir():
         raise EntryNotFoundError(f"Path `{normalized}` does not exist.")

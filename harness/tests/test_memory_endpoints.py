@@ -210,12 +210,7 @@ def _seed_graph_memory(root: Path, account_id: int) -> Path:
     philosophy.mkdir(parents=True)
 
     (ai / "agents.md").write_text(
-        "---\n"
-        "title: Agents\n"
-        "related: [philosophy/ethics.md, ai/loops.md]\n"
-        "---\n"
-        "\n"
-        "# Agents\n",
+        "---\ntitle: Agents\nrelated: [philosophy/ethics.md, ai/loops.md]\n---\n\n# Agents\n",
         encoding="utf-8",
     )
     (ai / "loops.md").write_text(
@@ -292,9 +287,7 @@ def test_graph_builds_nodes_and_edges(memory_root: Path, client) -> None:
     assert data["scope"] is None
 
 
-def test_graph_extracts_comma_related_frontmatter(
-    memory_root: Path, client
-) -> None:
+def test_graph_extracts_comma_related_frontmatter(memory_root: Path, client) -> None:
     _seed_graph_memory(memory_root, 42)
     response = client.get("/accounts/42/memory/graph?path=")
     data = response.json()
@@ -303,14 +296,12 @@ def test_graph_extracts_comma_related_frontmatter(
     assert ("knowledge/philosophy/ethics.md", "knowledge/ai/agents.md") in edges
     assert ("knowledge/philosophy/ethics.md", "knowledge/ai/loops.md") in edges
     # The dangling ref is dropped in unscoped mode.
-    assert not any(
-        e[1] == "knowledge/missing/dangling.md" for e in edges
-    ), "Dangling refs must be dropped when unscoped"
+    assert not any(e[1] == "knowledge/missing/dangling.md" for e in edges), (
+        "Dangling refs must be dropped when unscoped"
+    )
 
 
-def test_graph_extracts_yaml_list_related_frontmatter(
-    memory_root: Path, client
-) -> None:
+def test_graph_extracts_yaml_list_related_frontmatter(memory_root: Path, client) -> None:
     _seed_graph_memory(memory_root, 42)
     response = client.get("/accounts/42/memory/graph?path=")
     data = response.json()
@@ -321,9 +312,7 @@ def test_graph_extracts_yaml_list_related_frontmatter(
     assert ("knowledge/ai/agents.md", "knowledge/ai/loops.md") in edges
 
 
-def test_graph_extracts_body_markdown_links_and_backticks(
-    memory_root: Path, client
-) -> None:
+def test_graph_extracts_body_markdown_links_and_backticks(memory_root: Path, client) -> None:
     _seed_graph_memory(memory_root, 42)
     response = client.get("/accounts/42/memory/graph?path=")
     data = response.json()
