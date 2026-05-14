@@ -14,6 +14,7 @@ import asyncio
 import hmac
 import os
 import queue as stdlib_queue
+import shutil
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -40,18 +41,33 @@ from harness.loop import (
 )
 from harness.safety import audit as audit_log
 from harness.safety.rate_limit import limiter_from_env
+from harness._memory_browse import (
+    EntryNotFoundError,
+    InvalidPathError,
+    MemoryRootMissingError,
+    NotAFileError,
+    list_memory_tree,
+    read_memory_file,
+)
+from harness._session_artifacts import collect_session_artifacts
 from harness.server_models import (
     CreateSessionRequest,
     CreateSessionResponse,
     GrantApprovalRequest,
     GrantApprovalResponse,
+    MemoryEntry as MemoryEntryModel,
+    MemoryFileResponse,
+    MemoryTreeResponse,
+    NamespaceRollup as NamespaceRollupModel,
     SendMessageRequest,
     SendMessageResponse,
+    SessionArtifactsResponse,
     SessionDetail,
     SessionListResponse,
     SessionSummary,
     StopResponse,
     ToolCallInfo,
+    TopFile as TopFileModel,
     UsageInfo,
 )
 
@@ -179,12 +195,46 @@ _MEMORY_ROOT: Path | None = (
     else None
 )
 
+# Bundled engram memory template baked into the harness Docker image.
+# When set, ``_ensure_memory_initialized`` copies from here into a missing
+# ``<memory_repo>/engram/core/memory/`` on first dispatch — letting Better
+# Base call POST /sessions for a brand-new account without a separate
+# bootstrap step.
+_BUNDLED_MEMORY_DIR: Path | None = (
+    Path(os.environ["HARNESS_BUNDLED_MEMORY_DIR"]).resolve()
+    if os.environ.get("HARNESS_BUNDLED_MEMORY_DIR")
+    else None
+)
+
 
 def _validate_workspace(workspace_str: str) -> Path:
     return _validate_workspace_impl(workspace_str, workspace_root=_WORKSPACE_ROOT)
 
 
+def _ensure_memory_initialized(memory_repo_path: Path) -> None:
+    """Copy bundled engram template into ``memory_repo_path`` if missing.
+
+    Only runs when ``HARNESS_BUNDLED_MEMORY_DIR`` is configured and the
+    target path is inside ``HARNESS_MEMORY_ROOT``. No-op otherwise — the
+    caller's validation runs after this and rejects unrecognized layouts.
+    """
+    if _BUNDLED_MEMORY_DIR is None or _MEMORY_ROOT is None:
+        return
+    try:
+        memory_repo_path.relative_to(_MEMORY_ROOT)
+    except ValueError:
+        return
+    target_memory_dir = memory_repo_path / "engram" / "core" / "memory"
+    if (target_memory_dir / "HOME.md").is_file():
+        return
+    target_memory_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(_BUNDLED_MEMORY_DIR, target_memory_dir, dirs_exist_ok=True)
+
+
 def _validate_memory_repo(memory_repo_str: str) -> Path:
+    # Lazy bootstrap before validation so a brand-new account's memory_repo
+    # path is materialized just in time.
+    _ensure_memory_initialized(Path(memory_repo_str).resolve())
     return _validate_memory_repo_impl(
         memory_repo_str,
         workspace_root=_WORKSPACE_ROOT,
@@ -864,6 +914,114 @@ async def health() -> dict:
     with _sessions_lock:
         active = sum(1 for s in _sessions.values() if s.status in ("running", "idle"))
     return {"status": "ok", "active_sessions": active}
+
+
+# ---------------------------------------------------------------------------
+# Per-account memory browse + session artifacts
+#
+# Exposed for Better Base to proxy through; the harness owns the engram
+# disk, so these are the only way Django can render the explorer and the
+# session artifacts panel in production where the disk lives on a single
+# Render service.
+# ---------------------------------------------------------------------------
+
+
+def _require_memory_root() -> Path:
+    if _MEMORY_ROOT is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Memory browsing requires HARNESS_MEMORY_ROOT to be configured."
+            ),
+        )
+    return _MEMORY_ROOT
+
+
+def _memory_browse_to_http(exc: Exception) -> HTTPException:
+    """Map disk-side memory exceptions to the same status codes Django used
+    in its Phase 1 / Phase 2 implementations so behavior is unchanged from
+    the frontend's perspective.
+    """
+    if isinstance(exc, InvalidPathError) or isinstance(exc, NotAFileError):
+        return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, MemoryRootMissingError):
+        return HTTPException(
+            status_code=404,
+            detail={"detail": str(exc), "code": "memory_not_initialized"},
+        )
+    if isinstance(exc, EntryNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    return HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get(
+    "/accounts/{account_id}/memory/tree",
+    response_model=MemoryTreeResponse,
+)
+async def memory_tree(account_id: int, path: str = "") -> MemoryTreeResponse:
+    root = _require_memory_root()
+    try:
+        tree = list_memory_tree(root, account_id, path)
+    except Exception as exc:
+        raise _memory_browse_to_http(exc) from exc
+    return MemoryTreeResponse(
+        path=tree.path,
+        entries=[
+            MemoryEntryModel(
+                name=e.name, kind=e.kind, path=e.path, modified=e.modified
+            )
+            for e in tree.entries
+        ],
+    )
+
+
+@app.get(
+    "/accounts/{account_id}/memory/file",
+    response_model=MemoryFileResponse,
+)
+async def memory_file(account_id: int, path: str) -> MemoryFileResponse:
+    if not path:
+        raise HTTPException(status_code=400, detail="`path` is required.")
+    root = _require_memory_root()
+    try:
+        entry = read_memory_file(root, account_id, path)
+    except Exception as exc:
+        raise _memory_browse_to_http(exc) from exc
+    return MemoryFileResponse(
+        path=entry.path,
+        modified=entry.modified,
+        frontmatter_raw=entry.frontmatter_raw,
+        body=entry.body,
+    )
+
+
+@app.get(
+    "/accounts/{account_id}/sessions/{harness_session_id}/artifacts",
+    response_model=SessionArtifactsResponse,
+)
+async def session_artifacts(
+    account_id: int, harness_session_id: str
+) -> SessionArtifactsResponse:
+    root = _require_memory_root()
+    data = collect_session_artifacts(root, account_id, harness_session_id)
+    return SessionArtifactsResponse(
+        available=data.available,
+        activity_dir=data.activity_dir,
+        summary_path=data.summary_path,
+        reflection_path=data.reflection_path,
+        namespaces=[
+            NamespaceRollupModel(
+                namespace=ns.namespace,
+                rows_added=ns.rows_added,
+                files_touched=ns.files_touched,
+                top_files=[
+                    TopFileModel(path=tf.path, helpfulness=tf.helpfulness)
+                    for tf in ns.top_files
+                ],
+            )
+            for ns in data.namespaces
+        ],
+    )
 
 
 def _get_session(session_id: str) -> ManagedSession:

@@ -72,6 +72,51 @@ class CreateSessionResponse(BaseModel):
     created_at: str
 
 
+# ---------------------------------------------------------------------------
+# Memory-browse + session-artifact response shapes (mirror the dataclasses
+# in `harness/_memory_browse.py` and `harness/_session_artifacts.py`)
+# ---------------------------------------------------------------------------
+
+
+class MemoryEntry(BaseModel):
+    name: str
+    kind: Literal["folder", "file"]
+    path: str
+    modified: str
+
+
+class MemoryTreeResponse(BaseModel):
+    path: str
+    entries: list[MemoryEntry]
+
+
+class MemoryFileResponse(BaseModel):
+    path: str
+    modified: str
+    frontmatter_raw: str | None
+    body: str
+
+
+class TopFile(BaseModel):
+    path: str
+    helpfulness: float
+
+
+class NamespaceRollup(BaseModel):
+    namespace: str
+    rows_added: int
+    files_touched: int
+    top_files: list[TopFile]
+
+
+class SessionArtifactsResponse(BaseModel):
+    available: bool
+    activity_dir: str | None
+    summary_path: str | None
+    reflection_path: str | None
+    namespaces: list[NamespaceRollup]
+
+
 class SessionSummary(BaseModel):
     session_id: str
     task: str
