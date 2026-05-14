@@ -20,6 +20,7 @@ class CreateSessionRequest(BaseModel):
     memory_repo: str | None = None
     max_turns: int = Field(default=100, ge=1, le=1000)
     max_parallel_tools: int = Field(default=4, ge=1, le=32)
+    max_output_tokens: int = Field(default=4096, ge=1, le=131072)
     max_cost_usd: float | None = Field(default=None, ge=0)
     max_tool_calls: int | None = Field(default=None, ge=0, le=10000)
     repeat_guard_threshold: int = Field(default=3, ge=0, le=100)

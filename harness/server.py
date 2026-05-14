@@ -1006,6 +1006,7 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
         memory_repo=memory_repo,
         max_turns=req.max_turns,
         max_parallel_tools=req.max_parallel_tools,
+        max_output_tokens=req.max_output_tokens,
         max_cost_usd=req.max_cost_usd,
         max_tool_calls=req.max_tool_calls,
         repeat_guard_threshold=req.repeat_guard_threshold,
