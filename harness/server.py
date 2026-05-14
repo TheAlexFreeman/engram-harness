@@ -75,9 +75,11 @@ from harness.sinks.sse import SSEEvent, SSEStreamSink, SSETraceSink, enqueue_sse
 from harness.usage import Usage
 
 # Load `.env` when the server module is imported (covers `uvicorn harness.server:app`,
-# which does not go through `harness` CLI's load_dotenv).
+# which does not go through `harness` CLI's load_dotenv). The harness-owned .env
+# takes precedence — the user explicitly put values there for this process, so
+# they should win over an inherited shell env that may have empty placeholders.
 load_dotenv()
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 try:
     from fastapi import FastAPI, HTTPException, Request
