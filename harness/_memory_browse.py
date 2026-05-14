@@ -379,6 +379,8 @@ def _collect_graph_files(root: Path, rel_prefix: str) -> list[_GraphFileEntry]:
     for child in children:
         if child.name.startswith("."):
             continue
+        if child.is_symlink():
+            continue
         child_rel = f"{rel_prefix}/{child.name}" if rel_prefix else child.name
         if child.is_dir():
             if child.name in _GRAPH_SKIP_DIRS:
@@ -420,8 +422,11 @@ def _extract_refs(content: str) -> list[str]:
         if isinstance(related_raw, str):
             for item in related_raw.split(","):
                 cleaned = item.strip()
-                if cleaned and cleaned.lower().endswith(".md"):
-                    refs.append(_strip_anchor(cleaned))
+                if not cleaned:
+                    continue
+                normalized = _strip_anchor(cleaned)
+                if normalized.lower().endswith(".md"):
+                    refs.append(normalized)
         elif isinstance(related_raw, list):
             for item in related_raw:
                 if not isinstance(item, str):

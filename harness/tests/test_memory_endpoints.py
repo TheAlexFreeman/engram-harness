@@ -229,7 +229,7 @@ def _seed_graph_memory(root: Path, account_id: int) -> Path:
     (philosophy / "ethics.md").write_text(
         "---\n"
         "title: Ethics\n"
-        "related: ai/agents.md, ai/loops.md, missing/dangling.md\n"
+        "related: ai/agents.md, ai/loops.md, ai/agents.md#intro, missing/dangling.md\n"
         "---\n"
         "\n"
         "# Ethics\n",
@@ -292,7 +292,8 @@ def test_graph_extracts_comma_related_frontmatter(memory_root: Path, client) -> 
     response = client.get("/accounts/42/memory/graph?path=")
     data = response.json()
     edges = {(e["source"], e["target"]) for e in data["edges"]}
-    # philosophy/ethics.md has `related: ai/agents.md, ai/loops.md, missing/dangling.md`.
+    # philosophy/ethics.md lists agents twice (bare + anchored); de-duped to one edge.
+    # philosophy/ethics.md has `related: ... ai/agents.md#intro ...`.
     assert ("knowledge/philosophy/ethics.md", "knowledge/ai/agents.md") in edges
     assert ("knowledge/philosophy/ethics.md", "knowledge/ai/loops.md") in edges
     # The dangling ref is dropped in unscoped mode.
@@ -367,6 +368,22 @@ def test_graph_scoped_adds_external_for_dangling(memory_root: Path, client) -> N
     # external node.
     assert "knowledge/philosophy/ethics.md" in by_id
     assert by_id["knowledge/philosophy/ethics.md"]["external"] is True
+
+
+def test_graph_skips_symlinks(memory_root: Path, client) -> None:
+    _seed_graph_memory(memory_root, 42)
+    memory = _memory_dir(memory_root, 42)
+    ai = memory / "knowledge" / "ai"
+    link = ai / "ghost.md"
+    try:
+        link.symlink_to(ai / "agents.md")
+    except OSError:
+        pytest.skip("symlink creation not available in this environment")
+
+    response = client.get("/accounts/42/memory/graph?path=")
+    assert response.status_code == 200, response.text
+    node_ids = {n["id"] for n in response.json()["nodes"]}
+    assert "knowledge/ai/ghost.md" not in node_ids
 
 
 def test_graph_rejects_path_traversal(memory_root: Path, client) -> None:
