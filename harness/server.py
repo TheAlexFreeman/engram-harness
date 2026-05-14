@@ -48,6 +48,7 @@ from harness.loop import (
     session_remaining_cost_usd,
     session_remaining_tool_calls,
 )
+from harness.runner import _submit_main_lane
 from harness.safety import audit as audit_log
 from harness.safety.rate_limit import limiter_from_env
 from harness.server_models import (
@@ -394,23 +395,44 @@ def _emit(session: ManagedSession, event: SSEEvent) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _session_lane_key(cfg: object) -> str | None:
+    """Stable affinity key for lane tracing; optional when tests stub config."""
+    ws = getattr(cfg, "workspace", None)
+    if ws is None:
+        return None
+    try:
+        return str(Path(ws).resolve())
+    except OSError:
+        return str(ws)
+
+
 def _run_session(session: ManagedSession) -> None:
     """Run a single-shot session in a background thread."""
     policy = RunPolicy.from_config(
         session.config,
         pause_handle=getattr(session.components, "pause_handle", None),
     )
+    session_key = _session_lane_key(session.config)
     try:
-        result = run(
-            session.task,
-            session.components.mode,
-            session.components.tools,
-            session.components.memory,
-            session.components.tracer,
-            stream_sink=session.components.stream_sink,
-            stop_event=session.stop_event,
-            skip_end_session_commit=_bridge_enabled(session),
-            **policy.run_kwargs(),
+
+        def _do_run() -> RunResult:
+            return run(
+                session.task,
+                session.components.mode,
+                session.components.tools,
+                session.components.memory,
+                session.components.tracer,
+                stream_sink=session.components.stream_sink,
+                stop_event=session.stop_event,
+                skip_end_session_commit=_bridge_enabled(session),
+                **policy.run_kwargs(),
+            )
+
+        result = _submit_main_lane(
+            session.components,
+            _do_run,
+            tracer=session.components.tracer,
+            session_key=session_key,
         )
         session.result = result
         session.final_text = result.final_text
@@ -479,6 +501,7 @@ def _run_interactive_session(session: ManagedSession) -> None:
         )
         session_cost_usd = 0.0
         session_tool_calls = 0
+        session_key = _session_lane_key(config)
 
         def _interactive_idle_result() -> RunResult:
             rem_c = session_remaining_cost_usd(cap_cost, session_cost_usd)
@@ -508,7 +531,12 @@ def _run_interactive_session(session: ManagedSession) -> None:
                 ).idle_kwargs(),
             )
 
-        result = _interactive_idle_result()
+        result = _submit_main_lane(
+            session.components,
+            _interactive_idle_result,
+            tracer=tracer,
+            session_key=session_key,
+        )
         session_cost_usd += result.usage.total_cost_usd
         session_tool_calls += result.tool_calls_used
         session.usage = session.usage + result.usage
@@ -557,7 +585,12 @@ def _run_interactive_session(session: ManagedSession) -> None:
             tracer.event("interactive_turn", chars=len(user_msg))
             session.messages.append({"role": "user", "content": user_msg})
 
-            result = _interactive_idle_result()
+            result = _submit_main_lane(
+                session.components,
+                _interactive_idle_result,
+                tracer=tracer,
+                session_key=session_key,
+            )
             session_cost_usd += result.usage.total_cost_usd
             session_tool_calls += result.tool_calls_used
             session.usage = session.usage + result.usage

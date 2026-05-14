@@ -67,6 +67,7 @@ packages = [
     "harness.modes",
     "harness.optimize",
     "harness.prompt_templates",
+    "harness.safety",
     "harness.sinks",
     "harness.tests.fixtures",
     "harness.tools",
