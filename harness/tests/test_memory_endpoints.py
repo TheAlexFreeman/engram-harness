@@ -277,13 +277,13 @@ def test_graph_builds_nodes_and_edges(memory_root: Path, client) -> None:
         "knowledge/philosophy/virtue.md",
     } == node_ids
 
-    # Domain colour is the first path segment (`knowledge` here because we
-    # walked the whole tree). That's fine — the renderer just uses it for
-    # bucket comparison.
+    # Domain is the engram-style subfolder beneath `knowledge/` — `ai`,
+    # `philosophy`, etc. — matching the standalone Engram palette.
     domains = {n["id"]: n["domain"] for n in data["nodes"]}
-    assert domains["knowledge/ai/agents.md"] == "knowledge"
+    assert domains["knowledge/ai/agents.md"] == "ai"
+    assert domains["knowledge/philosophy/ethics.md"] == "philosophy"
 
-    # Scope is `None` when the whole tree is walked.
+    # Scope is `None` when the whole knowledge tree is walked.
     assert data["scope"] is None
 
 
@@ -347,12 +347,13 @@ def test_graph_counts_reflect_refs_and_ref_by(memory_root: Path, client) -> None
 
 def test_graph_scoped_adds_external_for_dangling(memory_root: Path, client) -> None:
     _seed_graph_memory(memory_root, 42)
-    # Scope to just the `ai` subtree. References out of scope to
-    # philosophy/ethics.md should still appear as external nodes.
-    response = client.get("/accounts/42/memory/graph?path=knowledge/ai")
+    # Scope to just the `ai` subdomain (relative to `knowledge/`).
+    # References out of scope to philosophy/ethics.md should still appear
+    # as external nodes.
+    response = client.get("/accounts/42/memory/graph?path=ai")
     assert response.status_code == 200, response.text
     data = response.json()
-    assert data["scope"] == "knowledge/ai"
+    assert data["scope"] == "ai"
 
     by_id = {n["id"]: n for n in data["nodes"]}
     # All in-scope nodes present and not external.
@@ -365,9 +366,10 @@ def test_graph_scoped_adds_external_for_dangling(memory_root: Path, client) -> N
         assert by_id[nid]["external"] is False
 
     # The cross-scope ref to philosophy/ethics.md is promoted to an
-    # external node.
+    # external node with the right domain bucket.
     assert "knowledge/philosophy/ethics.md" in by_id
     assert by_id["knowledge/philosophy/ethics.md"]["external"] is True
+    assert by_id["knowledge/philosophy/ethics.md"]["domain"] == "philosophy"
 
 
 def test_graph_skips_symlinks(memory_root: Path, client) -> None:
