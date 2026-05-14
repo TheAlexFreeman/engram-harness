@@ -29,6 +29,7 @@ from harness._memory_browse import (
     InvalidPathError,
     MemoryRootMissingError,
     NotAFileError,
+    build_memory_graph,
     list_memory_tree,
     read_memory_file,
 )
@@ -57,6 +58,9 @@ from harness.server_models import (
     GrantApprovalRequest,
     GrantApprovalResponse,
     MemoryFileResponse,
+    MemoryGraphEdgeModel,
+    MemoryGraphNodeModel,
+    MemoryGraphResponse,
     MemoryTreeResponse,
     SendMessageRequest,
     SendMessageResponse,
@@ -1027,6 +1031,35 @@ async def memory_file(account_id: int, path: str) -> MemoryFileResponse:
         modified=entry.modified,
         frontmatter_raw=entry.frontmatter_raw,
         body=entry.body,
+    )
+
+
+@app.get(
+    "/accounts/{account_id}/memory/graph",
+    response_model=MemoryGraphResponse,
+)
+async def memory_graph(account_id: int, path: str = "") -> MemoryGraphResponse:
+    root = _require_memory_root()
+    try:
+        graph = build_memory_graph(root, account_id, path)
+    except Exception as exc:
+        raise _memory_browse_to_http(exc) from exc
+    return MemoryGraphResponse(
+        nodes=[
+            MemoryGraphNodeModel(
+                id=n.id,
+                domain=n.domain,
+                label=n.label,
+                refs=n.refs,
+                ref_by=n.ref_by,
+                external=n.external,
+            )
+            for n in graph.nodes
+        ],
+        edges=[
+            MemoryGraphEdgeModel(source=e.source, target=e.target) for e in graph.edges
+        ],
+        scope=graph.scope,
     )
 
 

@@ -15,14 +15,30 @@ Pydantic response models for the wire.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+import frontmatter as fm
+
 # Frontmatter delimiter — three dashes on their own line at the very
 # start of the file, body separated by another three-dash line.
 _FRONTMATTER_DELIM = "---"
+
+# Filenames the knowledge graph skips. SUMMARY.md / NAMES.md are
+# navigator/index artifacts the agent maintains — including them as nodes
+# distorts the graph because they reference everything by design.
+_GRAPH_SKIP_FILES = frozenset({"NAMES.md", "SUMMARY.md"})
+_GRAPH_SKIP_DIRS = frozenset({"__pycache__"})
+
+# Matches a body-level markdown link to a `.md` file. Mirrors the regex in
+# `engram/HUMANS/views/graph.js::extractRefs`. We strip any `#anchor`
+# fragment when extracting.
+_MD_LINK_REGEX = re.compile(r"\[[^\]]*\]\(([^)]+\.md(?:#[^)]+)?)\)", re.IGNORECASE)
+# Matches a `.md` reference wrapped in backticks.
+_BACKTICK_REF_REGEX = re.compile(r"`([^`]+\.md(?:#[^`]+)?)`", re.IGNORECASE)
 
 
 class MemoryBrowseError(Exception):
@@ -198,6 +214,279 @@ def read_memory_file(memory_root: Path, account_id: int, rel_path: str) -> Memor
         frontmatter_raw=frontmatter_raw,
         body=body,
     )
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class MemoryGraphNode:
+    """A node in the memory cross-reference graph.
+
+    `id` is the file's path relative to the per-account memory root (e.g.
+    `knowledge/ai/agents.md`). `domain` is the first path segment, used
+    for color-coding in the renderer. `external` is `True` for dangling
+    refs when a scope is set — a referenced file that isn't part of the
+    scanned subtree.
+    """
+
+    id: str
+    domain: str
+    label: str
+    refs: int
+    ref_by: int
+    external: bool
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class MemoryGraphEdge:
+    """A directed cross-reference from one memory file to another."""
+
+    source: str
+    target: str
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class MemoryGraph:
+    """The full cross-reference graph for a per-account memory tree."""
+
+    nodes: list[MemoryGraphNode] = field(default_factory=list)
+    edges: list[MemoryGraphEdge] = field(default_factory=list)
+    scope: str | None = None
+
+
+def build_memory_graph(
+    memory_root: Path, account_id: int, rel_path: str
+) -> MemoryGraph:
+    """Build a node+edge graph of `.md` cross-references for `account_id`.
+
+    `rel_path` is an optional scope: when empty, the whole per-account
+    memory tree is walked; when set, only files under that subfolder are
+    scanned, and references out of the scope are added as `external`
+    nodes (matching the standalone Engram graph's behavior).
+
+    Node IDs are paths relative to the per-account memory root, so the
+    frontend can pass them through to `/memory/file?path=...` directly.
+    """
+    root, target, normalized = _resolve_within(memory_root, account_id, rel_path)
+
+    if not root.is_dir():
+        raise MemoryRootMissingError(
+            f"No engram memory initialized for account {account_id}."
+        )
+
+    if not target.exists() or not target.is_dir():
+        raise EntryNotFoundError(f"Path `{normalized}` does not exist.")
+
+    files = _collect_graph_files(target, normalized)
+
+    node_map: dict[str, MemoryGraphNode] = {}
+    for entry in files:
+        domain = entry.dir_segments[0] if entry.dir_segments else "_root"
+        label = entry.path.rsplit("/", 1)[-1].removesuffix(".md")
+        node_map[entry.path] = MemoryGraphNode(
+            id=entry.path,
+            domain=domain,
+            label=label,
+            refs=0,
+            ref_by=0,
+            external=False,
+        )
+
+    # Edges in insertion order; references can produce dangling-target
+    # entries we only add to `node_map` after a full pass when `normalized`
+    # is set.
+    edges: list[MemoryGraphEdge] = []
+    pending_external: list[tuple[str, str]] = []
+    ref_counts: dict[str, int] = {nid: 0 for nid in node_map}
+    ref_by_counts: dict[str, int] = {nid: 0 for nid in node_map}
+
+    for entry in files:
+        source_id = entry.path
+        try:
+            raw_text = (root / entry.path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        seen: set[str] = set()
+        for raw_ref in _extract_refs(raw_text):
+            target_id = _resolve_graph_ref(raw_ref, entry.dir_segments)
+            if target_id == source_id or target_id in seen:
+                continue
+            seen.add(target_id)
+            if target_id in node_map:
+                edges.append(MemoryGraphEdge(source=source_id, target=target_id))
+                ref_counts[source_id] += 1
+                ref_by_counts[target_id] += 1
+            elif normalized:
+                pending_external.append((source_id, target_id))
+
+    # Promote dangling refs to external nodes (only when scoped — the
+    # unscoped pass already saw every node so a dangling ref means a
+    # broken link, which we drop silently to match the JS renderer).
+    if normalized and pending_external:
+        for source_id, target_id in pending_external:
+            if target_id not in node_map:
+                parts = target_id.split("/")
+                domain = parts[0] if parts else "_root"
+                label = parts[-1].removesuffix(".md") if parts else target_id
+                node_map[target_id] = MemoryGraphNode(
+                    id=target_id,
+                    domain=domain,
+                    label=label,
+                    refs=0,
+                    ref_by=0,
+                    external=True,
+                )
+                ref_counts.setdefault(target_id, 0)
+                ref_by_counts.setdefault(target_id, 0)
+            edges.append(MemoryGraphEdge(source=source_id, target=target_id))
+            ref_counts[source_id] = ref_counts.get(source_id, 0) + 1
+            ref_by_counts[target_id] = ref_by_counts.get(target_id, 0) + 1
+
+    nodes = [
+        MemoryGraphNode(
+            id=n.id,
+            domain=n.domain,
+            label=n.label,
+            refs=ref_counts.get(n.id, 0),
+            ref_by=ref_by_counts.get(n.id, 0),
+            external=n.external,
+        )
+        for n in node_map.values()
+    ]
+
+    return MemoryGraph(nodes=nodes, edges=edges, scope=normalized or None)
+
+
+# ---------------------------------------------------------------------------
+# Graph-build helpers (internal)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _GraphFileEntry:
+    """A markdown file discovered during a scan, with its path components."""
+
+    path: str
+    dir_segments: tuple[str, ...]
+
+
+def _collect_graph_files(root: Path, rel_prefix: str) -> list[_GraphFileEntry]:
+    """Walk `root` and return every visible `.md` file (excluding skips).
+
+    `rel_prefix` is the path of `root` relative to the per-account memory
+    root, used to build node IDs. Recurses depth-first; the file order is
+    deterministic per-directory (folders then files, case-insensitive).
+    """
+    results: list[_GraphFileEntry] = []
+    if not root.is_dir():
+        return results
+
+    children = sorted(root.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    for child in children:
+        if child.name.startswith("."):
+            continue
+        child_rel = f"{rel_prefix}/{child.name}" if rel_prefix else child.name
+        if child.is_dir():
+            if child.name in _GRAPH_SKIP_DIRS:
+                continue
+            results.extend(_collect_graph_files(child, child_rel))
+        elif child.is_file() and child.suffix == ".md":
+            if child.name in _GRAPH_SKIP_FILES:
+                continue
+            segments = tuple(p for p in child_rel.split("/")[:-1] if p)
+            results.append(_GraphFileEntry(path=child_rel, dir_segments=segments))
+
+    return results
+
+
+def _extract_refs(content: str) -> list[str]:
+    """Pull every `.md` reference out of `content`.
+
+    Mirrors `engram/HUMANS/views/graph.js::extractRefs`:
+
+    1. Frontmatter `related:` field, both comma-string and YAML-list forms.
+    2. Markdown links in the body to `.md` files (excluding `http(s)://`).
+    3. Backtick-wrapped `.md` references.
+
+    Returns refs with any `#anchor` fragment stripped. Order is preserved
+    (frontmatter first, then body left-to-right) for stable test output.
+    """
+    refs: list[str] = []
+
+    try:
+        post = fm.loads(content)
+    except Exception:
+        # Malformed frontmatter — fall back to treating the whole content
+        # as body. `python-frontmatter` raises a YAMLError or similar; the
+        # renderer is permissive here so we should be too.
+        post = None
+
+    if post is not None and post.metadata:
+        related_raw = post.metadata.get("related")
+        if isinstance(related_raw, str):
+            for item in related_raw.split(","):
+                cleaned = item.strip()
+                if cleaned and cleaned.lower().endswith(".md"):
+                    refs.append(_strip_anchor(cleaned))
+        elif isinstance(related_raw, list):
+            for item in related_raw:
+                if not isinstance(item, str):
+                    continue
+                cleaned = item.strip()
+                if not cleaned:
+                    continue
+                normalized = _strip_anchor(cleaned)
+                if not normalized.lower().endswith(".md"):
+                    normalized += ".md"
+                refs.append(normalized)
+        body = post.content
+    else:
+        body = content
+
+    for match in _MD_LINK_REGEX.finditer(body):
+        href = match.group(1)
+        if re.match(r"^https?://", href, re.IGNORECASE):
+            continue
+        refs.append(_strip_anchor(href))
+
+    for match in _BACKTICK_REF_REGEX.finditer(body):
+        refs.append(_strip_anchor(match.group(1)))
+
+    return refs
+
+
+def _strip_anchor(ref: str) -> str:
+    """Drop any `#...` fragment from a reference."""
+    hash_idx = ref.find("#")
+    return ref[:hash_idx] if hash_idx >= 0 else ref
+
+
+def _resolve_graph_ref(ref: str, source_dir: tuple[str, ...]) -> str:
+    """Resolve a raw ref into a node ID rooted at the per-account memory.
+
+    Mirrors the engram convention used by `engram/HUMANS/views/graph.js::resolveGraphRef`:
+    bare refs like `ai/agents.md` are treated as knowledge-rooted (so they
+    become `knowledge/ai/agents.md`); `./` and `../` resolve against the
+    source file's directory (which is already memory-rooted); refs that
+    already start with `knowledge/` pass through unchanged. A trailing
+    `.md` is appended if missing.
+    """
+    path = _strip_anchor(ref)
+
+    if path.startswith("./") or path.startswith("../"):
+        base = list(source_dir)
+        for part in path.split("/"):
+            if part == "..":
+                if base:
+                    base.pop()
+            elif part not in ("", "."):
+                base.append(part)
+        path = "/".join(base)
+    elif not path.startswith("knowledge/"):
+        # Engram convention: bare refs are knowledge-rooted.
+        path = "knowledge/" + path
+
+    if not path.lower().endswith(".md"):
+        path += ".md"
+    return path
 
 
 def _split_frontmatter(text: str) -> tuple[str | None, str]:

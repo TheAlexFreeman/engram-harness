@@ -179,6 +179,221 @@ def test_file_missing_path_param(memory_root: Path, client) -> None:
     assert response.status_code in (400, 422), response.text
 
 
+# --- memory graph ----------------------------------------------------------
+
+
+def _seed_graph_memory(root: Path, account_id: int) -> Path:
+    """Seed a small cross-referenced tree exercising every ref form.
+
+    Layout::
+
+        knowledge/
+          ai/
+            agents.md         -- related: [philosophy/ethics.md, ai/loops.md]
+            loops.md          -- backticked ref to `ai/agents.md`; body link to `../philosophy/ethics.md`
+            isolated.md       -- no refs (orphan)
+          philosophy/
+            ethics.md         -- related: ai/agents.md, ai/loops.md, missing/dangling.md
+            virtue.md         -- body link to philosophy/ethics.md AND self-ref
+          NAMES.md            -- should be skipped
+          SUMMARY.md          -- should be skipped
+          __pycache__/
+            ignored.md        -- should be skipped
+          .hidden/
+            secret.md         -- should be skipped
+    """
+    memory = _memory_dir(root, account_id)
+    knowledge = memory / "knowledge"
+    ai = knowledge / "ai"
+    philosophy = knowledge / "philosophy"
+    ai.mkdir(parents=True)
+    philosophy.mkdir(parents=True)
+
+    (ai / "agents.md").write_text(
+        "---\n"
+        "title: Agents\n"
+        "related: [philosophy/ethics.md, ai/loops.md]\n"
+        "---\n"
+        "\n"
+        "# Agents\n",
+        encoding="utf-8",
+    )
+    (ai / "loops.md").write_text(
+        "---\n"
+        "title: Loops\n"
+        "---\n"
+        "\n"
+        "# Loops\n\n"
+        "See [ethics](../philosophy/ethics.md) and also `ai/agents.md`.\n",
+        encoding="utf-8",
+    )
+    (ai / "isolated.md").write_text(
+        "---\ntitle: Isolated\n---\n\n# Isolated\n",
+        encoding="utf-8",
+    )
+    (philosophy / "ethics.md").write_text(
+        "---\n"
+        "title: Ethics\n"
+        "related: ai/agents.md, ai/loops.md, missing/dangling.md\n"
+        "---\n"
+        "\n"
+        "# Ethics\n",
+        encoding="utf-8",
+    )
+    (philosophy / "virtue.md").write_text(
+        "---\ntitle: Virtue\n---\n\n"
+        "# Virtue\n\n"
+        "See [Ethics](philosophy/ethics.md) and self via [Virtue](philosophy/virtue.md).\n",
+        encoding="utf-8",
+    )
+
+    (knowledge / "NAMES.md").write_text("# Names\n", encoding="utf-8")
+    (knowledge / "SUMMARY.md").write_text("# Summary\n", encoding="utf-8")
+
+    cache_dir = knowledge / "__pycache__"
+    cache_dir.mkdir()
+    (cache_dir / "ignored.md").write_text("# Ignored\n", encoding="utf-8")
+
+    hidden_dir = knowledge / ".hidden"
+    hidden_dir.mkdir()
+    (hidden_dir / "secret.md").write_text("# Secret\n", encoding="utf-8")
+
+    return memory
+
+
+def test_graph_builds_nodes_and_edges(memory_root: Path, client) -> None:
+    _seed_graph_memory(memory_root, 42)
+
+    response = client.get("/accounts/42/memory/graph?path=")
+    assert response.status_code == 200, response.text
+    data = response.json()
+
+    node_ids = {n["id"] for n in data["nodes"]}
+    # NAMES.md / SUMMARY.md / __pycache__ / .hidden all filtered.
+    assert "knowledge/NAMES.md" not in node_ids
+    assert "knowledge/SUMMARY.md" not in node_ids
+    assert not any("__pycache__" in nid for nid in node_ids)
+    assert not any(".hidden" in nid for nid in node_ids)
+    assert {
+        "knowledge/ai/agents.md",
+        "knowledge/ai/loops.md",
+        "knowledge/ai/isolated.md",
+        "knowledge/philosophy/ethics.md",
+        "knowledge/philosophy/virtue.md",
+    } == node_ids
+
+    # Domain colour is the first path segment (`knowledge` here because we
+    # walked the whole tree). That's fine — the renderer just uses it for
+    # bucket comparison.
+    domains = {n["id"]: n["domain"] for n in data["nodes"]}
+    assert domains["knowledge/ai/agents.md"] == "knowledge"
+
+    # Scope is `None` when the whole tree is walked.
+    assert data["scope"] is None
+
+
+def test_graph_extracts_comma_related_frontmatter(
+    memory_root: Path, client
+) -> None:
+    _seed_graph_memory(memory_root, 42)
+    response = client.get("/accounts/42/memory/graph?path=")
+    data = response.json()
+    edges = {(e["source"], e["target"]) for e in data["edges"]}
+    # philosophy/ethics.md has `related: ai/agents.md, ai/loops.md, missing/dangling.md`.
+    assert ("knowledge/philosophy/ethics.md", "knowledge/ai/agents.md") in edges
+    assert ("knowledge/philosophy/ethics.md", "knowledge/ai/loops.md") in edges
+    # The dangling ref is dropped in unscoped mode.
+    assert not any(
+        e[1] == "knowledge/missing/dangling.md" for e in edges
+    ), "Dangling refs must be dropped when unscoped"
+
+
+def test_graph_extracts_yaml_list_related_frontmatter(
+    memory_root: Path, client
+) -> None:
+    _seed_graph_memory(memory_root, 42)
+    response = client.get("/accounts/42/memory/graph?path=")
+    data = response.json()
+    edges = {(e["source"], e["target"]) for e in data["edges"]}
+    # ai/agents.md has `related: [philosophy/ethics.md, ai/loops.md]` (YAML
+    # flow-list).
+    assert ("knowledge/ai/agents.md", "knowledge/philosophy/ethics.md") in edges
+    assert ("knowledge/ai/agents.md", "knowledge/ai/loops.md") in edges
+
+
+def test_graph_extracts_body_markdown_links_and_backticks(
+    memory_root: Path, client
+) -> None:
+    _seed_graph_memory(memory_root, 42)
+    response = client.get("/accounts/42/memory/graph?path=")
+    data = response.json()
+    edges = {(e["source"], e["target"]) for e in data["edges"]}
+    # `ai/loops.md` has `[ethics](../philosophy/ethics.md)` (relative path
+    # resolution) and a backticked `ai/agents.md`.
+    assert ("knowledge/ai/loops.md", "knowledge/philosophy/ethics.md") in edges
+    assert ("knowledge/ai/loops.md", "knowledge/ai/agents.md") in edges
+
+
+def test_graph_drops_self_references(memory_root: Path, client) -> None:
+    _seed_graph_memory(memory_root, 42)
+    response = client.get("/accounts/42/memory/graph?path=")
+    data = response.json()
+    for edge in data["edges"]:
+        assert edge["source"] != edge["target"], edge
+
+
+def test_graph_counts_reflect_refs_and_ref_by(memory_root: Path, client) -> None:
+    _seed_graph_memory(memory_root, 42)
+    response = client.get("/accounts/42/memory/graph?path=")
+    data = response.json()
+    by_id = {n["id"]: n for n in data["nodes"]}
+    # ai/agents.md has outbound: ethics, loops (refs=2). Inbound: ethics, loops (ref_by=2).
+    assert by_id["knowledge/ai/agents.md"]["refs"] == 2
+    assert by_id["knowledge/ai/agents.md"]["ref_by"] == 2
+    # ai/isolated.md is an orphan.
+    assert by_id["knowledge/ai/isolated.md"]["refs"] == 0
+    assert by_id["knowledge/ai/isolated.md"]["ref_by"] == 0
+
+
+def test_graph_scoped_adds_external_for_dangling(memory_root: Path, client) -> None:
+    _seed_graph_memory(memory_root, 42)
+    # Scope to just the `ai` subtree. References out of scope to
+    # philosophy/ethics.md should still appear as external nodes.
+    response = client.get("/accounts/42/memory/graph?path=knowledge/ai")
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["scope"] == "knowledge/ai"
+
+    by_id = {n["id"]: n for n in data["nodes"]}
+    # All in-scope nodes present and not external.
+    for nid in (
+        "knowledge/ai/agents.md",
+        "knowledge/ai/loops.md",
+        "knowledge/ai/isolated.md",
+    ):
+        assert nid in by_id, nid
+        assert by_id[nid]["external"] is False
+
+    # The cross-scope ref to philosophy/ethics.md is promoted to an
+    # external node.
+    assert "knowledge/philosophy/ethics.md" in by_id
+    assert by_id["knowledge/philosophy/ethics.md"]["external"] is True
+
+
+def test_graph_rejects_path_traversal(memory_root: Path, client) -> None:
+    _seed_graph_memory(memory_root, 42)
+    response = client.get("/accounts/42/memory/graph?path=../../etc")
+    assert response.status_code == 400, response.text
+
+
+def test_graph_memory_not_initialized(memory_root: Path, client) -> None:
+    # No seed — account directory absent.
+    response = client.get("/accounts/42/memory/graph?path=")
+    assert response.status_code == 404, response.text
+    body = response.json()
+    assert body["detail"]["code"] == "memory_not_initialized"
+
+
 # --- session artifacts -----------------------------------------------------
 
 

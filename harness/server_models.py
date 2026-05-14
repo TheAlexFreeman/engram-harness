@@ -97,6 +97,26 @@ class MemoryFileResponse(BaseModel):
     body: str
 
 
+class MemoryGraphNodeModel(BaseModel):
+    id: str
+    domain: str
+    label: str
+    refs: int
+    ref_by: int
+    external: bool
+
+
+class MemoryGraphEdgeModel(BaseModel):
+    source: str
+    target: str
+
+
+class MemoryGraphResponse(BaseModel):
+    nodes: list[MemoryGraphNodeModel]
+    edges: list[MemoryGraphEdgeModel]
+    scope: str | None
+
+
 class TopFile(BaseModel):
     path: str
     helpfulness: float
