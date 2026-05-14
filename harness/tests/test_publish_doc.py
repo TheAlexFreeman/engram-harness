@@ -7,14 +7,12 @@ import httpx
 import pytest
 
 from harness.config import BBaseCallbackConfig, ToolProfile
+from harness.tool_registry import build_tools
 from harness.tools.fs import WorkspaceScope
 from harness.tools.publish_doc import PublishDoc
-from harness.tool_registry import build_tools
 
 
-def _patch_httpx_client(
-    monkeypatch: pytest.MonkeyPatch, transport: httpx.MockTransport
-) -> None:
+def _patch_httpx_client(monkeypatch: pytest.MonkeyPatch, transport: httpx.MockTransport) -> None:
     real_client = httpx.Client
 
     def _client(**kwargs: object) -> httpx.Client:

@@ -567,17 +567,17 @@ def main() -> None:
     # guide so new contributors can discover the full CLI surface without
     # reading source code.
     _SUBCOMMANDS = {
-        "serve":        "Start the HTTP API server (harness serve --help for options)",
-        "status":       "Print the status of recent sessions",
-        "drift":        "Run a memory drift / consistency check",
-        "consolidate":  "Consolidate memory files (dedup, compress)",
-        "decay-sweep":  "Run the trust-decay lifecycle sweep",
-        "eval":         "Run the agent-behavioural eval suite",
+        "serve": "Start the HTTP API server (harness serve --help for options)",
+        "status": "Print the status of recent sessions",
+        "drift": "Run a memory drift / consistency check",
+        "consolidate": "Consolidate memory files (dedup, compress)",
+        "decay-sweep": "Run the trust-decay lifecycle sweep",
+        "eval": "Run the agent-behavioural eval suite",
         "recall-debug": "Debug a recall query against the memory store",
-        "recall-eval":  "Run the recall evaluation suite",
-        "optimize":     "Run GEPA / prompt optimisation",
-        "replay":       "Replay a recorded session for regression testing",
-        "resume":       "Resume a paused (checkpointed) session",
+        "recall-eval": "Run the recall evaluation suite",
+        "optimize": "Run GEPA / prompt optimisation",
+        "replay": "Replay a recorded session for regression testing",
+        "resume": "Resume a paused (checkpointed) session",
     }
 
     def _print_subcommand_list() -> None:

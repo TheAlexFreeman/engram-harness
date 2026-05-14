@@ -24,7 +24,6 @@ from harness._memory_browse import (
     memory_root_for_account,
 )
 
-
 # Namespaces the trace bridge writes ``_session-rollups.jsonl`` into.
 _ROLLUP_NAMESPACES: Final[tuple[str, ...]] = (
     "users",
@@ -145,14 +144,10 @@ def _locate_activity_artifacts(
 
     rel_activity_dir = _relative_to_memory(activity_path, root)
     summary_rel = (
-        f"{rel_activity_dir}/summary.md"
-        if (activity_path / "summary.md").is_file()
-        else None
+        f"{rel_activity_dir}/summary.md" if (activity_path / "summary.md").is_file() else None
     )
     reflection_rel = (
-        f"{rel_activity_dir}/reflection.md"
-        if (activity_path / "reflection.md").is_file()
-        else None
+        f"{rel_activity_dir}/reflection.md" if (activity_path / "reflection.md").is_file() else None
     )
     return rel_activity_dir, summary_rel, reflection_rel
 

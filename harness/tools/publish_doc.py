@@ -90,13 +90,10 @@ class PublishDoc:
         if not isinstance(body, str) or not body:
             raise ValueError("body must be a non-empty string")
         if tag not in _VALID_TAGS:
-            raise ValueError(
-                f"tag must be one of {', '.join(_VALID_TAGS)}; got {tag!r}"
-            )
+            raise ValueError(f"tag must be one of {', '.join(_VALID_TAGS)}; got {tag!r}")
 
         url = (
-            f"{self._callback.endpoint.rstrip('/')}/api/docs"
-            f"?account_id={self._callback.account_id}"
+            f"{self._callback.endpoint.rstrip('/')}/api/docs?account_id={self._callback.account_id}"
         )
         headers = {
             "Authorization": f"Bearer {self._callback.api_key}",
@@ -122,11 +119,7 @@ class PublishDoc:
             raise RuntimeError(f"publish_doc: non-JSON response from Better Base: {exc}") from exc
 
         doc_id = doc.get("id") if isinstance(doc, dict) else None
-        returned_title = (
-            doc.get("title") if isinstance(doc, dict) and "title" in doc else title
-        )
+        returned_title = doc.get("title") if isinstance(doc, dict) and "title" in doc else title
         if doc_id is None:
-            raise RuntimeError(
-                "publish_doc: Better Base response did not include a doc id."
-            )
+            raise RuntimeError("publish_doc: Better Base response did not include a doc id.")
         return f"Published doc id={doc_id} title={returned_title!r}"

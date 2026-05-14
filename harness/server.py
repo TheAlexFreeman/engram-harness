@@ -24,6 +24,15 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from harness._memory_browse import (
+    EntryNotFoundError,
+    InvalidPathError,
+    MemoryRootMissingError,
+    NotAFileError,
+    list_memory_tree,
+    read_memory_file,
+)
+from harness._session_artifacts import collect_session_artifacts
 from harness.config import (
     RunPolicy,
     SessionComponents,
@@ -41,24 +50,13 @@ from harness.loop import (
 )
 from harness.safety import audit as audit_log
 from harness.safety.rate_limit import limiter_from_env
-from harness._memory_browse import (
-    EntryNotFoundError,
-    InvalidPathError,
-    MemoryRootMissingError,
-    NotAFileError,
-    list_memory_tree,
-    read_memory_file,
-)
-from harness._session_artifacts import collect_session_artifacts
 from harness.server_models import (
     CreateSessionRequest,
     CreateSessionResponse,
     GrantApprovalRequest,
     GrantApprovalResponse,
-    MemoryEntry as MemoryEntryModel,
     MemoryFileResponse,
     MemoryTreeResponse,
-    NamespaceRollup as NamespaceRollupModel,
     SendMessageRequest,
     SendMessageResponse,
     SessionArtifactsResponse,
@@ -67,8 +65,16 @@ from harness.server_models import (
     SessionSummary,
     StopResponse,
     ToolCallInfo,
-    TopFile as TopFileModel,
     UsageInfo,
+)
+from harness.server_models import (
+    MemoryEntry as MemoryEntryModel,
+)
+from harness.server_models import (
+    NamespaceRollup as NamespaceRollupModel,
+)
+from harness.server_models import (
+    TopFile as TopFileModel,
 )
 
 # Path validation moved to harness.server_validation in P2.1.5. The
@@ -930,9 +936,7 @@ def _require_memory_root() -> Path:
     if _MEMORY_ROOT is None:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Memory browsing requires HARNESS_MEMORY_ROOT to be configured."
-            ),
+            detail=("Memory browsing requires HARNESS_MEMORY_ROOT to be configured."),
         )
     return _MEMORY_ROOT
 
@@ -967,9 +971,7 @@ async def memory_tree(account_id: int, path: str = "") -> MemoryTreeResponse:
     return MemoryTreeResponse(
         path=tree.path,
         entries=[
-            MemoryEntryModel(
-                name=e.name, kind=e.kind, path=e.path, modified=e.modified
-            )
+            MemoryEntryModel(name=e.name, kind=e.kind, path=e.path, modified=e.modified)
             for e in tree.entries
         ],
     )
@@ -999,9 +1001,7 @@ async def memory_file(account_id: int, path: str) -> MemoryFileResponse:
     "/accounts/{account_id}/sessions/{harness_session_id}/artifacts",
     response_model=SessionArtifactsResponse,
 )
-async def session_artifacts(
-    account_id: int, harness_session_id: str
-) -> SessionArtifactsResponse:
+async def session_artifacts(account_id: int, harness_session_id: str) -> SessionArtifactsResponse:
     root = _require_memory_root()
     data = collect_session_artifacts(root, account_id, harness_session_id)
     return SessionArtifactsResponse(
@@ -1015,8 +1015,7 @@ async def session_artifacts(
                 rows_added=ns.rows_added,
                 files_touched=ns.files_touched,
                 top_files=[
-                    TopFileModel(path=tf.path, helpfulness=tf.helpfulness)
-                    for tf in ns.top_files
+                    TopFileModel(path=tf.path, helpfulness=tf.helpfulness) for tf in ns.top_files
                 ],
             )
             for ns in data.namespaces
@@ -1115,9 +1114,7 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
     _enforce_session_quota()
     session_id = f"ses_{uuid.uuid4().hex[:8]}"
     workspace = _validate_workspace(req.workspace)
-    state_workspace = (
-        _validate_workspace(req.state_workspace) if req.state_workspace else None
-    )
+    state_workspace = _validate_workspace(req.state_workspace) if req.state_workspace else None
     memory_repo = _validate_memory_repo(req.memory_repo) if req.memory_repo else None
     tool_profile = ToolProfile(req.tool_profile)
     remote = _request_remote(request)

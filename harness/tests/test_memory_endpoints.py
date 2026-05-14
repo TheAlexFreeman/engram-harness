@@ -56,13 +56,7 @@ def _seed_memory(root: Path, account_id: int) -> Path:
     literature = memory / "knowledge" / "literature"
     literature.mkdir(parents=True)
     (literature / "borges.md").write_text(
-        "---\n"
-        "title: Borges\n"
-        "trust: high\n"
-        "---\n"
-        "\n"
-        "# Borges\n\n"
-        "On exactitude in science.\n",
+        "---\ntitle: Borges\ntrust: high\n---\n\n# Borges\n\nOn exactitude in science.\n",
         encoding="utf-8",
     )
 
@@ -173,9 +167,7 @@ def test_file_without_frontmatter(memory_root: Path, client) -> None:
 
 def test_file_rejects_non_md(memory_root: Path, client) -> None:
     _seed_memory(memory_root, 42)
-    response = client.get(
-        "/accounts/42/memory/file", params={"path": "skills/traces.jsonl"}
-    )
+    response = client.get("/accounts/42/memory/file", params={"path": "skills/traces.jsonl"})
     assert response.status_code == 400, response.text
 
 
@@ -237,9 +229,7 @@ def test_artifacts_no_memory_yet(memory_root: Path, client) -> None:
     assert data["namespaces"] == []
 
 
-def test_artifacts_drops_path_traversal_in_rollup(
-    memory_root: Path, client
-) -> None:
+def test_artifacts_drops_path_traversal_in_rollup(memory_root: Path, client) -> None:
     memory = _memory_dir(memory_root, 42)
     activity_dir = _seed_activity_dir(memory, session_id=_SESSION_ID)
     _seed_rollup(
@@ -259,9 +249,7 @@ def test_artifacts_drops_path_traversal_in_rollup(
     )
     response = client.get(f"/accounts/42/sessions/{_SESSION_ID}/artifacts")
     assert response.status_code == 200, response.text
-    knowledge = next(
-        ns for ns in response.json()["namespaces"] if ns["namespace"] == "knowledge"
-    )
+    knowledge = next(ns for ns in response.json()["namespaces"] if ns["namespace"] == "knowledge")
     assert [tf["path"] for tf in knowledge["top_files"]] == ["knowledge/ok.md"]
 
 

@@ -75,9 +75,7 @@ def memory_root_for_account(memory_root: Path, account_id: int) -> Path:
     return memory_root / str(account_id) / "engram" / "core" / "memory"
 
 
-def _resolve_within(
-    memory_root: Path, account_id: int, rel_path: str
-) -> tuple[Path, Path, str]:
+def _resolve_within(memory_root: Path, account_id: int, rel_path: str) -> tuple[Path, Path, str]:
     """Validate `rel_path` and resolve it against the account's memory root.
 
     Returns ``(root, target, normalized_rel)``. Raises ``InvalidPathError``
@@ -122,9 +120,7 @@ def _stat_modified_iso(p: Path) -> str:
     return ts.isoformat().replace("+00:00", "Z")
 
 
-def list_memory_tree(
-    memory_root: Path, account_id: int, rel_path: str
-) -> MemoryTree:
+def list_memory_tree(memory_root: Path, account_id: int, rel_path: str) -> MemoryTree:
     """List entries inside `rel_path` for the given account.
 
     Hidden entries (names starting with ``.``) and non-markdown files are
@@ -136,9 +132,7 @@ def list_memory_tree(
     root, target, normalized = _resolve_within(memory_root, account_id, rel_path)
 
     if not root.is_dir():
-        raise MemoryRootMissingError(
-            f"No engram memory initialized for account {account_id}."
-        )
+        raise MemoryRootMissingError(f"No engram memory initialized for account {account_id}.")
 
     if not target.exists():
         raise EntryNotFoundError(f"Path `{normalized}` does not exist.")
@@ -176,9 +170,7 @@ def list_memory_tree(
     return MemoryTree(path=normalized, entries=folders + files)
 
 
-def read_memory_file(
-    memory_root: Path, account_id: int, rel_path: str
-) -> MemoryFile:
+def read_memory_file(memory_root: Path, account_id: int, rel_path: str) -> MemoryFile:
     """Read a markdown file from the per-account engram tree.
 
     Returns the body alongside the raw frontmatter block (as a string,
@@ -188,9 +180,7 @@ def read_memory_file(
     root, target, normalized = _resolve_within(memory_root, account_id, rel_path)
 
     if not root.is_dir():
-        raise MemoryRootMissingError(
-            f"No engram memory initialized for account {account_id}."
-        )
+        raise MemoryRootMissingError(f"No engram memory initialized for account {account_id}.")
 
     if target.suffix != ".md":
         raise InvalidPathError("Only `.md` files can be read by the explorer.")
