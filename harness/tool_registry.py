@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from harness.config import ToolProfile
+from harness.config import BBaseCallbackConfig, ToolProfile
 from harness.tools import Tool
 from harness.tools.bash import Bash
 from harness.tools.fs import (
@@ -20,6 +20,7 @@ from harness.tools.fs import (
 )
 from harness.tools.git import Git, GitCommit, GitDiff, GitLog, GitStatus
 from harness.tools.help import ToolHelp
+from harness.tools.publish_doc import PublishDoc
 from harness.tools.python_eval import PythonEval
 from harness.tools.python_exec import PythonExec
 from harness.tools.run_script import RunScript
@@ -36,6 +37,7 @@ def build_tools(
     profile: ToolProfile = ToolProfile.FULL,
     role: str | None = None,
     extra: list[Tool] | None = None,
+    bbase_callback: BBaseCallbackConfig | None = None,
 ) -> dict[str, Tool]:
     """Build the tool registry for a session.
 
@@ -98,6 +100,14 @@ def build_tools(
 
     if extra:
         base.extend(extra)
+
+    # Callback-dependent tools (publish_doc, etc.) are injected after
+    # profile filtering — they describe network side-effects rather than
+    # local filesystem mutation, so the read_only/no_shell/full split
+    # doesn't naturally classify them. Role filtering below still applies.
+    if bbase_callback is not None:
+        base.append(PublishDoc(bbase_callback))
+
     tools = {t.name: t for t in base}
 
     if role is not None:

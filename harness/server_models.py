@@ -7,6 +7,21 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class BBaseCallbackConfig(BaseModel):
+    """
+    Optional per-session config the harness uses to call Better Base back.
+
+    When set, the harness registers callback-dependent tools (e.g.
+    ``publish_doc``) using this endpoint + bearer key. The Django side
+    mints `api_key` at dispatch and revokes it when the session finalizes,
+    so it's safe to receive in the request body.
+    """
+
+    endpoint: str
+    api_key: str
+    account_id: int
+
+
 class CreateSessionRequest(BaseModel):
     task: str
     workspace: str
@@ -44,6 +59,10 @@ class CreateSessionRequest(BaseModel):
     role: str | None = None
     readonly_process: bool = False
     approval_preset: str | None = None
+    # Better Base callback config — see `BBaseCallbackConfig`. Present only
+    # when the dispatcher wants this session to be able to call back to
+    # Better Base (e.g. for the `publish_doc` tool).
+    bbase_callback: BBaseCallbackConfig | None = None
 
 
 class CreateSessionResponse(BaseModel):

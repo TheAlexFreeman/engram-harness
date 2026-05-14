@@ -29,6 +29,20 @@ class ToolProfile(str, Enum):
     READ_ONLY = "read_only"
 
 
+@dataclass(frozen=True)
+class BBaseCallbackConfig:
+    """Endpoint + bearer + account-id used by Better Base callback tools.
+
+    See the Pydantic ``BBaseCallbackConfig`` in ``server_models`` for the
+    on-wire shape; this is the in-process record threaded into
+    ``SessionConfig`` and on through ``build_tools``.
+    """
+
+    endpoint: str
+    api_key: str
+    account_id: int
+
+
 @dataclass
 class SessionConfig:
     """Everything needed to construct a runnable session."""
@@ -146,6 +160,11 @@ class SessionConfig:
     grok_include: list[str] = field(default_factory=list)
     grok_encrypted_reasoning: bool = False
 
+    # Better Base callback config (optional). When set, the tool registry
+    # gains callback-dependent tools (e.g. ``publish_doc``). The harness
+    # never mints these keys — they're supplied by the dispatcher.
+    bbase_callback: BBaseCallbackConfig | None = None
+
 
 def serialize_session_config(config: SessionConfig) -> dict[str, Any]:
     """Return a JSON-portable snapshot of a session config for checkpoints."""
@@ -158,6 +177,11 @@ def serialize_session_config(config: SessionConfig) -> dict[str, Any]:
             payload[f.name] = value.value
         elif isinstance(value, list):
             payload[f.name] = list(value)
+        elif isinstance(value, BBaseCallbackConfig):
+            # Per-session API keys are revoked at session end, so a snapshot
+            # can't legitimately restore them. Drop the field; resumed
+            # sessions simply lack callback tools.
+            payload[f.name] = None
         else:
             payload[f.name] = value
     return payload

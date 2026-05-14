@@ -997,6 +997,16 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
     if req.approval_preset:
         presets = [p.strip() for p in req.approval_preset.split(",") if p.strip()]
 
+    bbase_callback_config = None
+    if req.bbase_callback is not None:
+        from harness.config import BBaseCallbackConfig
+
+        bbase_callback_config = BBaseCallbackConfig(
+            endpoint=req.bbase_callback.endpoint,
+            api_key=req.bbase_callback.api_key,
+            account_id=req.bbase_callback.account_id,
+        )
+
     config = SessionConfig(
         workspace=workspace,
         state_workspace_path=state_workspace,
@@ -1023,6 +1033,7 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
         readonly_process=bool(req.readonly_process),
         role=role,
         approval_presets=presets,
+        bbase_callback=bbase_callback_config,
     )
 
     loop = asyncio.get_running_loop()
@@ -1032,7 +1043,11 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
 
     workspace.mkdir(parents=True, exist_ok=True)
     scope = WorkspaceScope(root=workspace)
-    base_tools = build_tools(scope, profile=tool_profile)
+    base_tools = build_tools(
+        scope,
+        profile=tool_profile,
+        bbase_callback=config.bbase_callback,
+    )
 
     # Shared list passed to both the tracker and the session so events
     # recorded during the run are visible in the ManagedSession.
