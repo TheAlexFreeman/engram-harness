@@ -10,6 +10,10 @@ from pydantic import BaseModel, Field
 class CreateSessionRequest(BaseModel):
     task: str
     workspace: str
+    # Optional per-session work_* state directory. When set, the agent's
+    # Workspace (CURRENT.md, projects/, notes/, scratch/, archive/) lives
+    # here instead of the harness process's shared <project_root>/workspace.
+    state_workspace: str | None = None
     model: str = "claude-sonnet-4-6"
     mode: Literal["native"] = "native"
     memory: Literal["file", "engram"] = "file"

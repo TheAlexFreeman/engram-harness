@@ -955,6 +955,9 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
     _enforce_session_quota()
     session_id = f"ses_{uuid.uuid4().hex[:8]}"
     workspace = _validate_workspace(req.workspace)
+    state_workspace = (
+        _validate_workspace(req.state_workspace) if req.state_workspace else None
+    )
     memory_repo = _validate_memory_repo(req.memory_repo) if req.memory_repo else None
     tool_profile = ToolProfile(req.tool_profile)
     remote = _request_remote(request)
@@ -994,6 +997,7 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
 
     config = SessionConfig(
         workspace=workspace,
+        state_workspace_path=state_workspace,
         model=req.model,
         mode=req.mode,
         memory_backend=req.memory,

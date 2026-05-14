@@ -36,6 +36,13 @@ class SessionConfig:
     # Required
     workspace: Path
 
+    # Per-session work_* state directory. When set, the agent's Workspace
+    # (CURRENT.md, projects/, notes/, scratch/, archive/) is rooted here
+    # instead of ``<harness_project_root>/workspace``. Useful when each
+    # session needs an isolated work-state directory — e.g., multi-tenant
+    # deployments where one harness process serves many agents.
+    state_workspace_path: Path | None = None
+
     # Model / mode
     model: str = "claude-sonnet-4-6"
     mode: str = "native"
@@ -616,7 +623,15 @@ def _build_memory(
     # read_only we skip layout creation — the read-only work tools
     # tolerate a missing workspace and return an uninitialized state
     # message instead.
-    workspace = Workspace(project_root, session_id=engram.session_id)
+    if config.state_workspace_path is not None:
+        state_path = Path(config.state_workspace_path)
+        workspace = Workspace(
+            state_path.parent,
+            workspace_path=state_path,
+            session_id=engram.session_id,
+        )
+    else:
+        workspace = Workspace(project_root, session_id=engram.session_id)
     allow_test_postconditions = config.tool_profile != ToolProfile.NO_SHELL
     if not read_only and not process_read_only:
         try:
