@@ -60,9 +60,13 @@ def test_rate_limiter_refill_unblocks_calls() -> None:
     limiter = RateLimiter(burst=1, refill_rps=1000.0, per_minute_cap=100)
     assert limiter.allow("k").allowed
     assert limiter.allow("k").allowed is False
-    time.sleep(0.01)
-    # 10ms × 1000rps = 10 tokens — comfortably back to allowed.
-    assert limiter.allow("k").allowed
+    # Windows CI VMs occasionally undersleep sub-10ms waits; poll until refill.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        if limiter.allow("k").allowed:
+            return
+        time.sleep(0.005)
+    pytest.fail("rate limiter did not refill within deadline")
 
 
 def test_limiter_from_env_disabled(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -560,6 +560,56 @@ def main() -> None:
     load_dotenv()
     load_dotenv(Path(__file__).resolve().parent / ".env")
 
+    # ── Synthetic subcommand help ─────────────────────────────────────────
+    # The subcommand dispatch below happens before argparse sees argv, so
+    # `harness --help` (and `-h`) shows only the main run-mode flags and is
+    # silent about the 11 subcommands.  Intercept here and print a compact
+    # guide so new contributors can discover the full CLI surface without
+    # reading source code.
+    _SUBCOMMANDS = {
+        "serve": "Start the HTTP API server (harness serve --help for options)",
+        "status": "Print the status of recent sessions",
+        "drift": "Run a memory drift / consistency check",
+        "consolidate": "Consolidate memory files (dedup, compress)",
+        "decay-sweep": "Run the trust-decay lifecycle sweep",
+        "eval": "Run the agent-behavioural eval suite",
+        "recall-debug": "Debug a recall query against the memory store",
+        "recall-eval": "Run the recall evaluation suite",
+        "optimize": "Run GEPA / prompt optimisation",
+        "replay": "Replay a recorded session for regression testing",
+        "resume": "Resume a paused (checkpointed) session",
+    }
+
+    def _print_subcommand_list() -> None:
+        print("usage: harness [subcommand] [options] [task]\n", file=sys.stderr)
+        print("Subcommands:", file=sys.stderr)
+        for _cmd, _desc in _SUBCOMMANDS.items():
+            print(f"  {_cmd:<16} {_desc}", file=sys.stderr)
+        print(
+            "\nRun  harness <subcommand> --help  for per-subcommand options.",
+            file=sys.stderr,
+        )
+        print(
+            "Run  harness --help  for main agent run-mode options.\n",
+            file=sys.stderr,
+        )
+
+    # `harness` with no args → print subcommands and exit.
+    if len(sys.argv) == 1:
+        _print_subcommand_list()
+        sys.exit(0)
+
+    # `harness help` → print subcommands and exit.
+    if sys.argv[1] == "help":
+        _print_subcommand_list()
+        sys.exit(0)
+
+    # `harness --help` / `harness -h` → print subcommand list first so the
+    # discovery info is visible, then fall through to argparse which will
+    # print its own full flag reference and exit.
+    if sys.argv[1] in ("--help", "-h"):
+        _print_subcommand_list()
+
     if len(sys.argv) > 1 and sys.argv[1] == "serve":
         _serve_main()
         return

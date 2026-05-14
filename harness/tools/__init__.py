@@ -357,12 +357,13 @@ def _maybe_check_approval(call: ToolCall, tool: Tool | None):
     Lazy-imported so importing :mod:`harness.tools` does not pull in
     the safety package on cold start. Returns ``None`` when there is
     no channel or the tool is not gated.
+
+    ImportError is re-raised rather than silently ignored: if the safety
+    package is missing the caller should know immediately rather than
+    discovering that every gated tool ran without approval.
     """
     if tool is None:
         return None
-    try:
-        from harness.safety.approval import check_approval
-    except ImportError:
-        # Feature absent — session runs without an approval backend.
-        return None
+    from harness.safety.approval import check_approval  # fail-closed: no silent ImportError
+
     return check_approval(call.name, tool, call.args)

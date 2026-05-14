@@ -7,15 +7,35 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class BBaseCallbackConfig(BaseModel):
+    """
+    Optional per-session config the harness uses to call Better Base back.
+
+    When set, the harness registers callback-dependent tools (e.g.
+    ``publish_doc``) using this endpoint + bearer key. The Django side
+    mints `api_key` at dispatch and revokes it when the session finalizes,
+    so it's safe to receive in the request body.
+    """
+
+    endpoint: str
+    api_key: str
+    account_id: int
+
+
 class CreateSessionRequest(BaseModel):
     task: str
     workspace: str
+    # Optional per-session work_* state directory. When set, the agent's
+    # Workspace (CURRENT.md, projects/, notes/, scratch/, archive/) lives
+    # here instead of the harness process's shared <project_root>/workspace.
+    state_workspace: str | None = None
     model: str = "claude-sonnet-4-6"
     mode: Literal["native"] = "native"
     memory: Literal["file", "engram"] = "file"
     memory_repo: str | None = None
     max_turns: int = Field(default=100, ge=1, le=1000)
     max_parallel_tools: int = Field(default=4, ge=1, le=32)
+    max_output_tokens: int = Field(default=4096, ge=1, le=131072)
     max_cost_usd: float | None = Field(default=None, ge=0)
     max_tool_calls: int | None = Field(default=None, ge=0, le=10000)
     repeat_guard_threshold: int = Field(default=3, ge=0, le=100)
@@ -39,6 +59,10 @@ class CreateSessionRequest(BaseModel):
     role: str | None = None
     readonly_process: bool = False
     approval_preset: str | None = None
+    # Better Base callback config — see `BBaseCallbackConfig`. Present only
+    # when the dispatcher wants this session to be able to call back to
+    # Better Base (e.g. for the `publish_doc` tool).
+    bbase_callback: BBaseCallbackConfig | None = None
 
 
 class CreateSessionResponse(BaseModel):
@@ -46,6 +70,51 @@ class CreateSessionResponse(BaseModel):
     status: str
     trace_path: str
     created_at: str
+
+
+# ---------------------------------------------------------------------------
+# Memory-browse + session-artifact response shapes (mirror the dataclasses
+# in `harness/_memory_browse.py` and `harness/_session_artifacts.py`)
+# ---------------------------------------------------------------------------
+
+
+class MemoryEntry(BaseModel):
+    name: str
+    kind: Literal["folder", "file"]
+    path: str
+    modified: str
+
+
+class MemoryTreeResponse(BaseModel):
+    path: str
+    entries: list[MemoryEntry]
+
+
+class MemoryFileResponse(BaseModel):
+    path: str
+    modified: str
+    frontmatter_raw: str | None
+    body: str
+
+
+class TopFile(BaseModel):
+    path: str
+    helpfulness: float
+
+
+class NamespaceRollup(BaseModel):
+    namespace: str
+    rows_added: int
+    files_touched: int
+    top_files: list[TopFile]
+
+
+class SessionArtifactsResponse(BaseModel):
+    available: bool
+    activity_dir: str | None
+    summary_path: str | None
+    reflection_path: str | None
+    namespaces: list[NamespaceRollup]
 
 
 class SessionSummary(BaseModel):

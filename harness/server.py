@@ -14,6 +14,7 @@ import asyncio
 import hmac
 import os
 import queue as stdlib_queue
+import shutil
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -23,6 +24,15 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from harness._memory_browse import (
+    EntryNotFoundError,
+    InvalidPathError,
+    MemoryRootMissingError,
+    NotAFileError,
+    list_memory_tree,
+    read_memory_file,
+)
+from harness._session_artifacts import collect_session_artifacts
 from harness.config import (
     RunPolicy,
     SessionComponents,
@@ -38,6 +48,7 @@ from harness.loop import (
     session_remaining_cost_usd,
     session_remaining_tool_calls,
 )
+from harness.runner import _submit_main_lane
 from harness.safety import audit as audit_log
 from harness.safety.rate_limit import limiter_from_env
 from harness.server_models import (
@@ -45,14 +56,26 @@ from harness.server_models import (
     CreateSessionResponse,
     GrantApprovalRequest,
     GrantApprovalResponse,
+    MemoryFileResponse,
+    MemoryTreeResponse,
     SendMessageRequest,
     SendMessageResponse,
+    SessionArtifactsResponse,
     SessionDetail,
     SessionListResponse,
     SessionSummary,
     StopResponse,
     ToolCallInfo,
     UsageInfo,
+)
+from harness.server_models import (
+    MemoryEntry as MemoryEntryModel,
+)
+from harness.server_models import (
+    NamespaceRollup as NamespaceRollupModel,
+)
+from harness.server_models import (
+    TopFile as TopFileModel,
 )
 
 # Path validation moved to harness.server_validation in P2.1.5. The
@@ -75,9 +98,11 @@ from harness.sinks.sse import SSEEvent, SSEStreamSink, SSETraceSink, enqueue_sse
 from harness.usage import Usage
 
 # Load `.env` when the server module is imported (covers `uvicorn harness.server:app`,
-# which does not go through `harness` CLI's load_dotenv).
+# which does not go through `harness` CLI's load_dotenv). The harness-owned .env
+# takes precedence — the user explicitly put values there for this process, so
+# they should win over an inherited shell env that may have empty placeholders.
 load_dotenv()
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 try:
     from fastapi import FastAPI, HTTPException, Request
@@ -177,12 +202,46 @@ _MEMORY_ROOT: Path | None = (
     else None
 )
 
+# Bundled engram memory template baked into the harness Docker image.
+# When set, ``_ensure_memory_initialized`` copies from here into a missing
+# ``<memory_repo>/engram/core/memory/`` on first dispatch — letting Better
+# Base call POST /sessions for a brand-new account without a separate
+# bootstrap step.
+_BUNDLED_MEMORY_DIR: Path | None = (
+    Path(os.environ["HARNESS_BUNDLED_MEMORY_DIR"]).resolve()
+    if os.environ.get("HARNESS_BUNDLED_MEMORY_DIR")
+    else None
+)
+
 
 def _validate_workspace(workspace_str: str) -> Path:
     return _validate_workspace_impl(workspace_str, workspace_root=_WORKSPACE_ROOT)
 
 
+def _ensure_memory_initialized(memory_repo_path: Path) -> None:
+    """Copy bundled engram template into ``memory_repo_path`` if missing.
+
+    Only runs when ``HARNESS_BUNDLED_MEMORY_DIR`` is configured and the
+    target path is inside ``HARNESS_MEMORY_ROOT``. No-op otherwise — the
+    caller's validation runs after this and rejects unrecognized layouts.
+    """
+    if _BUNDLED_MEMORY_DIR is None or _MEMORY_ROOT is None:
+        return
+    try:
+        memory_repo_path.relative_to(_MEMORY_ROOT)
+    except ValueError:
+        return
+    target_memory_dir = memory_repo_path / "engram" / "core" / "memory"
+    if (target_memory_dir / "HOME.md").is_file():
+        return
+    target_memory_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(_BUNDLED_MEMORY_DIR, target_memory_dir, dirs_exist_ok=True)
+
+
 def _validate_memory_repo(memory_repo_str: str) -> Path:
+    # Lazy bootstrap before validation so a brand-new account's memory_repo
+    # path is materialized just in time.
+    _ensure_memory_initialized(Path(memory_repo_str).resolve())
     return _validate_memory_repo_impl(
         memory_repo_str,
         workspace_root=_WORKSPACE_ROOT,
@@ -336,23 +395,44 @@ def _emit(session: ManagedSession, event: SSEEvent) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _session_lane_key(cfg: object) -> str | None:
+    """Stable affinity key for lane tracing; optional when tests stub config."""
+    ws = getattr(cfg, "workspace", None)
+    if ws is None:
+        return None
+    try:
+        return str(Path(ws).resolve())
+    except OSError:
+        return str(ws)
+
+
 def _run_session(session: ManagedSession) -> None:
     """Run a single-shot session in a background thread."""
     policy = RunPolicy.from_config(
         session.config,
         pause_handle=getattr(session.components, "pause_handle", None),
     )
+    session_key = _session_lane_key(session.config)
     try:
-        result = run(
-            session.task,
-            session.components.mode,
-            session.components.tools,
-            session.components.memory,
-            session.components.tracer,
-            stream_sink=session.components.stream_sink,
-            stop_event=session.stop_event,
-            skip_end_session_commit=_bridge_enabled(session),
-            **policy.run_kwargs(),
+
+        def _do_run() -> RunResult:
+            return run(
+                session.task,
+                session.components.mode,
+                session.components.tools,
+                session.components.memory,
+                session.components.tracer,
+                stream_sink=session.components.stream_sink,
+                stop_event=session.stop_event,
+                skip_end_session_commit=_bridge_enabled(session),
+                **policy.run_kwargs(),
+            )
+
+        result = _submit_main_lane(
+            session.components,
+            _do_run,
+            tracer=session.components.tracer,
+            session_key=session_key,
         )
         session.result = result
         session.final_text = result.final_text
@@ -421,6 +501,7 @@ def _run_interactive_session(session: ManagedSession) -> None:
         )
         session_cost_usd = 0.0
         session_tool_calls = 0
+        session_key = _session_lane_key(config)
 
         def _interactive_idle_result() -> RunResult:
             rem_c = session_remaining_cost_usd(cap_cost, session_cost_usd)
@@ -450,7 +531,12 @@ def _run_interactive_session(session: ManagedSession) -> None:
                 ).idle_kwargs(),
             )
 
-        result = _interactive_idle_result()
+        result = _submit_main_lane(
+            session.components,
+            _interactive_idle_result,
+            tracer=tracer,
+            session_key=session_key,
+        )
         session_cost_usd += result.usage.total_cost_usd
         session_tool_calls += result.tool_calls_used
         session.usage = session.usage + result.usage
@@ -499,7 +585,12 @@ def _run_interactive_session(session: ManagedSession) -> None:
             tracer.event("interactive_turn", chars=len(user_msg))
             session.messages.append({"role": "user", "content": user_msg})
 
-            result = _interactive_idle_result()
+            result = _submit_main_lane(
+                session.components,
+                _interactive_idle_result,
+                tracer=tracer,
+                session_key=session_key,
+            )
             session_cost_usd += result.usage.total_cost_usd
             session_tool_calls += result.tool_calls_used
             session.usage = session.usage + result.usage
@@ -864,6 +955,107 @@ async def health() -> dict:
     return {"status": "ok", "active_sessions": active}
 
 
+# ---------------------------------------------------------------------------
+# Per-account memory browse + session artifacts
+#
+# Exposed for Better Base to proxy through; the harness owns the engram
+# disk, so these are the only way Django can render the explorer and the
+# session artifacts panel in production where the disk lives on a single
+# Render service.
+# ---------------------------------------------------------------------------
+
+
+def _require_memory_root() -> Path:
+    if _MEMORY_ROOT is None:
+        raise HTTPException(
+            status_code=503,
+            detail=("Memory browsing requires HARNESS_MEMORY_ROOT to be configured."),
+        )
+    return _MEMORY_ROOT
+
+
+def _memory_browse_to_http(exc: Exception) -> HTTPException:
+    """Map disk-side memory exceptions to the same status codes Django used
+    in its Phase 1 / Phase 2 implementations so behavior is unchanged from
+    the frontend's perspective.
+    """
+    if isinstance(exc, InvalidPathError) or isinstance(exc, NotAFileError):
+        return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, MemoryRootMissingError):
+        return HTTPException(
+            status_code=404,
+            detail={"detail": str(exc), "code": "memory_not_initialized"},
+        )
+    if isinstance(exc, EntryNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    return HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get(
+    "/accounts/{account_id}/memory/tree",
+    response_model=MemoryTreeResponse,
+)
+async def memory_tree(account_id: int, path: str = "") -> MemoryTreeResponse:
+    root = _require_memory_root()
+    try:
+        tree = list_memory_tree(root, account_id, path)
+    except Exception as exc:
+        raise _memory_browse_to_http(exc) from exc
+    return MemoryTreeResponse(
+        path=tree.path,
+        entries=[
+            MemoryEntryModel(name=e.name, kind=e.kind, path=e.path, modified=e.modified)
+            for e in tree.entries
+        ],
+    )
+
+
+@app.get(
+    "/accounts/{account_id}/memory/file",
+    response_model=MemoryFileResponse,
+)
+async def memory_file(account_id: int, path: str) -> MemoryFileResponse:
+    if not path:
+        raise HTTPException(status_code=400, detail="`path` is required.")
+    root = _require_memory_root()
+    try:
+        entry = read_memory_file(root, account_id, path)
+    except Exception as exc:
+        raise _memory_browse_to_http(exc) from exc
+    return MemoryFileResponse(
+        path=entry.path,
+        modified=entry.modified,
+        frontmatter_raw=entry.frontmatter_raw,
+        body=entry.body,
+    )
+
+
+@app.get(
+    "/accounts/{account_id}/sessions/{harness_session_id}/artifacts",
+    response_model=SessionArtifactsResponse,
+)
+async def session_artifacts(account_id: int, harness_session_id: str) -> SessionArtifactsResponse:
+    root = _require_memory_root()
+    data = collect_session_artifacts(root, account_id, harness_session_id)
+    return SessionArtifactsResponse(
+        available=data.available,
+        activity_dir=data.activity_dir,
+        summary_path=data.summary_path,
+        reflection_path=data.reflection_path,
+        namespaces=[
+            NamespaceRollupModel(
+                namespace=ns.namespace,
+                rows_added=ns.rows_added,
+                files_touched=ns.files_touched,
+                top_files=[
+                    TopFileModel(path=tf.path, helpfulness=tf.helpfulness) for tf in ns.top_files
+                ],
+            )
+            for ns in data.namespaces
+        ],
+    )
+
+
 def _get_session(session_id: str) -> ManagedSession:
     session = _sessions.get(session_id)
     if session is None:
@@ -955,6 +1147,7 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
     _enforce_session_quota()
     session_id = f"ses_{uuid.uuid4().hex[:8]}"
     workspace = _validate_workspace(req.workspace)
+    state_workspace = _validate_workspace(req.state_workspace) if req.state_workspace else None
     memory_repo = _validate_memory_repo(req.memory_repo) if req.memory_repo else None
     tool_profile = ToolProfile(req.tool_profile)
     remote = _request_remote(request)
@@ -992,14 +1185,26 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
     if req.approval_preset:
         presets = [p.strip() for p in req.approval_preset.split(",") if p.strip()]
 
+    bbase_callback_config = None
+    if req.bbase_callback is not None:
+        from harness.config import BBaseCallbackConfig
+
+        bbase_callback_config = BBaseCallbackConfig(
+            endpoint=req.bbase_callback.endpoint,
+            api_key=req.bbase_callback.api_key,
+            account_id=req.bbase_callback.account_id,
+        )
+
     config = SessionConfig(
         workspace=workspace,
+        state_workspace_path=state_workspace,
         model=req.model,
         mode=req.mode,
         memory_backend=req.memory,
         memory_repo=memory_repo,
         max_turns=req.max_turns,
         max_parallel_tools=req.max_parallel_tools,
+        max_output_tokens=req.max_output_tokens,
         max_cost_usd=req.max_cost_usd,
         max_tool_calls=req.max_tool_calls,
         repeat_guard_threshold=req.repeat_guard_threshold,
@@ -1016,6 +1221,7 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
         readonly_process=bool(req.readonly_process),
         role=role,
         approval_presets=presets,
+        bbase_callback=bbase_callback_config,
     )
 
     loop = asyncio.get_running_loop()
@@ -1025,7 +1231,11 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
 
     workspace.mkdir(parents=True, exist_ok=True)
     scope = WorkspaceScope(root=workspace)
-    base_tools = build_tools(scope, profile=tool_profile)
+    base_tools = build_tools(
+        scope,
+        profile=tool_profile,
+        bbase_callback=config.bbase_callback,
+    )
 
     # Shared list passed to both the tracker and the session so events
     # recorded during the run are visible in the ManagedSession.

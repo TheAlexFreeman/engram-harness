@@ -29,12 +29,33 @@ class ToolProfile(str, Enum):
     READ_ONLY = "read_only"
 
 
+@dataclass(frozen=True)
+class BBaseCallbackConfig:
+    """Endpoint + bearer + account-id used by Better Base callback tools.
+
+    See the Pydantic ``BBaseCallbackConfig`` in ``server_models`` for the
+    on-wire shape; this is the in-process record threaded into
+    ``SessionConfig`` and on through ``build_tools``.
+    """
+
+    endpoint: str
+    api_key: str
+    account_id: int
+
+
 @dataclass
 class SessionConfig:
     """Everything needed to construct a runnable session."""
 
     # Required
     workspace: Path
+
+    # Per-session work_* state directory. When set, the agent's Workspace
+    # (CURRENT.md, projects/, notes/, scratch/, archive/) is rooted here
+    # instead of ``<harness_project_root>/workspace``. Useful when each
+    # session needs an isolated work-state directory — e.g., multi-tenant
+    # deployments where one harness process serves many agents.
+    state_workspace_path: Path | None = None
 
     # Model / mode
     model: str = "claude-sonnet-4-6"
@@ -139,6 +160,11 @@ class SessionConfig:
     grok_include: list[str] = field(default_factory=list)
     grok_encrypted_reasoning: bool = False
 
+    # Better Base callback config (optional). When set, the tool registry
+    # gains callback-dependent tools (e.g. ``publish_doc``). The harness
+    # never mints these keys — they're supplied by the dispatcher.
+    bbase_callback: BBaseCallbackConfig | None = None
+
 
 def serialize_session_config(config: SessionConfig) -> dict[str, Any]:
     """Return a JSON-portable snapshot of a session config for checkpoints."""
@@ -151,6 +177,11 @@ def serialize_session_config(config: SessionConfig) -> dict[str, Any]:
             payload[f.name] = value.value
         elif isinstance(value, list):
             payload[f.name] = list(value)
+        elif isinstance(value, BBaseCallbackConfig):
+            # Per-session API keys are revoked at session end, so a snapshot
+            # can't legitimately restore them. Drop the field; resumed
+            # sessions simply lack callback tools.
+            payload[f.name] = None
         else:
             payload[f.name] = value
     return payload
@@ -616,7 +647,15 @@ def _build_memory(
     # read_only we skip layout creation — the read-only work tools
     # tolerate a missing workspace and return an uninitialized state
     # message instead.
-    workspace = Workspace(project_root, session_id=engram.session_id)
+    if config.state_workspace_path is not None:
+        state_path = Path(config.state_workspace_path)
+        workspace = Workspace(
+            state_path.parent,
+            workspace_path=state_path,
+            session_id=engram.session_id,
+        )
+    else:
+        workspace = Workspace(project_root, session_id=engram.session_id)
     allow_test_postconditions = config.tool_profile != ToolProfile.NO_SHELL
     if not read_only and not process_read_only:
         try:

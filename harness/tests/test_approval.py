@@ -588,3 +588,91 @@ def test_unknown_tool_returns_unknown_message_no_channel_call():
     )
     assert "Unknown tool" in result.content
     assert stub.received == []
+
+
+# ---------------------------------------------------------------------------
+# Thread-local isolation (multi-tenant safety)
+# ---------------------------------------------------------------------------
+
+
+def test_approval_channel_is_thread_local():
+    """Concurrent sessions on different threads must not share approval state.
+
+    Session A installs an allow-all channel; Session B installs a deny-all
+    channel.  Each thread should see only its own channel, not the other's.
+    """
+    import threading
+    import time
+
+    class _Allow:
+        def request(self, req: ApprovalRequest) -> ApprovalDecision:
+            return ApprovalDecision(approved=True)
+
+    class _Deny:
+        def request(self, req: ApprovalRequest) -> ApprovalDecision:
+            return ApprovalDecision(approved=False, reason="denied")
+
+    from harness.safety.approval import get_approval_channel
+
+    seen: dict[str, str] = {}
+    errors: list[str] = []
+
+    def _session_a() -> None:
+        set_approval_channel(_Allow(), gated_tools=["demo"])
+        time.sleep(0.05)  # let session B install its channel
+        ch = get_approval_channel()
+        seen["A"] = type(ch).__name__
+        if not isinstance(ch, _Allow):
+            errors.append(f"Thread A saw wrong channel: {type(ch).__name__}")
+
+    def _session_b() -> None:
+        set_approval_channel(_Deny(), gated_tools=["demo"])
+        time.sleep(0.05)  # let session A install its channel
+        ch = get_approval_channel()
+        seen["B"] = type(ch).__name__
+        if not isinstance(ch, _Deny):
+            errors.append(f"Thread B saw wrong channel: {type(ch).__name__}")
+
+    t_a = threading.Thread(target=_session_a)
+    t_b = threading.Thread(target=_session_b)
+    t_a.start()
+    t_b.start()
+    t_a.join()
+    t_b.join()
+
+    assert not errors, "; ".join(errors)
+    assert seen["A"] == "_Allow"
+    assert seen["B"] == "_Deny"
+
+
+def test_approval_gated_tools_are_thread_local():
+    """Each thread's gated-tools set is independent."""
+    import threading
+
+    results: dict[str, bool] = {}
+
+    class _StubAllow:
+        def request(self, req: ApprovalRequest) -> ApprovalDecision:
+            return ApprovalDecision(approved=True)
+
+    def _session_a() -> None:
+        set_approval_channel(_StubAllow(), gated_tools=["tool_a"])
+        decision = check_approval("tool_b", _DemoTool(), {})
+        results["A_tool_b_gated"] = decision is not None
+
+    def _session_b() -> None:
+        set_approval_channel(_StubAllow(), gated_tools=["tool_b"])
+        decision = check_approval("tool_a", _DemoTool(), {})
+        results["B_tool_a_gated"] = decision is not None
+
+    t_a = threading.Thread(target=_session_a)
+    t_b = threading.Thread(target=_session_b)
+    t_a.start()
+    t_b.start()
+    t_a.join()
+    t_b.join()
+
+    # Session A gated only tool_a; checking tool_b should return None.
+    assert results["A_tool_b_gated"] is False, "Session A should not gate tool_b"
+    # Session B gated only tool_b; checking tool_a should return None.
+    assert results["B_tool_a_gated"] is False, "Session B should not gate tool_a"

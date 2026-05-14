@@ -25,4 +25,6 @@ Analysis complete. Next: decide which phase to build first and begin backend.tas
 
 ## Closed
 
+### tier1-fixes — Completed 3 real Tier 1 fixes: thread-local approval channel, fail-closed import, subcommand help. Review finding #1 (_escape_untrusted_body) was a display artifact — code was correct. (2026-05-09)
+
 ## Notes

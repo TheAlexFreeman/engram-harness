@@ -27,9 +27,7 @@ export function AssistantMessage({ message, streamingText, streamingReasoning, i
           <ToolCallBlock key={tc.id} tc={tc} />
         ))}
         {displayText && (
-          <div className="text-gray-100 leading-relaxed">
-            <StreamingText text={displayText} streaming={isActive && streamingText !== undefined} />
-          </div>
+          <StreamingText text={displayText} streaming={isActive && streamingText !== undefined} />
         )}
         {isActive && !displayText && !displayReasoning && message.toolCalls.length === 0 && (
           <span className="text-gray-600 italic">Thinking…</span>
