@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 # Output / scan bounds (single tool call cannot exceed these without truncation).
 MAX_READ_CHARS = 1_000_000
@@ -114,10 +115,28 @@ class WorkspaceScope:
     which follows symbolic links. The resolved path must be ``root`` or a
     descendant; otherwise a ``ValueError`` is raised. This blocks ``..`` and
     symlink chains that escape the workspace.
+
+    The optional ``enforcer`` adds a second check: even paths inside the
+    workspace can be denied by the session's sandbox policy (write_roots
+    subset, deny_globs). Tools call ``check_read`` / ``check_write`` after
+    ``resolve`` to invoke it; without an enforcer those are no-ops so CLI
+    / pre-personas callers keep working.
     """
 
     root: Path
     memory_root: Path | None = None
+    # Optional sandbox enforcer wired by the session. Tools call
+    # ``check_read`` / ``check_write`` to delegate to it; without one the
+    # check is a no-op (legacy CLI behavior).
+    enforcer: Any | None = None
+
+    def check_read(self, path: Path) -> None:
+        if self.enforcer is not None and getattr(self.enforcer, "has_policy", False):
+            self.enforcer.check_read(path)
+
+    def check_write(self, path: Path) -> None:
+        if self.enforcer is not None and getattr(self.enforcer, "has_policy", False):
+            self.enforcer.check_write(path)
 
     def _root_resolved(self) -> Path:
         return self.root.resolve()

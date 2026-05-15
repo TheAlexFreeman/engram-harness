@@ -63,6 +63,11 @@ class CreateSessionRequest(BaseModel):
     # when the dispatcher wants this session to be able to call back to
     # Better Base (e.g. for the `publish_doc` tool).
     bbase_callback: BBaseCallbackConfig | None = None
+    # Resolved sandbox policy (filesystem / network / shell / backend_ops
+    # rules). When None the session runs in legacy tool_profile-only mode
+    # (used by the CLI and any caller that hasn't ported to personas yet).
+    # The in-process mirror is built via ``SandboxPolicy.from_wire_dict``.
+    sandbox_policy: dict | None = None
 
 
 class CreateSessionResponse(BaseModel):

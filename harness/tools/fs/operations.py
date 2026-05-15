@@ -112,6 +112,7 @@ class ReadFile:
 
     def run(self, args: dict) -> str:
         path = self.scope.resolve(args["path"])
+        self.scope.check_read(path)
         if not path.is_file():
             hint = _internal_workspace_hint(self.scope, args["path"])
             if hint is not None:
@@ -371,6 +372,7 @@ class Mkdir:
 
     def run(self, args: dict) -> str:
         path = self.scope.resolve(args["path"])
+        self.scope.check_write(path)
         path.mkdir(parents=True, exist_ok=True)
         return f"mkdir ok: {args['path']}"
 
@@ -406,6 +408,7 @@ class EditFile:
 
     def run(self, args: dict) -> str:
         path = self.scope.resolve(args["path"])
+        self.scope.check_write(path)
         old, new = args["old_str"], args["new_str"]
         if old == new:
             raise ValueError("old_str and new_str must differ")
@@ -457,6 +460,7 @@ class WriteFile:
 
     def run(self, args: dict) -> str:
         path = self.scope.resolve(args["path"])
+        self.scope.check_write(path)
         content = args["content"]
         create_only = bool(args.get("create_only"))
         must_exist = bool(args.get("must_exist"))
@@ -497,6 +501,7 @@ class AppendFile:
 
     def run(self, args: dict) -> str:
         path = self.scope.resolve(args["path"])
+        self.scope.check_write(path)
         content = args["content"]
         create = bool(args.get("create", True))
         if not create and not path.exists():
@@ -538,6 +543,7 @@ class DeletePath:
         if not args.get("confirm"):
             raise ValueError("confirm must be true to delete_path")
         path = self.scope.resolve(args["path"])
+        self.scope.check_write(path)
         recursive = bool(args.get("recursive"))
         if not path.exists():
             raise FileNotFoundError(args["path"])
@@ -580,6 +586,10 @@ class MovePath:
             raise ValueError("confirm must be true to move_path")
         src = self.scope.resolve(args["from_path"])
         dst = self.scope.resolve(args["to_path"])
+        # Move counts as both a write at the destination and (effectively)
+        # a write at the source — both must satisfy write rules.
+        self.scope.check_write(src)
+        self.scope.check_write(dst)
         if not src.exists():
             raise FileNotFoundError(args["from_path"])
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -614,6 +624,9 @@ class CopyPath:
     def run(self, args: dict) -> str:
         src = self.scope.resolve(args["from_path"])
         dst = self.scope.resolve(args["to_path"])
+        # Source is read, destination is write — match policy semantics.
+        self.scope.check_read(src)
+        self.scope.check_write(dst)
         recursive = bool(args.get("recursive"))
         if not src.exists():
             raise FileNotFoundError(args["from_path"])

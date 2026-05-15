@@ -104,6 +104,12 @@ class Bash:
         if not command:
             raise ValueError("command must be non-empty")
 
+        # Sandbox: consult the policy's shell rules before we spawn anything.
+        # No-op without a policy; raises ``SandboxViolation`` otherwise.
+        enforcer = getattr(self.scope, "enforcer", None)
+        if enforcer is not None and getattr(enforcer, "has_policy", False):
+            enforcer.check_shell(command)
+
         cwd = self.scope.resolve(args.get("cwd", "."))
         if not cwd.is_dir():
             raise NotADirectoryError(f"cwd is not a directory: {args.get('cwd', '.')!r}")
