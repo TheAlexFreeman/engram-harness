@@ -161,9 +161,7 @@ def test_copy_path_blocked_when_descendant_matches_deny_glob(tmp_path: Path):
     nasty.write_text("tok")
     scope = _scope_with_enforcer(tmp_path, _write_anywhere_policy(tmp_path))
     with pytest.raises(SandboxViolation, match="denied by glob"):
-        CopyPath(scope).run(
-            {"from_path": "src", "to_path": "dst", "recursive": True}
-        )
+        CopyPath(scope).run({"from_path": "src", "to_path": "dst", "recursive": True})
 
 
 def test_bash_blocked_when_compound_shell_with_allowlist(tmp_path: Path):
