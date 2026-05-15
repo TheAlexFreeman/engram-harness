@@ -165,6 +165,14 @@ class SessionConfig:
     # never mints these keys — they're supplied by the dispatcher.
     bbase_callback: BBaseCallbackConfig | None = None
 
+    # Sandbox policy mirror (optional). When set, the per-session Enforcer
+    # gates FS / shell / network / backend-op tool calls in addition to
+    # the existing ``WorkspaceScope`` boundary check. Built from the wire
+    # dict via ``SandboxPolicy.from_wire_dict`` in the server before
+    # ``build_session`` runs. ``None`` keeps legacy tool_profile-only
+    # behavior for CLI / older callers.
+    sandbox_policy: Any | None = None
+
 
 def serialize_session_config(config: SessionConfig) -> dict[str, Any]:
     """Return a JSON-portable snapshot of a session config for checkpoints."""

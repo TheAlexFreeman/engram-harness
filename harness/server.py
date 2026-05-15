@@ -1226,6 +1226,15 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
             account_id=req.bbase_callback.account_id,
         )
 
+    # Sandbox policy: parse the wire dict the Django dispatcher sent into the
+    # in-process mirror. ``None`` keeps legacy tool_profile-only behavior so
+    # CLI runs and pre-personas callers keep working.
+    sandbox_policy_obj = None
+    if req.sandbox_policy is not None:
+        from harness.sandbox import SandboxPolicy
+
+        sandbox_policy_obj = SandboxPolicy.from_wire_dict(req.sandbox_policy)
+
     config = SessionConfig(
         workspace=workspace,
         state_workspace_path=state_workspace,
@@ -1253,6 +1262,7 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
         role=role,
         approval_presets=presets,
         bbase_callback=bbase_callback_config,
+        sandbox_policy=sandbox_policy_obj,
     )
 
     loop = asyncio.get_running_loop()
@@ -1261,7 +1271,29 @@ async def create_session(req: CreateSessionRequest, request: Request) -> CreateS
     sse_stream = SSEStreamSink(queue, loop=loop)
 
     workspace.mkdir(parents=True, exist_ok=True)
-    scope = WorkspaceScope(root=workspace)
+
+    # Build the enforcer (or a NullEnforcer when no policy is set) and wire
+    # it into the scope so FS tools delegate writes/reads to it. The
+    # violation sink emits a ``sandbox.violation`` SSE event for the audit
+    # log; the enforcer still raises after the sink runs.
+    from harness.sandbox import Enforcer, SandboxViolation, null_enforcer
+
+    if sandbox_policy_obj is not None:
+        enforcer = Enforcer(policy=sandbox_policy_obj)
+
+        def _emit_sandbox_violation(v: SandboxViolation) -> None:
+            sse_trace.event(
+                "sandbox.violation",
+                rule=v.rule,
+                detail=v.detail,
+                attempted=v.attempted,
+            )
+
+        enforcer.on_violation(_emit_sandbox_violation)
+    else:
+        enforcer = null_enforcer()
+
+    scope = WorkspaceScope(root=workspace, enforcer=enforcer)
     base_tools = build_tools(
         scope,
         profile=tool_profile,
