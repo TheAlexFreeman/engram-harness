@@ -21,6 +21,7 @@ from harness.sandbox import (
 from harness.tools.bash import Bash
 from harness.tools.fs.operations import (
     AppendFile,
+    CopyPath,
     DeletePath,
     EditFile,
     Mkdir,
@@ -151,6 +152,24 @@ def test_bash_blocked_when_command_not_in_allowlist(tmp_path: Path):
     scope = _scope_with_enforcer(tmp_path, _write_anywhere_policy(tmp_path))
     with pytest.raises(SandboxViolation, match="allowlist"):
         Bash(scope).run({"command": "rm -rf /tmp/x"})
+
+
+def test_copy_path_blocked_when_descendant_matches_deny_glob(tmp_path: Path):
+    src = tmp_path / "src"
+    src.mkdir()
+    nasty = src / "secrets.json"
+    nasty.write_text("tok")
+    scope = _scope_with_enforcer(tmp_path, _write_anywhere_policy(tmp_path))
+    with pytest.raises(SandboxViolation, match="denied by glob"):
+        CopyPath(scope).run(
+            {"from_path": "src", "to_path": "dst", "recursive": True}
+        )
+
+
+def test_bash_blocked_when_compound_shell_with_allowlist(tmp_path: Path):
+    scope = _scope_with_enforcer(tmp_path, _write_anywhere_policy(tmp_path))
+    with pytest.raises(SandboxViolation, match="compound shell command"):
+        Bash(scope).run({"command": "git status; rm -rf /"})
 
 
 def test_bash_blocked_when_deny_pattern_matches(tmp_path: Path):

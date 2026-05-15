@@ -259,6 +259,17 @@ class Enforcer:
             )
         text = _command_text(command)
         if self.policy.shell.allow_commands:
+            if _bash_lc_string_has_compound_structure(text):
+                self._violate(
+                    SandboxViolation(
+                        rule="shell",
+                        detail=(
+                            "compound shell command not allowed under allowlist "
+                            "(bash -lc runs the whole string)"
+                        ),
+                        attempted={"action": "shell", "command": text},
+                    )
+                )
             head = _first_basename(text)
             if head not in self.policy.shell.allow_commands:
                 self._violate(
@@ -328,6 +339,80 @@ def _first_basename(text: str) -> str:
     # Strip path component (``./foo`` → ``foo``, ``/usr/bin/git`` → ``git``).
     head = head.replace("\\", "/").rsplit("/", 1)[-1]
     return head
+
+
+def _bash_lc_string_has_compound_structure(text: str) -> bool:
+    """True if ``text`` passed to ``bash -lc`` could run more than one command.
+
+    The Bash tool always invokes ``bash -lc <single string>``. When a policy
+    allowlist checks only the first token, shell metacharacters in the rest of
+    the string still execute (e.g. ``git status; rm -rf /``). This scan ignores
+    single-quoted spans (literal in bash) and treats double-quoted spans as in
+    bash: command substitution (``$()``, ``` ```) is still evaluated.
+    """
+    single = False
+    double = False
+    escape = False
+    i = 0
+    s = text
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if single:
+            if ch == "'":
+                single = False
+            i += 1
+            continue
+        if double:
+            if escape:
+                escape = False
+                i += 1
+                continue
+            if ch == "\\":
+                escape = True
+                i += 1
+                continue
+            if ch == '"':
+                double = False
+                i += 1
+                continue
+            if ch == "`":
+                return True
+            if ch == "$" and i + 1 < n and s[i + 1] == "(":
+                return True
+            i += 1
+            continue
+        # Unquoted bash metacharacters: multiple commands / pipelines / subshells.
+        if ch == "'":
+            single = True
+            i += 1
+            continue
+        if ch == '"':
+            double = True
+            i += 1
+            continue
+        if s.startswith("&&", i) or s.startswith("||", i):
+            return True
+        if ch == "&":
+            # Redirections like >&2, &>x, or fd>&fd (e.g. 2>&1) — not command chaining.
+            if i + 1 < n and s[i + 1] == ">":
+                i += 2
+                continue
+            j = i - 1
+            while j >= 0 and s[j] in " \t":
+                j -= 1
+            if j >= 0 and s[j] == ">":
+                i += 1
+                continue
+            return True
+        if ch in ";|\n\r":
+            return True
+        if ch == "`":
+            return True
+        if ch == "$" and i + 1 < n and s[i + 1] == "(":
+            return True
+        i += 1
+    return False
 
 
 _NULL_ENFORCER: NullEnforcer = NullEnforcer()

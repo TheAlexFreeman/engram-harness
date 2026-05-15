@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 
+from harness.sandbox import SandboxViolation
 from harness.tools import CAP_READ_REPO, CAP_WRITE_REPO
 
 from .scope import (
@@ -17,6 +20,24 @@ from .scope import (
 _WORKSPACE_ROOT_HINTS = ("projects", "notes", "scratch", "archive")
 _SMALL_SLICE_HINT_FILE_CHARS = 1024
 _SMALL_SLICE_HINT_RETURNED_CHARS = 256
+
+
+def _iter_tree_paths(root: Path):
+    """Every file and directory under root (depth-first preorder via os.walk).
+
+    Symlink directories are not followed. Missing paths yield nothing.
+    """
+    if not root.exists():
+        return
+    r = root.resolve()
+    if not r.is_dir():
+        yield r
+        return
+    for dirpath, _, filenames in os.walk(r, followlinks=False):
+        dp = Path(dirpath)
+        yield dp
+        for fn in filenames:
+            yield dp / fn
 
 
 def _looks_like_internal_workspace_path(raw_path: str) -> bool:
@@ -203,10 +224,15 @@ class ListFiles:
 
     def run(self, args: dict) -> str:
         path = self.scope.resolve(args.get("path", "."))
+        self.scope.check_read(path)
         if not path.is_dir():
             raise ValueError(f"not a directory: {args.get('path', '.')!r}")
         entries = []
         for item in sorted(path.iterdir()):
+            try:
+                self.scope.check_read(item)
+            except SandboxViolation:
+                continue
             entries.append(item.name + ("/" if item.is_dir() else ""))
         if not entries:
             return "(empty directory)"
@@ -248,6 +274,7 @@ class PathStat:
 
     def run(self, args: dict) -> str:
         path = self.scope.resolve(args["path"])
+        self.scope.check_read(path)
         st = path.stat()
         mode_oct = oct(st.st_mode & 0o777)
         mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
@@ -310,6 +337,7 @@ class GlobFiles:
         root = entry.path
         if not root.is_dir():
             raise ValueError("root must be a directory")
+        self.scope.check_read(root)
         max_results = int(args.get("max_results") or MAX_GLOB_RESULTS)
         max_results = min(max(max_results, 1), MAX_GLOB_RESULTS)
 
@@ -321,6 +349,7 @@ class GlobFiles:
             and self.scope._is_bare_memory_path(pattern)
         ):
             memory_root = self.scope.memory_root.resolve()
+            self.scope.check_read(memory_root)
             hits = self._collect_hits(memory_root, pattern, memory_root, max_results)
 
         if not hits:
@@ -344,6 +373,10 @@ class GlobFiles:
             except OSError:
                 continue
             if not path_is_within_boundary(pr, boundary):
+                continue
+            try:
+                self.scope.check_read(pr)
+            except SandboxViolation:
                 continue
             hits.append(self.scope.describe_path(pr))
             if len(hits) >= max_results:
@@ -543,10 +576,14 @@ class DeletePath:
         if not args.get("confirm"):
             raise ValueError("confirm must be true to delete_path")
         path = self.scope.resolve(args["path"])
-        self.scope.check_write(path)
         recursive = bool(args.get("recursive"))
         if not path.exists():
             raise FileNotFoundError(args["path"])
+        if path.is_dir() and recursive:
+            for p in _iter_tree_paths(path):
+                self.scope.check_write(p)
+        else:
+            self.scope.check_write(path)
         if path.is_dir():
             if recursive:
                 shutil.rmtree(path)
@@ -586,12 +623,12 @@ class MovePath:
             raise ValueError("confirm must be true to move_path")
         src = self.scope.resolve(args["from_path"])
         dst = self.scope.resolve(args["to_path"])
-        # Move counts as both a write at the destination and (effectively)
-        # a write at the source — both must satisfy write rules.
-        self.scope.check_write(src)
-        self.scope.check_write(dst)
         if not src.exists():
             raise FileNotFoundError(args["from_path"])
+        for p in _iter_tree_paths(src):
+            self.scope.check_read(p)
+            self.scope.check_write(p)
+        self.scope.check_write(dst)
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dst))
         return f"move_path ok: {args['from_path']} -> {args['to_path']}"
@@ -624,12 +661,12 @@ class CopyPath:
     def run(self, args: dict) -> str:
         src = self.scope.resolve(args["from_path"])
         dst = self.scope.resolve(args["to_path"])
-        # Source is read, destination is write — match policy semantics.
-        self.scope.check_read(src)
-        self.scope.check_write(dst)
         recursive = bool(args.get("recursive"))
         if not src.exists():
             raise FileNotFoundError(args["from_path"])
+        for p in _iter_tree_paths(src):
+            self.scope.check_read(p)
+        self.scope.check_write(dst)
         if src.is_dir():
             if not recursive:
                 raise ValueError("copy_path on a directory requires recursive: true")

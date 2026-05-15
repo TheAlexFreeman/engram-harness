@@ -165,6 +165,23 @@ def test_check_shell_accepts_command_in_allowlist():
     enforcer.check_shell("pytest -x")
 
 
+def test_check_shell_blocks_compound_command_under_allowlist():
+    enforcer = Enforcer(policy=_policy(shell_enabled=True, allow_commands=("git",)))
+    with pytest.raises(SandboxViolation, match="compound shell command"):
+        enforcer.check_shell("git status; rm -rf ./target")
+
+
+def test_check_shell_allows_shell_redirection_with_ampersand():
+    enforcer = Enforcer(policy=_policy(shell_enabled=True, allow_commands=("git",)))
+    enforcer.check_shell("git diff 2>&1")
+
+
+def test_check_shell_blocks_background_chain_with_ampersand():
+    enforcer = Enforcer(policy=_policy(shell_enabled=True, allow_commands=("git",)))
+    with pytest.raises(SandboxViolation, match="compound shell command"):
+        enforcer.check_shell("git status & rm -rf /tmp/x")
+
+
 def test_check_shell_blocks_command_with_path_prefix_when_basename_matches():
     enforcer = Enforcer(policy=_policy(shell_enabled=True, allow_commands=("git",)))
     # Basename is the part after the last `/`.
