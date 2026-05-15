@@ -394,6 +394,21 @@ def test_graph_rejects_path_traversal(memory_root: Path, client) -> None:
     assert response.status_code == 400, response.text
 
 
+def test_graph_rejects_absolute_or_drive_scopes(memory_root: Path, client) -> None:
+    """Graph scope is validated before `knowledge/` is prepended."""
+    _seed_graph_memory(memory_root, 42)
+    for raw in (
+        "/ai",
+        "//ai/foo",
+        "\\ai",
+        "C:/ai",
+        "c:/evil",
+        "/",
+    ):
+        resp = client.get("/accounts/42/memory/graph", params={"path": raw})
+        assert resp.status_code == 400, (raw, resp.text)
+
+
 def test_graph_memory_not_initialized(memory_root: Path, client) -> None:
     # No seed — account directory absent.
     response = client.get("/accounts/42/memory/graph?path=")

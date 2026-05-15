@@ -252,6 +252,39 @@ class MemoryGraph:
     scope: str | None = None
 
 
+def _graph_scope_paths(rel_path: str) -> tuple[str, str]:
+    """Normalize and validate caller graph scope (segments under ``knowledge/``).
+
+    Checks run on ``rel_path`` *before* prepending ``knowledge/``. Otherwise a
+    value like ``/ai`` loses its leading slash when stripped and would wrongly
+    resolve under ``knowledge/``; similarly ``C:/...`` hides the drive-letter
+    check once nested under ``knowledge/``.
+    """
+
+    if "\x00" in rel_path:
+        raise InvalidPathError("Path contains a null byte.")
+
+    # Match `_resolve_within`: reject absolute / UNC-style / Windows-drive
+    # inputs on the caller string itself, before slash normalization hides them.
+    if (
+        rel_path.startswith("/")
+        or rel_path.startswith("\\")
+        or (len(rel_path) >= 2 and rel_path[1] == ":")
+    ):
+        raise InvalidPathError("Path must be relative to the memory root.")
+
+    cleaned = rel_path.replace("\\", "/").strip("/")
+    parts = [p for p in cleaned.split("/") if p not in ("", ".")]
+    if any(p == ".." for p in parts):
+        raise InvalidPathError("Path may not contain `..` segments.")
+    if any(part.startswith(".") for part in parts):
+        raise InvalidPathError("Path may not include hidden segments.")
+
+    cleaned_scope = "/".join(parts)
+    scoped_rel = "knowledge" if not cleaned_scope else f"knowledge/{cleaned_scope}"
+    return cleaned_scope, scoped_rel
+
+
 def build_memory_graph(memory_root: Path, account_id: int, rel_path: str) -> MemoryGraph:
     """Build a node+edge graph of `.md` cross-references for `account_id`.
 
@@ -270,8 +303,7 @@ def build_memory_graph(memory_root: Path, account_id: int, rel_path: str) -> Mem
     ``knowledge/`` — the same bucket the standalone Engram palette
     expects (``ai``, ``philosophy``, ``cognitive-science``, ...).
     """
-    cleaned_scope = (rel_path or "").replace("\\", "/").strip("/")
-    scoped_rel = "knowledge" if not cleaned_scope else f"knowledge/{cleaned_scope}"
+    cleaned_scope, scoped_rel = _graph_scope_paths(rel_path or "")
     root, target, normalized = _resolve_within(memory_root, account_id, scoped_rel)
 
     if not root.is_dir():
