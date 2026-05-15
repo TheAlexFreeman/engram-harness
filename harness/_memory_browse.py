@@ -252,30 +252,74 @@ class MemoryGraph:
     scope: str | None = None
 
 
+def _graph_scope_paths(rel_path: str) -> tuple[str, str]:
+    """Normalize and validate caller graph scope (segments under ``knowledge/``).
+
+    Checks run on ``rel_path`` *before* prepending ``knowledge/``. Otherwise a
+    value like ``/ai`` loses its leading slash when stripped and would wrongly
+    resolve under ``knowledge/``; similarly ``C:/...`` hides the drive-letter
+    check once nested under ``knowledge/``.
+    """
+
+    if "\x00" in rel_path:
+        raise InvalidPathError("Path contains a null byte.")
+
+    # Match `_resolve_within`: reject absolute / UNC-style / Windows-drive
+    # inputs on the caller string itself, before slash normalization hides them.
+    if (
+        rel_path.startswith("/")
+        or rel_path.startswith("\\")
+        or (len(rel_path) >= 2 and rel_path[1] == ":")
+    ):
+        raise InvalidPathError("Path must be relative to the memory root.")
+
+    cleaned = rel_path.replace("\\", "/").strip("/")
+    parts = [p for p in cleaned.split("/") if p not in ("", ".")]
+    if any(p == ".." for p in parts):
+        raise InvalidPathError("Path may not contain `..` segments.")
+    if any(part.startswith(".") for part in parts):
+        raise InvalidPathError("Path may not include hidden segments.")
+
+    cleaned_scope = "/".join(parts)
+    scoped_rel = "knowledge" if not cleaned_scope else f"knowledge/{cleaned_scope}"
+    return cleaned_scope, scoped_rel
+
+
 def build_memory_graph(memory_root: Path, account_id: int, rel_path: str) -> MemoryGraph:
     """Build a node+edge graph of `.md` cross-references for `account_id`.
 
-    `rel_path` is an optional scope: when empty, the whole per-account
-    memory tree is walked; when set, only files under that subfolder are
-    scanned, and references out of the scope are added as `external`
-    nodes (matching the standalone Engram graph's behavior).
+    The graph is rooted at ``<memory>/knowledge/``: only files under that
+    subtree are scanned. `rel_path` (optional) is a sub-folder beneath
+    `knowledge/` — passing ``"ai"`` scopes the walk to
+    ``<memory>/knowledge/ai/`` and promotes references out of the scope
+    to ``external`` nodes (matching the standalone Engram graph's
+    behavior). The wire-level ``scope`` field reports the caller's
+    `rel_path` rather than the internally-prepended path, so the toolbar
+    indicator stays readable.
 
-    Node IDs are paths relative to the per-account memory root, so the
-    frontend can pass them through to `/memory/file?path=...` directly.
+    Node IDs are paths relative to the per-account memory root (so they
+    keep the ``knowledge/`` prefix and can be passed through to
+    ``/memory/file?path=...`` directly). Domains are the segment beneath
+    ``knowledge/`` — the same bucket the standalone Engram palette
+    expects (``ai``, ``philosophy``, ``cognitive-science``, ...).
     """
-    root, target, normalized = _resolve_within(memory_root, account_id, rel_path)
+    cleaned_scope, scoped_rel = _graph_scope_paths(rel_path or "")
+    root, target, normalized = _resolve_within(memory_root, account_id, scoped_rel)
 
     if not root.is_dir():
         raise MemoryRootMissingError(f"No engram memory initialized for account {account_id}.")
 
     if not target.exists() or not target.is_dir():
-        raise EntryNotFoundError(f"Path `{normalized}` does not exist.")
+        # Surface the user-facing scope in the error, not the internally-
+        # prepended `knowledge/<scope>` path.
+        missing = cleaned_scope or "knowledge"
+        raise EntryNotFoundError(f"Path `{missing}` does not exist.")
 
     files = _collect_graph_files(target, normalized)
 
     node_map: dict[str, MemoryGraphNode] = {}
     for entry in files:
-        domain = entry.dir_segments[0] if entry.dir_segments else "_root"
+        domain = _knowledge_domain(entry.dir_segments)
         label = entry.path.rsplit("/", 1)[-1].removesuffix(".md")
         node_map[entry.path] = MemoryGraphNode(
             id=entry.path,
@@ -316,15 +360,15 @@ def build_memory_graph(memory_root: Path, account_id: int, rel_path: str) -> Mem
     # Promote dangling refs to external nodes (only when scoped — the
     # unscoped pass already saw every node so a dangling ref means a
     # broken link, which we drop silently to match the JS renderer).
-    if normalized and pending_external:
+    if cleaned_scope and pending_external:
         for source_id, target_id in pending_external:
             if target_id not in node_map:
                 parts = target_id.split("/")
-                domain = parts[0] if parts else "_root"
+                dir_segments = tuple(parts[:-1])
                 label = parts[-1].removesuffix(".md") if parts else target_id
                 node_map[target_id] = MemoryGraphNode(
                     id=target_id,
-                    domain=domain,
+                    domain=_knowledge_domain(dir_segments),
                     label=label,
                     refs=0,
                     ref_by=0,
@@ -348,7 +392,24 @@ def build_memory_graph(memory_root: Path, account_id: int, rel_path: str) -> Mem
         for n in node_map.values()
     ]
 
-    return MemoryGraph(nodes=nodes, edges=edges, scope=normalized or None)
+    return MemoryGraph(nodes=nodes, edges=edges, scope=cleaned_scope or None)
+
+
+def _knowledge_domain(dir_segments: tuple[str, ...]) -> str:
+    """Pick the engram-style domain bucket for a file path.
+
+    The standalone Engram dashboard buckets the legend by the first
+    folder beneath ``knowledge/`` (``ai``, ``philosophy``,
+    ``cognitive-science``, ...). Since `build_memory_graph` walks from
+    ``<memory>/knowledge/``, ``dir_segments[0]`` is always ``"knowledge"``
+    and the real domain lives at index 1. Files sitting directly at the
+    knowledge root (no subdomain) fall into the ``_root`` bucket.
+    """
+    if not dir_segments:
+        return "_root"
+    if dir_segments[0] == "knowledge":
+        return dir_segments[1] if len(dir_segments) >= 2 else "_root"
+    return dir_segments[0]
 
 
 # ---------------------------------------------------------------------------
